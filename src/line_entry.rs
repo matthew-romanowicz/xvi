@@ -178,16 +178,16 @@ impl LineEntry {
             window.mvchgat(self.pos_y as i32, self.pos_x as i32, self.alert_text.len() as i32, bold_attr, 0);
             window.mv(self.pos_y as i32, self.pos_x as i32);
         } else {
-            let mut s: String;// = String::new();
+            let s: String;
             if self.text.len() < self.length {
                 s = String::from_iter(&self.text) + &" ".repeat(self.length as usize - self.text.len());
             } else if self.text.len() >= self.offset + self.length {
                 //println!("offset={}", self.offset);
                 s = String::from_iter(&self.text[self.offset..(self.offset + self.length)]);
                 //println!("string={}", s);
-            }else {
+            } else {
                 s = String::from_iter(&self.text[self.offset..(self.offset + self.length - 1)]) + &" ";
-            };
+            }
             window.mvaddstr(self.pos_y as i32, self.pos_x as i32, &s);
             //window.mv(y, x);
             window.mv(self.pos_y as i32, (self.pos_x + self.cursor_pos) as i32);

@@ -55,5 +55,13 @@ options:
     println!("Extract: {}", extract);
 
 
-    run("C:\\Users\\Matthew\\Documents\\Git\\xvi\\test_file4.bin.gz".to_string(), FileManagerType::RamOnly, extract);
+    match run("C:\\Users\\Matthew\\Documents\\Git\\xvi\\test_file4.bin.gz".to_string(), file_manager_type, extract) {
+        Ok(_) => {
+            std::process::exit(0);
+        },
+        Err(msg) => {
+            eprint!("{}", msg.to_string());
+            std::process::exit(1)
+        }
+    }
 }

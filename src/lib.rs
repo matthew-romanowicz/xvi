@@ -7,7 +7,7 @@ mod line_entry;
 use crate::line_entry::LineEntry;
 
 mod hex_edit;
-use crate::hex_edit::{FileManager, FillType, EditMode, ActionResult, HexEdit};
+use crate::hex_edit::{FileManager, EditMode, ActionResult, HexEdit};
 pub use crate::hex_edit::FileManagerType;
 
 mod parsers;
@@ -150,7 +150,7 @@ fn execute_command(window: &mut Window, hex_edit: &mut HexEdit, command: Vec<cha
     Ok(())
 }
 
-fn execute_keystroke(window: &mut Window, hex_edit: &mut HexEdit, keystroke: Vec<char>) -> ActionResult {
+fn execute_keystroke(hex_edit: &mut HexEdit, keystroke: Vec<char>) -> ActionResult {
     let tokens = parse_keystroke(&keystroke);
     match tokens.len() {
 
@@ -262,7 +262,7 @@ fn execute_keystroke(window: &mut Window, hex_edit: &mut HexEdit, keystroke: Vec
     }
 }
 
-pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) {
+pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) -> std::io::Result<()> {
     let mut edit_state = EditState::Escaped;
     let mut window = initscr();
     window.refresh();
@@ -271,7 +271,7 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
 
     let mut current_keystroke = Vec::<char>::new();
 
-    let mut fm = FileManager::new(filename, file_manager_type, extract);
+    let fm = FileManager::new(filename, file_manager_type, extract)?;
 
     let mut hex_edit = HexEdit::new(fm, // File Manager
                                     0, 0, // x, y
@@ -279,7 +279,7 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                                     16, true, true, // Line Length, Show Hex, Show ASCII
                                     '.', "  ".to_string(), true); // Invalid ASCII, Separator, Capitalize Hex
 
-    let mut cursor_index_len = format!("{:x}", hex_edit.len()).len();
+    let cursor_index_len = format!("{:x}", hex_edit.len()).len();
 
     let mut line_entry = LineEntry::new(window.get_max_x() as usize - 2 - cursor_index_len, 0, window.get_max_y() as usize - 1);
 
@@ -336,7 +336,7 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                     Some(Input::Character(c)) => {
                         current_keystroke.push(c);
                         if matches!(c, 'g' | 'G' | 'f' | 'F' | 'd' | 'y' | 'p' | 'P' | 'u' | 'U' | 'n' | 'N' | 's') {
-                            let result = execute_keystroke(&mut window, &mut hex_edit, current_keystroke);
+                            let result = execute_keystroke(&mut hex_edit, current_keystroke);
                             if let Some(err) = result.error {
                                 println!("ALERT: {}", err);
                                 line_entry.alert(err.chars().collect());
@@ -348,7 +348,13 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                         }
                     },
                     Some(ch) if matches!(ch, Input::KeyRight | Input::KeyLeft | Input::KeyUp | Input::KeyDown | Input::KeyNPage | Input::KeyPPage | Input::KeyHome | Input::KeyEnd) => {
-                        let result = hex_edit.addch(&mut window, ch);
+                        let result = hex_edit.addch(ch);
+                        if let Some(err) = result.error {
+                            println!("ALERT: {}", err);
+                            line_entry.alert(err.chars().collect());
+                            line_entry.draw(&mut window);
+                            hex_edit.refresh_cursor(&mut window);
+                        }
                         hex_edit.update(&mut window, result.update);
                     },
                     _ => {
@@ -388,7 +394,13 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                         edit_state = EditState::Escaped;
                     },
                     Some(ch) => { 
-                        let result = hex_edit.addch(&mut window, ch);
+                        let result = hex_edit.addch(ch);
+                        if let Some(err) = result.error {
+                            println!("ALERT: {}", err);
+                            line_entry.alert(err.chars().collect());
+                            line_entry.draw(&mut window);
+                            hex_edit.refresh_cursor(&mut window);
+                        }
                         hex_edit.update(&mut window, result.update);
                     },
                     None => ()

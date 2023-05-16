@@ -29,10 +29,10 @@ pub struct FileManager<'a> {
 }
 
 impl FileManager<'_> {
-    pub fn new<'a>(filename: String, file_manager_type: FileManagerType, extract: bool) -> FileManager<'a>{
+    pub fn new<'a>(filename: String, file_manager_type: FileManagerType, extract: bool) -> std::io::Result<FileManager<'a>>{
 
-        let mut handle = File::open(&filename).expect("No file found");
-        let metadata = handle.metadata().expect("Unable to grab metadata");
+        let mut handle = File::open(&filename)?;
+        let metadata = handle.metadata()?;
 
         let mut file_buffer = vec![];
         match file_manager_type {
@@ -54,7 +54,7 @@ impl FileManager<'_> {
             }
         }
 
-        FileManager {
+        Ok(FileManager {
             filename,
             file_manager_type,
             extract,
@@ -63,31 +63,34 @@ impl FileManager<'_> {
             swap_handle: None,
             swap_metadata: None,
             file_buffer
-        }
+        })
     }
 
-    pub fn get_bytes(&mut self, index: usize, buffer: &mut Vec<u8>) -> (usize, std::io::Result<()>) {
+    pub fn get_bytes(&mut self, index: usize, buffer: &mut Vec<u8>) -> std::io::Result<usize> {
         match self.file_manager_type {
             FileManagerType::RamOnly => {
                 let n = buffer.len();
                 if self.file_buffer.len() >= index + n {
                     buffer.copy_from_slice(&self.file_buffer[index..(index + n)]);
-                    (n, Ok(()))
+                    Ok(n)
                 } else if index < self.file_buffer.len() {
                     for (i, c) in self.file_buffer[index..self.file_buffer.len()].iter().enumerate() {
                         buffer[i] = *c;
                     }
-                    (self.file_buffer.len() - index, Ok(()))
+                    Ok(self.file_buffer.len() - index)
                 } else {
-                    (0, Ok(()))
+                    Ok(0)
                 }
             },
             FileManagerType::SwapFile => {
-                (0, Ok(())) // TODO
+                Ok(0) // TODO
             },
             FileManagerType::LiveEdit => {
                 self.handle.seek(SeekFrom::Start(index as u64));
-                (buffer.len(), self.handle.read_exact(buffer)) // TODO make the length work
+                match self.handle.read_exact(buffer) {
+                    Ok(_) => Ok(buffer.len()),// TODO make the length work
+                    Err(msg) => Err(msg)
+                }
             }
         }
     }
@@ -281,6 +284,16 @@ impl FileManager<'_> {
     }
 }
 
+fn clip_to_range(n: usize, min: usize, max: usize) -> usize {
+    if n < min {
+        min
+    } else if n > max {
+        max
+    } else {
+        n
+    }
+}
+
 pub enum Nibble {
     Left,
     Right,
@@ -412,20 +425,12 @@ impl ActionStack {
     }
 }
 
-pub struct UpdateDescription {
-    update_viewport: Option<(usize, usize)>,
-    update_cursor: bool,
-    update_highlight: bool
-}
-
-impl UpdateDescription {
-    fn empty() -> UpdateDescription {
-        UpdateDescription {
-            update_viewport: None,
-            update_cursor: false,
-            update_highlight: false
-        }
-    }
+pub enum UpdateDescription {
+    NoUpdate,
+    AttrsOnly,
+    All,
+    After(usize),
+    Range(usize, usize)
 }
 
 pub struct ActionResult {
@@ -437,14 +442,21 @@ impl ActionResult {
     pub fn empty() -> ActionResult {
         ActionResult {
             error: None,
-            update: UpdateDescription::empty()
+            update: UpdateDescription::NoUpdate
         }
     }
 
     pub fn error(s: String) -> ActionResult {
         ActionResult {
             error: Some(s),
-            update: UpdateDescription::empty()
+            update: UpdateDescription::NoUpdate
+        }
+    }
+
+    pub fn no_error(update: UpdateDescription) -> ActionResult {
+        ActionResult {
+            error: None,
+            update
         }
     }
 
@@ -470,7 +482,6 @@ pub struct HexEdit<'a> {
     ignore_case: bool,
     fill: FillType,
     cursor_pos: usize,
-    second_cursor_pos: (usize, usize, usize), // x, y, span
     nibble: Nibble,
     start_line: usize,
     edit_mode: EditMode,
@@ -501,7 +512,6 @@ impl<'a> HexEdit<'a> {
             ignore_case: false,
             fill: FillType::Bytes(vec![0]),
             cursor_pos: 0,
-            second_cursor_pos: (0, 0, 0),
             nibble: Nibble::Left,
             start_line: 0,
             edit_mode: EditMode::AsciiOverwrite,
@@ -598,67 +608,51 @@ impl<'a> HexEdit<'a> {
     }
 
     fn get_fill_bytes(&self, n_bytes: usize) -> Vec<u8> {
-        let mut bytes: Vec::<u8>;
         match &self.fill {
             FillType::Bytes(buffer) => {
-                bytes = buffer.iter().cycle().take(n_bytes).cloned().collect();
+                buffer.iter().cycle().take(n_bytes).cloned().collect()
             },
             FillType::Register(n) => {
-                bytes = self.clipboard_registers[*n as usize].iter().cycle().take(n_bytes).cloned().collect();
+                self.clipboard_registers[*n as usize].iter().cycle().take(n_bytes).cloned().collect()
             }
         }
-
-        bytes
     }
 
     pub fn insert_fill(&mut self, index: usize, n_bytes: usize) -> ActionResult {
+        let mut start_byte = index;
         if index > self.file_manager.len() {
+            start_byte = self.file_manager.len();
             self.append_fill(index - self.file_manager.len());
         }
-        self.file_manager.insert_bytes(index, &self.get_fill_bytes(n_bytes));
-        self.refresh_viewport();
-
-        ActionResult {
-            error: None, // TODO: User error from file manager
-            update: UpdateDescription {
-                update_viewport: Some((0, self.height)), // TODO: Make this more accurate
-                update_cursor: true,
-                update_highlight: true
-            }
+        match self.file_manager.insert_bytes(index, &self.get_fill_bytes(n_bytes)) {
+            Ok(_) => ActionResult::no_error(UpdateDescription::After(start_byte)),
+            Err(msg) => ActionResult::error(msg.to_string())
         }
     }
 
     pub fn overwrite_fill(&mut self, index: usize, n_bytes: usize) -> ActionResult {
+        let mut start_byte = index;
         if index + n_bytes > self.file_manager.len() {
+            start_byte = self.file_manager.len();
             self.append_fill(index + n_bytes - self.file_manager.len());
         }
-        self.file_manager.overwrite_bytes(index, &self.get_fill_bytes(n_bytes));
-
-        ActionResult {
-            error: None, // TODO: User error from file manager
-            update: UpdateDescription {
-                update_viewport: Some((0, self.height)), // TODO: Make this more accurate
-                update_cursor: true,
-                update_highlight: true
-            }
+        match self.file_manager.overwrite_bytes(index, &self.get_fill_bytes(n_bytes)) {
+            Ok(_) => ActionResult::no_error(UpdateDescription::Range(start_byte, index + n_bytes)),
+            Err(msg) => ActionResult::error(msg.to_string())
         }
     }
 
     pub fn insert_register(&mut self, register: u8, index: usize) -> ActionResult {
         if register < 32 {
             if self.clipboard_registers[register as usize].len() > 0 {
+                let mut start_byte = index;
                 if index > self.file_manager.len() {
+                    start_byte = self.file_manager.len();
                     self.append_fill(index - self.file_manager.len());
                 }
-                self.file_manager.insert_bytes(index, &self.clipboard_registers[register as usize]);
-        
-                ActionResult {
-                    error: None, // TODO: User error from file manager
-                    update: UpdateDescription {
-                        update_viewport: Some((0, self.height)), // TODO: Make this more accurate
-                        update_cursor: true,
-                        update_highlight: true
-                    }
+                match self.file_manager.insert_bytes(index, &self.clipboard_registers[register as usize]) {
+                    Ok(_) => ActionResult::no_error(UpdateDescription::After(start_byte)),
+                    Err(msg) => ActionResult::error(msg.to_string())
                 }
             } else {
                 ActionResult::error(format!("Register {} is empty", register))
@@ -673,18 +667,14 @@ impl<'a> HexEdit<'a> {
         if register < 32 {
             if self.clipboard_registers[register as usize].len() > 0 {
                 let n = &self.clipboard_registers[register as usize].len();
+                let mut start_byte = index;
                 if index + n > self.file_manager.len() {
+                    start_byte = self.file_manager.len();
                     self.append_fill(index + n - self.file_manager.len());
                 }
-                self.file_manager.overwrite_bytes(index, &self.clipboard_registers[register as usize]);
-
-                ActionResult {
-                    error: None, // TODO: User error from file manager
-                    update: UpdateDescription {
-                        update_viewport: Some((0, self.height)), // TODO: Make this more accurate
-                        update_cursor: true,
-                        update_highlight: true
-                    }
+                match self.file_manager.overwrite_bytes(index, &self.clipboard_registers[register as usize]) {
+                    Ok(_) => ActionResult::no_error(UpdateDescription::Range(start_byte, index + n)),
+                    Err(msg) => ActionResult::error(msg.to_string())
                 }
             } else {
                 ActionResult::error(format!("Register {} is empty", register))
@@ -696,24 +686,33 @@ impl<'a> HexEdit<'a> {
 
     pub fn yank(&mut self, register: u8, index: usize, n_bytes: usize) -> ActionResult {
         if register < 32 {
-            let mut buffer = vec![0; n_bytes];
-            self.file_manager.get_bytes(index, &mut buffer);
-            self.clipboard_registers[register as usize] = buffer;
-            ActionResult::empty()
+            if index + n_bytes <= self.file_manager.len() {
+                let mut buffer = vec![0; n_bytes];
+                match self.file_manager.get_bytes(index, &mut buffer) {
+                    Ok(_) => {
+                        self.clipboard_registers[register as usize] = buffer;
+                        ActionResult::empty()
+                    },
+                    Err(msg) => {
+                        ActionResult::error(msg.to_string())
+                    }
+                }
+            } else {
+                ActionResult::error("Cannot yank past EOF".to_string())
+            }
         } else {
             ActionResult::error("Registers must be less than 32".to_string())
         }
     }
 
     pub fn delete_bytes(&mut self, index: usize, n_bytes: usize) -> ActionResult {
-        self.file_manager.delete_bytes(index, n_bytes);
-        ActionResult {
-            error: None, // TODO: User error from file manager
-            update: UpdateDescription {
-                update_viewport: Some((0, self.height)), // TODO: Make this more accurate
-                update_cursor: true,
-                update_highlight: true
+        if index + n_bytes <= self.file_manager.len() {
+            match self.file_manager.delete_bytes(index, n_bytes) {
+                Ok(_) => ActionResult::no_error(UpdateDescription::After(index)),
+                Err(msg) => ActionResult::error(msg.to_string())
             }
+        } else {
+            ActionResult::error("Cannot delete past EOF".to_string())
         }
     }
 
@@ -724,25 +723,25 @@ impl<'a> HexEdit<'a> {
 
     pub fn overwrite_bytes(&mut self, index: usize, bytes: &Vec<u8>) {
         // TODO: Make this more efficient
-        let mut original_data = vec![0; bytes.len()];
-        self.file_manager.get_bytes(index, &mut original_data);
+        //let mut original_data = vec![0; bytes.len()];
+        //self.file_manager.get_bytes(index, &mut original_data);
         self.file_manager.overwrite_bytes(index, bytes);
-        self.refresh_viewport();
+        //self.refresh_viewport();
     }
 
     pub fn swap_bytes(&mut self, index: usize, n_bytes: usize) -> ActionResult {
         if index + n_bytes <= self.file_manager.len() {
             let mut data = vec![0; n_bytes];
-            self.file_manager.get_bytes(index, &mut data);
-            data.reverse();
-            self.file_manager.overwrite_bytes(index, &data);
-            
-            ActionResult {
-                error: None, // TODO: User error from file manager
-                update: UpdateDescription {
-                    update_viewport: Some((0, self.height)), // TODO: Make this more accurate
-                    update_cursor: true,
-                    update_highlight: true
+            match self.file_manager.get_bytes(index, &mut data) {
+                Ok(_) => {
+                    data.reverse();
+                    match self.file_manager.overwrite_bytes(index, &data) {
+                        Ok(_) => ActionResult::no_error(UpdateDescription::Range(index, index + n_bytes)),
+                        Err(msg) => ActionResult::error(msg.to_string())
+                    }
+                },
+                Err(msg) => {
+                    ActionResult::error(msg.to_string())
                 }
             }
         } else {
@@ -825,10 +824,16 @@ impl<'a> HexEdit<'a> {
         self.refresh_viewport();
     }
 
-    fn refresh_viewport(&mut self) {
+    fn refresh_viewport(&mut self) -> std::io::Result<()> {
+        // TODO: Make this actually update a given range of data
         self.display_data = vec![0; (self.line_length as usize) * (self.height)];
-        let (n, res) = self.file_manager.get_bytes(self.start_line * (self.line_length as usize), &mut self.display_data);
-        self.valid_bytes = n;
+        match self.file_manager.get_bytes(self.start_line * (self.line_length as usize), &mut self.display_data) {
+            Ok(n) => {
+                self.valid_bytes = n;
+                Ok(())
+            },
+            Err(msg) => Err(msg)
+        }
     }
 
     fn get_display_line(&self, line: usize) -> Vec<u8>{
@@ -840,24 +845,42 @@ impl<'a> HexEdit<'a> {
         self.file_manager.append_bytes(&self.get_fill_bytes(n_bytes));  
     }
 
-    fn overwrite_byte(&mut self, index: usize, c: u8) {
+    fn overwrite_byte(&mut self, index: usize, c: u8) -> ActionResult {
+        let mut start_byte = index;
         if index >= self.file_manager.len() {
+            start_byte = self.file_manager.len();
             self.append_fill(index - self.file_manager.len() + 1);
         }
-        self.file_manager.overwrite_byte(index, c);
-        self.action_stack.add(Box::new(OverwriteAction::new(index, vec![c])));
+        match self.file_manager.overwrite_byte(index, c) {
+            Ok(_) => {
+                self.action_stack.add(Box::new(OverwriteAction::new(index, vec![c])));
+                ActionResult::no_error(UpdateDescription::Range(start_byte, index + 1))
+            },
+            Err(msg) => ActionResult::error(msg.to_string())
+        }
     }
 
-    fn insert_byte(&mut self, index: usize, c: u8) {
+    fn insert_byte(&mut self, index: usize, c: u8) -> ActionResult {
+        let mut start_byte = index;
         if index > self.file_manager.len() {
+            start_byte = self.file_manager.len();
             self.append_fill(index - self.file_manager.len());
         }
-        self.file_manager.insert_byte(index, c);
-        self.action_stack.add(Box::new(InsertAction::new(index, 1)));
+        match self.file_manager.insert_byte(index, c) {
+            Ok(_) => {
+                self.action_stack.add(Box::new(InsertAction::new(index, 1)));
+                ActionResult::no_error(UpdateDescription::After(start_byte))
+            },
+            Err(msg) => ActionResult::error(msg.to_string())
+        }
+        
     }
 
-    fn delete_byte(&mut self, index: usize) {
-        self.file_manager.delete_byte(index);
+    fn delete_byte(&mut self, index: usize) -> ActionResult {
+        match self.file_manager.delete_byte(index) {
+            Ok(_) => ActionResult::no_error(UpdateDescription::After(index)),
+            Err(msg) => ActionResult::error(msg.to_string())
+        }
         //TODO: Add action record
     }
 
@@ -865,34 +888,16 @@ impl<'a> HexEdit<'a> {
         let line = index / (self.line_length as usize);
         self.cursor_pos = index;
 
-        let mut update: UpdateDescription;
 
         if line < self.start_line {
             self.set_viewport_row(line);
-            update = UpdateDescription {
-                update_viewport: Some((0, self.height)),
-                update_cursor: true,
-                update_highlight: true
-            };
+            ActionResult::no_error(UpdateDescription::All)
         } else if line >= self.start_line as usize + self.height {
             //println!("Going down: {} {}", self.start_line, line - self.height + 1);
             self.set_viewport_row(line - self.height + 1);
-            update = UpdateDescription {
-                update_viewport: Some((0, self.height)),
-                update_cursor: true,
-                update_highlight: true
-            };
+            ActionResult::no_error(UpdateDescription::All)
         } else {
-            update = UpdateDescription {
-                update_viewport: None,
-                update_cursor: true,
-                update_highlight: false
-            };
-        }
-
-        ActionResult {
-            error: None,
-            update
+            ActionResult::no_error(UpdateDescription::AttrsOnly)
         }
     }
 
@@ -902,14 +907,7 @@ impl<'a> HexEdit<'a> {
                 match self.nibble {
                     Nibble::Left => {
                         self.nibble = Nibble::Right;
-                        ActionResult {
-                            error: None,
-                            update: UpdateDescription {
-                                update_viewport: None,
-                                update_cursor: true,
-                                update_highlight: false
-                            }
-                        }
+                        ActionResult::no_error(UpdateDescription::AttrsOnly)
                     },
                     Nibble::Right => {
                         self.nibble = Nibble::Left;
@@ -937,14 +935,7 @@ impl<'a> HexEdit<'a> {
                     },
                     Nibble::Right => {
                         self.nibble = Nibble::Left;
-                        ActionResult {
-                            error: None,
-                            update: UpdateDescription {
-                                update_viewport: None,
-                                update_cursor: true,
-                                update_highlight: false
-                            }
-                        }
+                        ActionResult::no_error(UpdateDescription::AttrsOnly)
                     }
                 }
             },
@@ -993,7 +984,7 @@ impl<'a> HexEdit<'a> {
         }
     }
 
-    pub fn addch(&mut self, window: &Window, c: Input) -> ActionResult {
+    pub fn addch(&mut self, c: Input) -> ActionResult {
         match c {
             Input::KeyRight => {
                 self.advance_cursor()
@@ -1015,14 +1006,7 @@ impl<'a> HexEdit<'a> {
                 let row = self.start_line;
                 self.set_cursor_pos(self.cursor_pos + self.height*(self.line_length as usize));
                 self.set_viewport_row(row + self.height);
-                ActionResult {
-                    error: None,
-                    update: UpdateDescription {
-                        update_viewport: Some((0, self.height)),
-                        update_cursor: true,
-                        update_highlight: true
-                    }
-                }
+                ActionResult::no_error(UpdateDescription::All)
             },
             Input::KeyPPage => {
                 let row = self.start_line;
@@ -1033,14 +1017,7 @@ impl<'a> HexEdit<'a> {
                     self.set_cursor_pos(0);
                     self.set_viewport_row(0);
                 }
-                ActionResult {
-                    error: None,
-                    update: UpdateDescription {
-                        update_viewport: Some((0, self.height)),
-                        update_cursor: true,
-                        update_highlight: true
-                    }
-                }
+                ActionResult::no_error(UpdateDescription::All)
             },
             Input::KeyHome => {
                 self.set_cursor_pos(0)
@@ -1051,25 +1028,16 @@ impl<'a> HexEdit<'a> {
             Input::Character(ch) => {
                 match self.edit_mode {
                     EditMode::HexOverwrite => {
-                        self.addch_hex_overwrite(window, ch); // TODO - make this return ActionResult
+                        return self.addch_hex_overwrite(ch) 
                     },
                     EditMode::HexInsert => {
-                        self.addch_hex_insert(window, ch); // TODO - make this return ActionResult
+                        return self.addch_hex_insert(ch)
                     },
                     EditMode::AsciiOverwrite => {
-                        self.addch_ascii_overwrite(window, ch); // TODO - make this return ActionResult
+                        self.addch_ascii_overwrite(ch)
                     },
                     EditMode::AsciiInsert => {
-                        self.addch_ascii_insert(window, ch); // TODO - make this return ActionResult
-                    }
-                }
-
-                ActionResult {
-                    error: None,
-                    update: UpdateDescription {
-                        update_viewport: Some((0, self.height)),
-                        update_cursor: true,
-                        update_highlight: false
+                        self.addch_ascii_insert(ch)
                     }
                 }
             },
@@ -1078,125 +1046,124 @@ impl<'a> HexEdit<'a> {
 
     }
 
-    fn addch_hex_overwrite(&mut self, window: &Window, ch: char) -> Option<String>{
-        let mut a: u8;
+    fn addch_hex_overwrite(&mut self, ch: char) -> ActionResult {
         let b: u8 = match self.get_byte(self.cursor_pos) {Some(x) => x, None => 0};
 
-        match ch {
+        let a: u8 = match ch {
             '0'..='9' => {
-                a = (ch as u8) -  48;
+                (ch as u8) -  48
             },
             'a'..='f' => {
-                a = (ch as u8) - 87;
+                (ch as u8) - 87
             },
             'A'..='F' => {
-                a = (ch as u8) - 55;
+                (ch as u8) - 55
             },
             '\u{08}' => { // Backspace
                 // Does the same thing as Key_Left in overwrite mode
                 if self.cursor_pos > 0 || matches!(self.nibble, Nibble::Right) {
-                    self.retreat_cursor();
-                    return None;
+                    return self.retreat_cursor()
                 } else {
-                    return Some("Invalid Keystroke".to_string());
+                    return ActionResult::error("Invalid Keystroke".to_string());
                 }
             },
-            _ => return Some(format!("Invalid character! {}", ch))
-        }
+            _ => return ActionResult::error(format!("Invalid character! {}", ch))
+        };
 
-        match self.nibble {
+        let result = match self.nibble {
             Nibble::Left => {
-                self.overwrite_byte(self.cursor_pos, (a << 4) | (b & 0x0f));
+                self.overwrite_byte(self.cursor_pos, (a << 4) | (b & 0x0f))
             },
             Nibble::Right => {
-                self.overwrite_byte(self.cursor_pos, (a & 0x0f) | (b & 0xf0));
+                self.overwrite_byte(self.cursor_pos, (a & 0x0f) | (b & 0xf0))
             }
-        }
+        };
 
         self.advance_cursor();
-        None
+        
+        result
     }
 
-    fn addch_hex_insert(&mut self, window: &Window, ch: char) -> Option<String>{
-        let mut a: u8;
+    fn addch_hex_insert(&mut self, ch: char) -> ActionResult {
         let b: u8 = match self.get_byte(self.cursor_pos) {Some(x) => x, None => 0};
 
-        match ch {
+        let a = match ch {
             '0'..='9' => {
-                a = (ch as u8) -  48;
+                (ch as u8) -  48
             },
             'a'..='f' => {
-                a = (ch as u8) - 87;
+                (ch as u8) - 87
             },
             'A'..='F' => {
-                a = (ch as u8) - 55;
+                (ch as u8) - 55
             },
             '\u{08}' => { // Backspace
                 if self.cursor_pos > 0 || matches!(self.nibble, Nibble::Right) {
                     self.retreat_cursor();
                     match self.nibble {
                         Nibble::Left => {
-                            self.delete_byte(self.cursor_pos);
+                            return self.delete_byte(self.cursor_pos);
                         },
                         Nibble::Right => {
-                            self.overwrite_byte(self.cursor_pos, b & 0xf0);
+                            return self.overwrite_byte(self.cursor_pos, b & 0xf0);
                         }
                     }
-                    return None;
                 } else {
-                    return Some("Invalid Keystroke".to_string());
+                    return ActionResult::error("Invalid Keystroke".to_string());
                 }
             },
-            _ => return Some(format!("Invalid character! {}", ch))
-        }
+            _ => return ActionResult::error(format!("Invalid character! {}", ch))
+        };
 
-        match self.nibble {
+        let result = match self.nibble {
             Nibble::Left => {
-                self.insert_byte(self.cursor_pos, a << 4);
+                self.insert_byte(self.cursor_pos, a << 4)
             },
             Nibble::Right => {
-                self.overwrite_byte(self.cursor_pos, (a & 0x0f) | (b & 0xf0));
+                self.overwrite_byte(self.cursor_pos, (a & 0x0f) | (b & 0xf0))
             }
-        }
+        };
 
         self.advance_cursor();
-        None
+        
+        result
     }
 
-    fn addch_ascii_overwrite(&mut self, window: &Window, ch: char) -> Option<String>{
+    fn addch_ascii_overwrite(&mut self, ch: char) -> ActionResult {
         match ch {
             '\u{08}' => { // Backspace
                 // Does the same thins as Key_Left in overwrite mode
                 if self.cursor_pos > 0{
-                    self.retreat_cursor();
+                    self.retreat_cursor()
                 } else {
-                    return Some("Invalid Keystroke".to_string());
+                    ActionResult::error("Invalid Keystroke".to_string())
                 }
             },
             _ => {
-                self.overwrite_byte(self.cursor_pos, ch as u8);
+                let result = self.overwrite_byte(self.cursor_pos, ch as u8);
                 self.advance_cursor();
+                result
             }
         }
-        None
     }
 
-    fn addch_ascii_insert(&mut self, window: &Window, ch:char) -> Option<String> {
+    fn addch_ascii_insert(&mut self, ch:char) -> ActionResult {
         match ch {
             '\u{08}' => { // Backspace
                 if self.cursor_pos > 0{
-                    self.delete_byte(self.cursor_pos - 1);
+                    let result = self.delete_byte(self.cursor_pos - 1);
                     self.retreat_cursor();
+                    result
                 } else {
-                    return Some("Invalid Keystroke".to_string());
+                    ActionResult::error("Invalid Keystroke".to_string())
                 }
             },
             _ => {
-                self.insert_byte(self.cursor_pos, ch as u8);
+                let result = self.insert_byte(self.cursor_pos, ch as u8);
                 self.advance_cursor();
+                result
             }
         }
-        None
     }
 
     fn refresh_highlights(&self, window: &mut Window) {
@@ -1235,26 +1202,50 @@ impl<'a> HexEdit<'a> {
     }
 
     pub fn update(&mut self, window: &mut Window, update: UpdateDescription) {
-        if let Some((n1, n2)) = update.update_viewport {
-            println!("Populating");
-            self.refresh_viewport();
-            self.populate(window);
-        }
-        if update.update_cursor {
-            println!("Refreshing cursor");
-            self.refresh_cursor(window);
-        }
-        if update.update_highlight {
-            println!("Refreshing highlights");
-            self.refresh_highlights(window);
+        match update {
+            UpdateDescription::NoUpdate => {
+                ()
+            },
+            UpdateDescription::AttrsOnly => {
+                println!("Refreshing attrs");
+                self.refresh_cursor(window);
+                self.refresh_highlights(window);
+            },
+            UpdateDescription::After(n) =>{
+                let line = clip_to_range(n / (self.line_length as usize), self.start_line, self.start_line + self.height);
+                println!("Refreshing lines {} through {}", line - self.start_line, self.height);
+                self.refresh_viewport();
+                self.populate(window, line - self.start_line, self.height);
+                self.refresh_cursor(window);
+                self.refresh_highlights(window); 
+            },
+            UpdateDescription::Range(n1, n2) => {
+                let line1 = clip_to_range(n1 / (self.line_length as usize), self.start_line, self.start_line + self.height);
+                let line2 = clip_to_range((n2 - 1) / (self.line_length as usize), self.start_line, self.start_line + self.height);
+
+                println!("Refreshing lines {} through {}", line1 - self.start_line, line2 - self.start_line);
+                self.refresh_viewport();
+                self.populate(window, line1 - self.start_line, line2 - self.start_line + 1);
+                self.refresh_cursor(window);
+                self.refresh_highlights(window); 
+            },
+            UpdateDescription::All => {
+                println!("Refreshing all");
+                self.refresh_viewport();
+                self.populate(window, 0, self.height);
+                self.refresh_cursor(window);
+                self.refresh_highlights(window);                
+            }
+
         }
     }
 
-    fn populate(&self, window: &mut Window) {
+    fn populate(&self, window: &mut Window, start: usize, end: usize) {
 
 
         let mut s = String::new();
-        for i in 0..self.height {
+        for i in start..end {
+            println!("{}", i);
             if self.capitalize_hex {
                 s += &format!("{:0width$x}", (self.start_line + i) * (self.line_length as usize), width=self.file_manager.line_label_len()).to_ascii_uppercase();
             } else {
@@ -1270,12 +1261,12 @@ impl<'a> HexEdit<'a> {
             s += &"\n".to_string();
         }
 
-        window.mvaddstr(self.x as i32, self.y as i32, s);
+        window.mvaddstr((self.y + start) as i32, self.x as i32, s);
     }
 
     pub fn draw(&self, window: &mut Window) {
 
-        self.populate(window);
+        self.populate(window, 0, self.height);
         self.refresh_highlights(window);
         self.refresh_cursor(window);
     }
