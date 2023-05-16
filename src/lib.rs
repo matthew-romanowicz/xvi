@@ -1,5 +1,3 @@
-use std::iter::FromIterator;
-
 extern crate pancurses;
 use pancurses::{initscr, endwin, Input, noecho, Window, resize_term};
 
@@ -31,6 +29,12 @@ enum EditState {
 //
 //      :ins fmt #          =>  Insert # encoded as fmt at the cusor location
 //      :ovr fmt #          =>  Overwrite # encoded as fmt at the cusor location
+//
+//      :w                  =>  Write all changes to file
+//      :x                  =>  Write all changes to file and exit
+//      :wq                 =>  Write all changes to file and exit
+//      :q                  =>  Exit if there are no unsaved changes
+//      :q!                 =>  Exit
 //
 //      /expr               =>  Find expr in file
 
@@ -75,79 +79,103 @@ enum EditState {
 
 
 
-fn execute_command(window: &mut Window, hex_edit: &mut HexEdit, command: Vec<char>) -> Result<(), ()> {
+fn execute_command(hex_edit: &mut HexEdit, command: Vec<char>) -> ActionResult {
 
     match command[0] {
         ':' => {
             let tokens = parse_command(&command[1..].to_vec());
             match tokens.len() {
+                1 => {
+                    match &tokens[0] {
+                        CommandToken::Keyword(CommandKeyword::Save) => {
+                            let result = hex_edit.save();
+                            if let Some(err) = result.error {
+                                ActionResult::error(err.to_string())
+                            } else {
+                                ActionResult::empty()
+                            }
+                        },
+                        CommandToken::Keyword(CommandKeyword::SaveAndQuit) => {
+                            let result = hex_edit.save();
+                            if let Some(err) = result.error {
+                                ActionResult::error(err.to_string())
+                            } else {
+                                endwin();
+                                std::process::exit(0);
+                            }
+                        },
+                        CommandToken::Keyword(CommandKeyword::ForceQuit) => {
+                            endwin();
+                            std::process::exit(0);
+                        },
+                        CommandToken::Keyword(CommandKeyword::Quit) => {
+                            if hex_edit.is_modified() {
+                                ActionResult::error("File has unsaved changes".to_string())
+                            } else {
+                                endwin();
+                                std::process::exit(0);
+                            }
+                        },
+                        _ => ActionResult::error("Command not recognized".to_string())
+                    }
+                }
                 3 => {
                     match tokens[0] {
                         CommandToken::Keyword(CommandKeyword::Set) => { // :set [] []
                             match (&tokens[1], &tokens[2]) {
                                 (CommandToken::Keyword(CommandKeyword::Caps), CommandToken::Keyword(CommandKeyword::On)) => {
-                                    hex_edit.set_capitalize_hex(true);
-                                    hex_edit.draw(window);
+                                    hex_edit.set_capitalize_hex(true)
                                 },
                                 (CommandToken::Keyword(CommandKeyword::Caps), CommandToken::Keyword(CommandKeyword::Off)) => {
-                                    hex_edit.set_capitalize_hex(false);
-                                    hex_edit.draw(window);
+                                    hex_edit.set_capitalize_hex(false)
                                 },
                                 (CommandToken::Keyword(CommandKeyword::Hex), CommandToken::Keyword(CommandKeyword::On)) => {
-                                    hex_edit.set_show_hex(true);
-                                    hex_edit.draw(window);
+                                    hex_edit.set_show_hex(true)
                                 },
                                 (CommandToken::Keyword(CommandKeyword::Hex), CommandToken::Keyword(CommandKeyword::Off)) => {
-                                    hex_edit.set_show_hex(false);
-                                    hex_edit.draw(window);
+                                    hex_edit.set_show_hex(false)
                                 },
                                 (CommandToken::Keyword(CommandKeyword::Ascii), CommandToken::Keyword(CommandKeyword::On)) => {
-                                    hex_edit.set_show_ascii(true);
-                                    hex_edit.draw(window);
+                                    hex_edit.set_show_ascii(true)
                                 },
                                 (CommandToken::Keyword(CommandKeyword::Ascii), CommandToken::Keyword(CommandKeyword::Off)) => {
-                                    hex_edit.set_show_ascii(false);
-                                    hex_edit.draw(window);
+                                    hex_edit.set_show_ascii(false)
                                 },
                                 (CommandToken::Keyword(CommandKeyword::Icase), CommandToken::Keyword(CommandKeyword::On)) => {
-                                    hex_edit.set_ignore_case(true);
-                                    hex_edit.draw(window);
+                                    hex_edit.set_ignore_case(true)
                                 },
                                 (CommandToken::Keyword(CommandKeyword::Icase), CommandToken::Keyword(CommandKeyword::Off)) => {
-                                    hex_edit.set_ignore_case(false);
-                                    hex_edit.draw(window);
+                                    hex_edit.set_ignore_case(false)
                                 },
                                 (CommandToken::Keyword(CommandKeyword::Line), CommandToken::Integer(_, n)) => {
-                                    hex_edit.set_line_length(*n as u8);
-                                    hex_edit.draw(window);
+                                    hex_edit.set_line_length(*n as u8)
                                 },
                                 (CommandToken::Keyword(CommandKeyword::Fill), CommandToken::Word(word)) => {
                                     println!("Setting fill type");
                                     match parse_filltype(word.to_vec()) {
                                         Ok(fill) => hex_edit.set_fill(fill),
-                                        Err(s) => println!("{}", s)
+                                        Err(s) => ActionResult::error(s)
                                     }
                                 },
-                                _ => println!("Command not recognized 1")
+                                _ => ActionResult::error("Command not recognized".to_string())
                             }
                         },
-                        _ => println!("Command not recognized 2")
+                        _ => ActionResult::error("Command not recognized".to_string())
                     }
                 },
-                _ => println!("Command not recognized 3")
+                _ => ActionResult::error("Command not recognized".to_string())
             }
         },
         // FIND IN FILE
         '/' => {
             hex_edit.clear_find();
             hex_edit.find(&command[1..].to_vec());
-            hex_edit.seek_next();
-            hex_edit.draw(window);
+            hex_edit.seek_next()
         }
-        _ => println!("Command not recognized 4")
+        _ => ActionResult::error("Command not recognized".to_string())
     }
 
-    Ok(())
+    //Ok(())
 }
 
 fn execute_keystroke(hex_edit: &mut HexEdit, keystroke: Vec<char>) -> ActionResult {
@@ -262,6 +290,13 @@ fn execute_keystroke(hex_edit: &mut HexEdit, keystroke: Vec<char>) -> ActionResu
     }
 }
 
+fn alert(text: String, window: &mut Window, line_entry: &mut LineEntry, hex_edit: &mut HexEdit) {
+    println!("ALERT: {}", text);
+    line_entry.alert(text.chars().collect());
+    line_entry.draw(window);
+    hex_edit.refresh_cursor(window);
+}
+
 pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) -> std::io::Result<()> {
     let mut edit_state = EditState::Escaped;
     let mut window = initscr();
@@ -283,7 +318,7 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
 
     let mut line_entry = LineEntry::new(window.get_max_x() as usize - 2 - cursor_index_len, 0, window.get_max_y() as usize - 1);
 
-    hex_edit.set_viewport_row(0);
+    hex_edit.set_viewport_row(0)?;
     hex_edit.draw(&mut window);
 
     loop {
@@ -300,7 +335,9 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                     Some(Input::KeyResize) => {
                         resize_term(0, 0);
                         println!("{}", window.get_max_y());
-                        hex_edit.resize(window.get_max_x() as usize - 1, window.get_max_y()as usize - 1);
+                        if let Err(err) = hex_edit.resize(window.get_max_x() as usize - 1, window.get_max_y()as usize - 1) {
+                            alert(err.to_string(), &mut window, &mut line_entry, &mut hex_edit);
+                        }
                         line_entry.reset_geometry(window.get_max_x() as usize - 2 - cursor_index_len, 0, window.get_max_y() as usize - 1);
                         hex_edit.draw(&mut window);
                         line_entry.draw(&mut window);
@@ -338,24 +375,24 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                         if matches!(c, 'g' | 'G' | 'f' | 'F' | 'd' | 'y' | 'p' | 'P' | 'u' | 'U' | 'n' | 'N' | 's') {
                             let result = execute_keystroke(&mut hex_edit, current_keystroke);
                             if let Some(err) = result.error {
-                                println!("ALERT: {}", err);
-                                line_entry.alert(err.chars().collect());
-                                line_entry.draw(&mut window);
-                                hex_edit.refresh_cursor(&mut window);
+                                alert(err, &mut window, &mut line_entry, &mut hex_edit);
                             }
-                            hex_edit.update(&mut window, result.update);
+                            let result = hex_edit.update(&mut window, result.update);
+                            if let Err(err) = result {
+                                alert(err.to_string(), &mut window, &mut line_entry, &mut hex_edit);
+                            }
                             current_keystroke = Vec::<char>::new();
                         }
                     },
                     Some(ch) if matches!(ch, Input::KeyRight | Input::KeyLeft | Input::KeyUp | Input::KeyDown | Input::KeyNPage | Input::KeyPPage | Input::KeyHome | Input::KeyEnd) => {
                         let result = hex_edit.addch(ch);
                         if let Some(err) = result.error {
-                            println!("ALERT: {}", err);
-                            line_entry.alert(err.chars().collect());
-                            line_entry.draw(&mut window);
-                            hex_edit.refresh_cursor(&mut window);
+                            alert(err, &mut window, &mut line_entry, &mut hex_edit);
                         }
-                        hex_edit.update(&mut window, result.update);
+                        let result = hex_edit.update(&mut window, result.update);
+                        if let Err(err) = result {
+                            alert(err.to_string(), &mut window, &mut line_entry, &mut hex_edit);
+                        }
                     },
                     _ => {
                         println!("Invalid keystroke");
@@ -371,8 +408,15 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                         edit_state = EditState::Escaped;
                     },
                     Some(Input::Character('\n')) => {
-                        println!("Newline: {}", String::from_iter(line_entry.get_text()));
-                        execute_command(&mut window, &mut hex_edit, line_entry.get_text());
+                        //println!("Newline: {}", String::from_iter(line_entry.get_text()));
+                        let result = execute_command(&mut hex_edit, line_entry.get_text());
+                        if let Some(err) = result.error {
+                            alert(err, &mut window, &mut line_entry, &mut hex_edit);
+                        }
+                        let result = hex_edit.update(&mut window, result.update);
+                        if let Err(err) = result {
+                            alert(err.to_string(), &mut window, &mut line_entry, &mut hex_edit);
+                        }
                         line_entry.clear();
                         line_entry.draw(&mut window);
                         edit_state = EditState::Escaped;
@@ -396,12 +440,12 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                     Some(ch) => { 
                         let result = hex_edit.addch(ch);
                         if let Some(err) = result.error {
-                            println!("ALERT: {}", err);
-                            line_entry.alert(err.chars().collect());
-                            line_entry.draw(&mut window);
-                            hex_edit.refresh_cursor(&mut window);
+                            alert(err, &mut window, &mut line_entry, &mut hex_edit);
                         }
-                        hex_edit.update(&mut window, result.update);
+                        let result = hex_edit.update(&mut window, result.update);
+                        if let Err(err) = result {
+                            alert(err.to_string(), &mut window, &mut line_entry, &mut hex_edit);
+                        }
                     },
                     None => ()
                 }

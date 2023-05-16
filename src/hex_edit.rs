@@ -1,10 +1,12 @@
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Read, Write, Seek, SeekFrom};
 
 extern crate pancurses;
 use pancurses::{Input, Window, Attributes, chtype};
 
 use flate2::read::GzDecoder;
+use flate2::write::GzEncoder;
+use flate2::Compression;
 
 struct FindResult {
     start: usize,
@@ -23,6 +25,7 @@ pub struct FileManager<'a> {
     extract: bool,
     handle: File,
     metadata: std::fs::Metadata,
+    modified: bool,
     swap_handle: Option<&'a File>, // Only used for FileManagerType::SwapFile
     swap_metadata: Option<&'a std::fs::Metadata>, // Only used for FileManagerType::SwapFile
     file_buffer: Vec<u8>, // Only used for FileManagerType::RamOnly
@@ -31,7 +34,7 @@ pub struct FileManager<'a> {
 impl FileManager<'_> {
     pub fn new<'a>(filename: String, file_manager_type: FileManagerType, extract: bool) -> std::io::Result<FileManager<'a>>{
 
-        let mut handle = File::open(&filename)?;
+        let mut handle = File::options().read(true).write(true).open(&filename)?;
         let metadata = handle.metadata()?;
 
         let mut file_buffer = vec![];
@@ -41,9 +44,9 @@ impl FileManager<'_> {
                     //let mut temp_file_buffer = Vec::<u8>::new();
                     //handle.read_to_end(&mut temp_file_buffer);
                     let mut d = GzDecoder::new(&handle);
-                    d.read_to_end(&mut file_buffer);
+                    d.read_to_end(&mut file_buffer)?;
                 } else {
-                    handle.read_to_end(&mut file_buffer);
+                    handle.read_to_end(&mut file_buffer)?;
                 }
             },
             FileManagerType::SwapFile => {
@@ -60,10 +63,35 @@ impl FileManager<'_> {
             extract,
             handle,
             metadata,
+            modified: false,
             swap_handle: None,
             swap_metadata: None,
             file_buffer
         })
+    }
+
+    pub fn is_modified(&self) -> bool {
+        self.modified
+    }
+
+    pub fn save(&mut self) -> std::io::Result<()>{
+        match self.file_manager_type {
+            FileManagerType::RamOnly => {
+                self.handle.seek(SeekFrom::Start(0))?;
+                if self.extract {
+                    let mut d = GzEncoder::new(Vec::new(), Compression::default());
+                    d.write_all(&self.file_buffer)?;
+                    self.handle.write_all(&d.finish()?)?;
+                } else {
+                    self.handle.write_all(&self.file_buffer)?;
+                }
+                let n = self.handle.seek(SeekFrom::Current(0))?;
+                self.handle.set_len(n)?;
+                self.modified = false;
+                Ok(())
+            },
+            _ => Ok(())
+        }
     }
 
     pub fn get_bytes(&mut self, index: usize, buffer: &mut Vec<u8>) -> std::io::Result<usize> {
@@ -86,7 +114,7 @@ impl FileManager<'_> {
                 Ok(0) // TODO
             },
             FileManagerType::LiveEdit => {
-                self.handle.seek(SeekFrom::Start(index as u64));
+                self.handle.seek(SeekFrom::Start(index as u64))?;
                 match self.handle.read_exact(buffer) {
                     Ok(_) => Ok(buffer.len()),// TODO make the length work
                     Err(msg) => Err(msg)
@@ -96,6 +124,7 @@ impl FileManager<'_> {
     }
 
     pub fn overwrite_byte(&mut self, index: usize, c: u8)  -> std::io::Result<()> {
+        self.modified = true;
         match self.file_manager_type {
             FileManagerType::RamOnly => {
                 self.file_buffer[index] = c;
@@ -112,6 +141,7 @@ impl FileManager<'_> {
     }
 
     pub fn insert_byte(&mut self, index: usize, c: u8)  -> std::io::Result<()> {
+        self.modified = true;
         match self.file_manager_type {
             FileManagerType::RamOnly => {
                 self.file_buffer.insert(index, c);
@@ -128,6 +158,7 @@ impl FileManager<'_> {
     }
 
     pub fn delete_byte(&mut self, index: usize)  -> std::io::Result<()> {
+        self.modified = true;
         match self.file_manager_type {
             FileManagerType::RamOnly => {
                 self.file_buffer.remove(index);
@@ -163,6 +194,7 @@ impl FileManager<'_> {
     }
 
     pub fn insert_bytes(&mut self, index: usize, bytes: &Vec<u8>)  -> std::io::Result<()> {
+        self.modified = true;
         match self.file_manager_type {
             FileManagerType::RamOnly => {
                 let second_part = self.file_buffer[index..self.file_buffer.len()].to_vec();
@@ -182,6 +214,7 @@ impl FileManager<'_> {
     }
 
     pub fn overwrite_bytes(&mut self, index: usize, bytes: &Vec<u8>)  -> std::io::Result<()> {
+        self.modified = true;
         match self.file_manager_type {
             FileManagerType::RamOnly => {
                 for (i, c) in bytes.iter().enumerate() {
@@ -200,6 +233,7 @@ impl FileManager<'_> {
     }
 
     pub fn append_bytes(&mut self, bytes: &Vec<u8>) -> std::io::Result<()> {
+        self.modified = true;
         match self.file_manager_type {
             FileManagerType::RamOnly => {
                 self.file_buffer.extend(bytes);
@@ -216,6 +250,7 @@ impl FileManager<'_> {
     }
 
     pub fn delete_bytes(&mut self, index: usize, n_bytes: usize) -> std::io::Result<()> {
+        self.modified = true;
         match self.file_manager_type {
             FileManagerType::RamOnly => {
                 let second_part = self.file_buffer[(index + n_bytes)..self.file_buffer.len()].to_vec();
@@ -317,8 +352,8 @@ pub enum FillType {
 }
 
 pub trait Action {
-    fn undo(&mut self, hex_edit: &mut HexEdit);
-    fn redo(&mut self, hex_edit: &mut HexEdit);
+    fn undo(&mut self, hex_edit: &mut HexEdit) -> ActionResult;
+    fn redo(&mut self, hex_edit: &mut HexEdit) -> ActionResult;
     fn size(&self) -> usize;
 }
 
@@ -339,12 +374,12 @@ impl InsertAction {
 }
 
 impl Action for InsertAction {
-    fn undo(&mut self, hex_edit: &mut HexEdit) {
-        hex_edit.delete_bytes(self.index, self.n_bytes);
+    fn undo(&mut self, hex_edit: &mut HexEdit) -> ActionResult {
+        hex_edit.delete_bytes(self.index, self.n_bytes) 
     }
 
-    fn redo(&mut self, hex_edit: &mut HexEdit) {
-        hex_edit.insert_bytes(self.index, &self.bytes);
+    fn redo(&mut self, hex_edit: &mut HexEdit) -> ActionResult {
+        hex_edit.insert_bytes(self.index, &self.bytes)
     }
 
     fn size(&self) -> usize{
@@ -367,18 +402,36 @@ impl OverwriteAction {
 }
 
 impl Action for OverwriteAction {
-    fn undo(&mut self, hex_edit: &mut HexEdit) {
+    fn undo(&mut self, hex_edit: &mut HexEdit) -> ActionResult {
         let mut buffer = vec![0; self.bytes.len()];
-        hex_edit.get_bytes(self.index, &mut buffer);
-        hex_edit.overwrite_bytes(self.index, &self.bytes);
-        self.bytes = buffer;
+        match hex_edit.get_bytes(self.index, &mut buffer) {
+            Ok(_) => {
+                match hex_edit.overwrite_bytes(self.index, &self.bytes) {
+                    Ok(_) => {
+                        self.bytes = buffer;
+                        ActionResult::no_error(UpdateDescription::All)
+                    },
+                    Err(msg) => ActionResult::error(msg.to_string())
+                }
+            },
+            Err(msg) => ActionResult::error(msg.to_string())
+        }
     }
 
-    fn redo(&mut self, hex_edit: &mut HexEdit) {
+    fn redo(&mut self, hex_edit: &mut HexEdit) -> ActionResult {
         let mut buffer = vec![0; self.bytes.len()];
-        hex_edit.get_bytes(self.index, &mut buffer);
-        hex_edit.overwrite_bytes(self.index, &self.bytes);
-        self.bytes = buffer;
+        match hex_edit.get_bytes(self.index, &mut buffer) {
+            Ok(_) => {
+                match hex_edit.overwrite_bytes(self.index, &self.bytes) {
+                    Ok(_) => {
+                        self.bytes = buffer;
+                        ActionResult::no_error(UpdateDescription::All)
+                    },
+                    Err(msg) => ActionResult::error(msg.to_string())
+                }
+            },
+            Err(msg) => ActionResult::error(msg.to_string())
+        }
     }
 
     fn size(&self) -> usize{
@@ -523,52 +576,74 @@ impl<'a> HexEdit<'a> {
         }
     }
 
-    pub fn set_capitalize_hex(&mut self, caps: bool) {
+    pub fn is_modified(&self) -> bool {
+        self.file_manager.is_modified()
+    }
+
+    pub fn save(&mut self) -> ActionResult {
+        match self.file_manager.save() {
+            Ok(()) => ActionResult::empty(),
+            Err(msg) => ActionResult::error(msg.to_string())
+        }
+    }
+
+    pub fn set_capitalize_hex(&mut self, caps: bool) -> ActionResult {
         self.capitalize_hex = caps;
+        ActionResult::no_error(UpdateDescription::All)
     }
 
     pub fn get_capitalize_hex(&mut self) -> bool {
         self.capitalize_hex
     }
 
-    pub fn set_line_length(&mut self, length: u8) {
+    pub fn set_line_length(&mut self, length: u8) -> ActionResult {
         self.line_length = length;
-        self.set_viewport_row(0);
+        match self.set_viewport_row(0) {
+            Ok(()) => ActionResult::no_error(UpdateDescription::All),
+            Err(msg) => ActionResult::error(msg.to_string())
+        }
     }
 
-    pub fn set_show_ascii(&mut self, show_ascii: bool) {
+    pub fn set_show_ascii(&mut self, show_ascii: bool) -> ActionResult {
         self.show_ascii = show_ascii;
+        ActionResult::no_error(UpdateDescription::All)
     }
 
-    pub fn set_show_hex(&mut self, show_hex: bool) {
+    pub fn set_show_hex(&mut self, show_hex: bool) -> ActionResult {
         self.show_hex = show_hex;
+        ActionResult::no_error(UpdateDescription::All)
     }
 
-    pub fn set_ignore_case(&mut self, ignore_case: bool) {
+    pub fn set_ignore_case(&mut self, ignore_case: bool) -> ActionResult {
         self.ignore_case = ignore_case;
+        ActionResult::no_error(UpdateDescription::NoUpdate)
     }
 
-    pub fn set_edit_mode(&mut self, edit_mode: EditMode) {
+    pub fn set_edit_mode(&mut self, edit_mode: EditMode) -> ActionResult {
         self.edit_mode = edit_mode;
+        ActionResult::no_error(UpdateDescription::AttrsOnly)
     }
 
-    pub fn set_fill(&mut self, fill: FillType) {
+    pub fn set_fill(&mut self, fill: FillType) -> ActionResult {
         self.fill = fill;
+        ActionResult::no_error(UpdateDescription::NoUpdate)
     }
 
     pub fn get_cursor_pos(&self) -> usize {
         self.cursor_pos
     }
 
-    pub fn clear_find(&mut self) {
+    pub fn clear_find(&mut self) -> ActionResult {
         self.highlights = Vec::<Highlight>::new();
+        ActionResult::no_error(UpdateDescription::AttrsOnly)
     }
 
-    pub fn find(&mut self, expr: &Vec<char>) {
+    pub fn find(&mut self, expr: &Vec<char>) -> ActionResult {
         let expr: Vec<u8> = expr.iter().map(|c| *c as u8).collect();
         for res in self.file_manager.find(&expr, self.ignore_case) {
             self.highlights.push(Highlight {start: res.start, span: res.span})
         }
+        ActionResult::no_error(UpdateDescription::AttrsOnly)
     }
 
     pub fn seek_next(&mut self) -> ActionResult {
@@ -622,7 +697,9 @@ impl<'a> HexEdit<'a> {
         let mut start_byte = index;
         if index > self.file_manager.len() {
             start_byte = self.file_manager.len();
-            self.append_fill(index - self.file_manager.len());
+            if let Err(msg) = self.append_fill(index - self.file_manager.len()) {
+                return ActionResult::error(msg.to_string())
+            }
         }
         match self.file_manager.insert_bytes(index, &self.get_fill_bytes(n_bytes)) {
             Ok(_) => ActionResult::no_error(UpdateDescription::After(start_byte)),
@@ -634,7 +711,9 @@ impl<'a> HexEdit<'a> {
         let mut start_byte = index;
         if index + n_bytes > self.file_manager.len() {
             start_byte = self.file_manager.len();
-            self.append_fill(index + n_bytes - self.file_manager.len());
+            if let Err(msg) = self.append_fill(index + n_bytes - self.file_manager.len()) {
+                return ActionResult::error(msg.to_string())
+            }
         }
         match self.file_manager.overwrite_bytes(index, &self.get_fill_bytes(n_bytes)) {
             Ok(_) => ActionResult::no_error(UpdateDescription::Range(start_byte, index + n_bytes)),
@@ -648,7 +727,9 @@ impl<'a> HexEdit<'a> {
                 let mut start_byte = index;
                 if index > self.file_manager.len() {
                     start_byte = self.file_manager.len();
-                    self.append_fill(index - self.file_manager.len());
+                    if let Err(msg) = self.append_fill(index - self.file_manager.len()) {
+                        return ActionResult::error(msg.to_string())
+                    }
                 }
                 match self.file_manager.insert_bytes(index, &self.clipboard_registers[register as usize]) {
                     Ok(_) => ActionResult::no_error(UpdateDescription::After(start_byte)),
@@ -670,7 +751,9 @@ impl<'a> HexEdit<'a> {
                 let mut start_byte = index;
                 if index + n > self.file_manager.len() {
                     start_byte = self.file_manager.len();
-                    self.append_fill(index + n - self.file_manager.len());
+                    if let Err(msg) = self.append_fill(index + n - self.file_manager.len()) {
+                        return ActionResult::error(msg.to_string())
+                    }
                 }
                 match self.file_manager.overwrite_bytes(index, &self.clipboard_registers[register as usize]) {
                     Ok(_) => ActionResult::no_error(UpdateDescription::Range(start_byte, index + n)),
@@ -716,16 +799,17 @@ impl<'a> HexEdit<'a> {
         }
     }
 
-    pub fn insert_bytes(&mut self, index: usize, bytes: &Vec<u8>) {
+    pub fn insert_bytes(&mut self, index: usize, bytes: &Vec<u8>) -> ActionResult{
         // TODO
         println!("Inserting {} bytes at {}!", bytes.len(), index);
+        ActionResult::empty()
     }
 
-    pub fn overwrite_bytes(&mut self, index: usize, bytes: &Vec<u8>) {
+    pub fn overwrite_bytes(&mut self, index: usize, bytes: &Vec<u8>) -> std::io::Result<()> {
         // TODO: Make this more efficient
         //let mut original_data = vec![0; bytes.len()];
         //self.file_manager.get_bytes(index, &mut original_data);
-        self.file_manager.overwrite_bytes(index, bytes);
+        self.file_manager.overwrite_bytes(index, bytes)
         //self.refresh_viewport();
     }
 
@@ -749,8 +833,8 @@ impl<'a> HexEdit<'a> {
         } 
     }
 
-    pub fn get_bytes(&mut self, index: usize, buffer: &mut Vec<u8>) {
-        self.file_manager.get_bytes(index, buffer);
+    pub fn get_bytes(&mut self, index: usize, buffer: &mut Vec<u8>) -> std::io::Result<usize> {
+        self.file_manager.get_bytes(index, buffer)
     }
 
     pub fn get_byte(&mut self, index: usize) -> Option<u8> {
@@ -769,10 +853,10 @@ impl<'a> HexEdit<'a> {
         ActionResult::empty()
     }
 
-    pub fn resize(&mut self, width: usize, height: usize) {
+    pub fn resize(&mut self, width: usize, height: usize) -> std::io::Result<()> {
         self.width = width;
         self.height = height;
-        self.refresh_viewport();
+        self.refresh_viewport()
     }
 
     fn bytes_to_hex_line(buffer: &Vec<u8>, eof_char: char, n_valid: usize) -> String {
@@ -819,9 +903,9 @@ impl<'a> HexEdit<'a> {
         s
     }
 
-    pub fn set_viewport_row(&mut self, row: usize) {
+    pub fn set_viewport_row(&mut self, row: usize) -> std::io::Result<()> {
         self.start_line = row;
-        self.refresh_viewport();
+        self.refresh_viewport()
     }
 
     fn refresh_viewport(&mut self) -> std::io::Result<()> {
@@ -841,15 +925,17 @@ impl<'a> HexEdit<'a> {
         self.display_data[line*(self.line_length as usize)..(line + 1)*(self.line_length as usize)].to_vec()
     }
 
-    fn append_fill(&mut self, n_bytes: usize) {
-        self.file_manager.append_bytes(&self.get_fill_bytes(n_bytes));  
+    fn append_fill(&mut self, n_bytes: usize) -> std::io::Result<()> {
+        self.file_manager.append_bytes(&self.get_fill_bytes(n_bytes))
     }
 
     fn overwrite_byte(&mut self, index: usize, c: u8) -> ActionResult {
         let mut start_byte = index;
         if index >= self.file_manager.len() {
             start_byte = self.file_manager.len();
-            self.append_fill(index - self.file_manager.len() + 1);
+            if let Err(msg) = self.append_fill(index - self.file_manager.len() + 1) {
+                return ActionResult::error(msg.to_string())
+            }
         }
         match self.file_manager.overwrite_byte(index, c) {
             Ok(_) => {
@@ -864,7 +950,9 @@ impl<'a> HexEdit<'a> {
         let mut start_byte = index;
         if index > self.file_manager.len() {
             start_byte = self.file_manager.len();
-            self.append_fill(index - self.file_manager.len());
+            if let Err(msg) = self.append_fill(index - self.file_manager.len()) {
+                return ActionResult::error(msg.to_string())
+            }
         }
         match self.file_manager.insert_byte(index, c) {
             Ok(_) => {
@@ -890,12 +978,16 @@ impl<'a> HexEdit<'a> {
 
 
         if line < self.start_line {
-            self.set_viewport_row(line);
-            ActionResult::no_error(UpdateDescription::All)
+            match self.set_viewport_row(line){
+                Ok(_) => ActionResult::no_error(UpdateDescription::All),
+                Err(msg) => ActionResult::error(msg.to_string())
+            }
         } else if line >= self.start_line as usize + self.height {
             //println!("Going down: {} {}", self.start_line, line - self.height + 1);
-            self.set_viewport_row(line - self.height + 1);
-            ActionResult::no_error(UpdateDescription::All)
+            match self.set_viewport_row(line - self.height + 1) {
+                Ok(_) => ActionResult::no_error(UpdateDescription::All),
+                Err(msg) => ActionResult::error(msg.to_string())
+            }
         } else {
             ActionResult::no_error(UpdateDescription::AttrsOnly)
         }
@@ -1005,17 +1097,24 @@ impl<'a> HexEdit<'a> {
             Input::KeyNPage => {
                 let row = self.start_line;
                 self.set_cursor_pos(self.cursor_pos + self.height*(self.line_length as usize));
-                self.set_viewport_row(row + self.height);
-                ActionResult::no_error(UpdateDescription::All)
+                match self.set_viewport_row(row + self.height) {
+                    Ok(_) => ActionResult::no_error(UpdateDescription::All),
+                    Err(msg) => ActionResult::error(msg.to_string())
+                }
+                
             },
             Input::KeyPPage => {
                 let row = self.start_line;
                 if self.cursor_pos >= self.height*(self.line_length as usize) && self.start_line >= self.height {
                     self.set_cursor_pos(self.cursor_pos - self.height*(self.line_length as usize));
-                    self.set_viewport_row(row - self.height);
+                    if let Err(msg) = self.set_viewport_row(row - self.height) {
+                        return ActionResult::error(msg.to_string());
+                    }
                 } else {
                     self.set_cursor_pos(0);
-                    self.set_viewport_row(0);
+                    if let Err(msg) = self.set_viewport_row(0) {
+                        return ActionResult::error(msg.to_string());
+                    }
                 }
                 ActionResult::no_error(UpdateDescription::All)
             },
@@ -1201,7 +1300,7 @@ impl<'a> HexEdit<'a> {
         }
     }
 
-    pub fn update(&mut self, window: &mut Window, update: UpdateDescription) {
+    pub fn update(&mut self, window: &mut Window, update: UpdateDescription) -> std::io::Result<()> {
         match update {
             UpdateDescription::NoUpdate => {
                 ()
@@ -1214,7 +1313,7 @@ impl<'a> HexEdit<'a> {
             UpdateDescription::After(n) =>{
                 let line = clip_to_range(n / (self.line_length as usize), self.start_line, self.start_line + self.height);
                 println!("Refreshing lines {} through {}", line - self.start_line, self.height);
-                self.refresh_viewport();
+                self.refresh_viewport()?;
                 self.populate(window, line - self.start_line, self.height);
                 self.refresh_cursor(window);
                 self.refresh_highlights(window); 
@@ -1224,20 +1323,22 @@ impl<'a> HexEdit<'a> {
                 let line2 = clip_to_range((n2 - 1) / (self.line_length as usize), self.start_line, self.start_line + self.height);
 
                 println!("Refreshing lines {} through {}", line1 - self.start_line, line2 - self.start_line);
-                self.refresh_viewport();
+                self.refresh_viewport()?;
                 self.populate(window, line1 - self.start_line, line2 - self.start_line + 1);
                 self.refresh_cursor(window);
                 self.refresh_highlights(window); 
             },
             UpdateDescription::All => {
                 println!("Refreshing all");
-                self.refresh_viewport();
+                self.refresh_viewport()?;
                 self.populate(window, 0, self.height);
                 self.refresh_cursor(window);
                 self.refresh_highlights(window);                
             }
 
         }
+
+        Ok(())
     }
 
     fn populate(&self, window: &mut Window, start: usize, end: usize) {
