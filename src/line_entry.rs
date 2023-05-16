@@ -1,4 +1,4 @@
-use pancurses::{Input, Window};
+use pancurses::{Input, Window, chtype, Attributes, start_color, init_pair};
 
 pub struct LineEntry {
     length: usize,
@@ -7,6 +7,8 @@ pub struct LineEntry {
     text: Vec::<char>,
     cursor_pos: usize,
     offset: usize,
+    alert_text: Vec<char>,
+    alert_active: bool
 }
 
 impl LineEntry {
@@ -19,6 +21,8 @@ impl LineEntry {
             text: Vec::<char>::new(),
             cursor_pos: 0,
             offset: 0,
+            alert_text: Vec::<char>::new(),
+            alert_active: false
         }
     }
 
@@ -30,6 +34,19 @@ impl LineEntry {
         self.text = Vec::<char>::new();
         self.cursor_pos = 0;
         self.offset = 0;
+    }
+
+    pub fn alert(&mut self, text: Vec<char>) {
+        self.alert_text = text;
+        self.alert_active = true;
+    }
+
+    pub fn unalert(&mut self) {
+        self.alert_active = false;
+    }
+
+    pub fn alerting(&self) -> bool {
+        self.alert_active
     }
 
     pub fn reset_geometry(&mut self, length: usize, pos_x: usize, pos_y: usize) {
@@ -61,6 +78,7 @@ impl LineEntry {
 
     pub fn addch(&mut self, ch: Input) {
         //println!("cursor_pos={}, offset={}, text.len={}, length={}", self.cursor_pos, self.offset, self.text.len(), self.length);
+        self.alert_active = false;
         match ch {
             Input::KeyLeft => {
                 self.retreat_cursor();
@@ -141,26 +159,39 @@ impl LineEntry {
                 self.advance_cursor();
             },
             input => { println!("Input: {:?}", input); },
-            _ => (),
         }
     }
 
     pub fn draw(&self, window: &mut Window) {
-        let (y, x) = window.get_cur_yx();
-        let (max_y, max_x) = window.get_max_yx();
-        let mut s: String = String::new();
-        if self.text.len() < self.length {
-            s = String::from_iter(&self.text) + &" ".repeat(self.length as usize - self.text.len());
-        } else if self.text.len() >= self.offset + self.length {
-            //println!("offset={}", self.offset);
-            s = String::from_iter(&self.text[self.offset..(self.offset + self.length)]);
-            //println!("string={}", s);
-        }else {
-            s = String::from_iter(&self.text[self.offset..(self.offset + self.length - 1)]) + &" ";
-        };
-        window.mvaddstr(self.pos_y as i32, self.pos_x as i32, &s);
-        //window.mv(y, x);
-        window.mv(self.pos_y as i32, (self.pos_x + self.cursor_pos) as i32);
+
+
+        start_color();
+        init_pair(2, pancurses::COLOR_RED, pancurses::COLOR_BLACK);
+
+        if self.alert_active {
+            let mut bold_attr = Attributes::new();
+            //bold_attr.set_bold(true);
+            bold_attr.set_color_pair(pancurses::ColorPair(2));
+            let bold_attr = chtype::from(bold_attr);
+
+            window.mvaddstr(self.pos_y as i32, self.pos_x as i32, &self.alert_text.iter().collect::<String>());
+            window.mvchgat(self.pos_y as i32, self.pos_x as i32, self.alert_text.len() as i32, bold_attr, 0);
+            window.mv(self.pos_y as i32, self.pos_x as i32);
+        } else {
+            let mut s: String;// = String::new();
+            if self.text.len() < self.length {
+                s = String::from_iter(&self.text) + &" ".repeat(self.length as usize - self.text.len());
+            } else if self.text.len() >= self.offset + self.length {
+                //println!("offset={}", self.offset);
+                s = String::from_iter(&self.text[self.offset..(self.offset + self.length)]);
+                //println!("string={}", s);
+            }else {
+                s = String::from_iter(&self.text[self.offset..(self.offset + self.length - 1)]) + &" ";
+            };
+            window.mvaddstr(self.pos_y as i32, self.pos_x as i32, &s);
+            //window.mv(y, x);
+            window.mv(self.pos_y as i32, (self.pos_x + self.cursor_pos) as i32);
+        }
     }
 
 }

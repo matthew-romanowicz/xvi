@@ -55,5 +55,5 @@ options:
     println!("Extract: {}", extract);
 
 
-    run("C:\\Users\\Matthew\\Documents\\Git\\xvi\\test_file2.bin".to_string(), FileManagerType::RamOnly);
+    run("C:\\Users\\Matthew\\Documents\\Git\\xvi\\test_file4.bin.gz".to_string(), FileManagerType::RamOnly, extract);
 }

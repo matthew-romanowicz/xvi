@@ -45,7 +45,7 @@ pub fn parse_filltype(word: Vec<char>) -> Result<FillType, String> {
                         n *= 10;
                         n += *c as usize - 48;
                     },
-                    _ => return Err(("Invalid character in register number".to_string()))
+                    _ => return Err("Invalid character in register number".to_string())
                 }
             }
             if n < 256 {
@@ -96,7 +96,6 @@ pub fn parse_filltype(word: Vec<char>) -> Result<FillType, String> {
 
 //#[derive(Copy, Clone)]
 pub enum CommandToken {
-    Start(char),
     Word(Vec<char>),
     Integer(Vec<char>, usize),
     Keyword(CommandKeyword)
@@ -135,7 +134,7 @@ pub fn parse_command(command: &Vec<char>) -> Vec<CommandToken> {
                 current_int *= 10;
                 current_int += (*c as usize) - 48;
             },
-            ch if !building_int => {
+            _ if !building_int => {
                 building_word = true;
                 current_word.push(*c);
             },
