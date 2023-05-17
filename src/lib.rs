@@ -4,6 +4,9 @@ use pancurses::{initscr, endwin, Input, noecho, Window, resize_term};
 mod line_entry;
 use crate::line_entry::LineEntry;
 
+mod large_text_view;
+use crate::large_text_view::LargeTextView;
+
 mod hex_edit;
 use crate::hex_edit::{FileManager, EditMode, ActionResult, HexEdit};
 pub use crate::hex_edit::FileManagerType;
@@ -14,72 +17,76 @@ use crate::parsers::{CommandToken, CommandKeyword, parse_command, parse_filltype
 enum EditState {
     Escaped,
     Command,
-    Edit
+    Edit,
+    Manual
 }
 
-// Comands:
-//
-//      :set caps [on|off]  =>  Toggle the case of display hexadecimal values
-//      :set hex [on|off]   =>  Toggle the hex display
-//      :set ascii [on|off] =>  Toggle the ascii display
-//      :set line #         =>  Set the number of bytes per line to #
-//      :set fill r#        =>  Set the fill value to the contents of register #
-//      :set fill x#        =>  Set the fill value to # (in hex)
-//      :set icase [on|off] => Set ignore case for find function
-//
-//      :ins fmt #          =>  Insert # encoded as fmt at the cusor location
-//      :ovr fmt #          =>  Overwrite # encoded as fmt at the cusor location
-//
-//      :w                  =>  Write all changes to file
-//      :x                  =>  Write all changes to file and exit
-//      :wq                 =>  Write all changes to file and exit
-//      :q                  =>  Exit if there are no unsaved changes
-//      :q!                 =>  Exit
-//
-//      /expr               =>  Find expr in file
+const MANUAL_TEXT: &str = "\\b\\c*********Comands*******
 
+    :set caps [on|off]  =>  Toggle the case of display hexadecimal values
+    :set hex [on|off]   =>  Toggle the hex display
+    :set ascii [on|off] =>  Toggle the ascii display
+    :set line #         =>  Set the number of bytes per line to #
+    :set fill r#        =>  Set the fill value to the contents of register #
+    :set fill x#        =>  Set the fill value to # (in hex)
+    :set icase [on|off] => Set ignore case for find function
 
-// Keystroke Commands:
-//
-//      ESC     =>  Clear the current keystroke buffer
-//
-//      i       =>  Change to hex insert mode
-//      I       =>  Change to ASCII insert mode
-//      o       =>  Change to hex overwrite mode
-//      O       =>  Change to ASCII overwrite mode
-//
-//      g       =>  Move cursor to start of file
-//      G       =>  Move cursor to end of file
-//      #g      =>  Move cursor to #th byte from the start of the file
-//      #G      =>  Move cursor to #th byte from the end of the file
-//      +#g     =>  Move cursor # bytes forward
-//      -#g     =>  Move cursor # bytes backward
-//      n       =>  Seek to next find result
-//      N       =>  Seek to previous find result
-//
-//      #f      =>  Insert next # bytes from the cursor location
-//      #F      =>  Overwrite next # bytes from the cursor location
-//      #d      =>  Delete next # bytes from the cursor location
-//      #s      =>  Swap endinanness of next # bytes from the cursor location
-//
-//      #y      =>  Yank (copy) next # bytes from the cursor location to register 0
-//      #r##y   =>  Yank (copy) next ## bytes from the cursor location to register #
-//      p      =>  Insert contents of register # at cursor location
-//      P      =>  Overwrite bytes with contents of register # at cursor location
-//      #p      =>  Insert contents of register # at cursor location
-//      #P      =>  Overwrite bytes with contents of register # at cursor location
-//
-//      u       =>  Undo last action
-//      U       =>  Redo last action
-//      #u      =>  Undo last # actions
-//      #U      =>  Redo last # actions
-//      #M      =>  Start recording #th macro
-//      M       =>  Stop recording macro
-//      #m      =>  Run #th macro
+    :ins fmt #          =>  Insert # encoded as fmt at the cusor location
+    :ovr fmt #          =>  Overwrite # encoded as fmt at the cusor location
 
+    :w                  =>  Write all changes to file
+    :x                  =>  Write all changes to file and exit
+    :wq                 =>  Write all changes to file and exit
+    :q                  =>  Exit if there are no unsaved changes
+    :q!                 =>  Exit
 
+    /expr               =>  Find expr in file
 
-fn execute_command(hex_edit: &mut HexEdit, command: Vec<char>) -> ActionResult {
+\\b\\c*******Keystroke Commands*******
+
+    ESC     =>  Clear the current keystroke buffer
+
+    i       =>  Change to hex insert mode
+    I       =>  Change to ASCII insert mode
+    o       =>  Change to hex overwrite mode
+    O       =>  Change to ASCII overwrite mode
+
+    g       =>  Move cursor to start of file
+    G       =>  Move cursor to end of file
+    #g      =>  Move cursor to #th byte from the start of the file
+    #G      =>  Move cursor to #th byte from the end of the file
+    +#g     =>  Move cursor # bytes forward
+    -#g     =>  Move cursor # bytes backward
+    n       =>  Seek to next find result
+    N       =>  Seek to previous find result
+
+    #f      =>  Insert next # bytes from the cursor location
+    #F      =>  Overwrite next # bytes from the cursor location
+    #d      =>  Delete next # bytes from the cursor location
+    #s      =>  Swap endinanness of next # bytes from the cursor location
+
+    #y      =>  Yank (copy) next # bytes from the cursor location to register 0
+    #r##y   =>  Yank (copy) next ## bytes from the cursor location to register #
+    p      =>  Insert contents of register # at cursor location
+    P      =>  Overwrite bytes with contents of register # at cursor location
+    #p      =>  Insert contents of register # at cursor location
+    #P      =>  Overwrite bytes with contents of register # at cursor location
+
+    u       =>  Undo last action
+    U       =>  Redo last action
+    #u      =>  Undo last # actions
+    #U      =>  Redo last # actions
+    #M      =>  Start recording #th macro
+    M       =>  Stop recording macro
+    #m      =>  Run #th macro";
+
+enum CommandInstruction {
+    NoOp,
+    Exit,
+    ChangeState(EditState)
+}
+
+fn execute_command(hex_edit: &mut HexEdit, command: Vec<char>) -> (CommandInstruction, ActionResult) {
 
     match command[0] {
         ':' => {
@@ -90,33 +97,33 @@ fn execute_command(hex_edit: &mut HexEdit, command: Vec<char>) -> ActionResult {
                         CommandToken::Keyword(CommandKeyword::Save) => {
                             let result = hex_edit.save();
                             if let Some(err) = result.error {
-                                ActionResult::error(err.to_string())
+                                (CommandInstruction::NoOp, ActionResult::error(err.to_string()))
                             } else {
-                                ActionResult::empty()
+                                (CommandInstruction::NoOp, ActionResult::empty())
                             }
                         },
                         CommandToken::Keyword(CommandKeyword::SaveAndQuit) => {
                             let result = hex_edit.save();
                             if let Some(err) = result.error {
-                                ActionResult::error(err.to_string())
+                                (CommandInstruction::NoOp, ActionResult::error(err.to_string()))
                             } else {
-                                endwin();
-                                std::process::exit(0);
+                                (CommandInstruction::Exit, ActionResult::empty())
                             }
                         },
                         CommandToken::Keyword(CommandKeyword::ForceQuit) => {
-                            endwin();
-                            std::process::exit(0);
+                            (CommandInstruction::Exit, ActionResult::empty())
                         },
                         CommandToken::Keyword(CommandKeyword::Quit) => {
                             if hex_edit.is_modified() {
-                                ActionResult::error("File has unsaved changes".to_string())
+                                (CommandInstruction::NoOp, ActionResult::error("File has unsaved changes".to_string()))
                             } else {
-                                endwin();
-                                std::process::exit(0);
+                                (CommandInstruction::Exit, ActionResult::empty())
                             }
                         },
-                        _ => ActionResult::error("Command not recognized".to_string())
+                        CommandToken::Keyword(CommandKeyword::Manual) => {
+                            (CommandInstruction::ChangeState(EditState::Manual), ActionResult::empty())
+                        },
+                        _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
                     }
                 }
                 3 => {
@@ -124,55 +131,55 @@ fn execute_command(hex_edit: &mut HexEdit, command: Vec<char>) -> ActionResult {
                         CommandToken::Keyword(CommandKeyword::Set) => { // :set [] []
                             match (&tokens[1], &tokens[2]) {
                                 (CommandToken::Keyword(CommandKeyword::Caps), CommandToken::Keyword(CommandKeyword::On)) => {
-                                    hex_edit.set_capitalize_hex(true)
+                                    (CommandInstruction::NoOp, hex_edit.set_capitalize_hex(true))
                                 },
                                 (CommandToken::Keyword(CommandKeyword::Caps), CommandToken::Keyword(CommandKeyword::Off)) => {
-                                    hex_edit.set_capitalize_hex(false)
+                                    (CommandInstruction::NoOp, hex_edit.set_capitalize_hex(false))
                                 },
                                 (CommandToken::Keyword(CommandKeyword::Hex), CommandToken::Keyword(CommandKeyword::On)) => {
-                                    hex_edit.set_show_hex(true)
+                                    (CommandInstruction::NoOp, hex_edit.set_show_hex(true))
                                 },
                                 (CommandToken::Keyword(CommandKeyword::Hex), CommandToken::Keyword(CommandKeyword::Off)) => {
-                                    hex_edit.set_show_hex(false)
+                                    (CommandInstruction::NoOp, hex_edit.set_show_hex(false))
                                 },
                                 (CommandToken::Keyword(CommandKeyword::Ascii), CommandToken::Keyword(CommandKeyword::On)) => {
-                                    hex_edit.set_show_ascii(true)
+                                    (CommandInstruction::NoOp, hex_edit.set_show_ascii(true))
                                 },
                                 (CommandToken::Keyword(CommandKeyword::Ascii), CommandToken::Keyword(CommandKeyword::Off)) => {
-                                    hex_edit.set_show_ascii(false)
+                                    (CommandInstruction::NoOp, hex_edit.set_show_ascii(false))
                                 },
                                 (CommandToken::Keyword(CommandKeyword::Icase), CommandToken::Keyword(CommandKeyword::On)) => {
-                                    hex_edit.set_ignore_case(true)
+                                    (CommandInstruction::NoOp, hex_edit.set_ignore_case(true))
                                 },
                                 (CommandToken::Keyword(CommandKeyword::Icase), CommandToken::Keyword(CommandKeyword::Off)) => {
-                                    hex_edit.set_ignore_case(false)
+                                    (CommandInstruction::NoOp, hex_edit.set_ignore_case(false))
                                 },
                                 (CommandToken::Keyword(CommandKeyword::Line), CommandToken::Integer(_, n)) => {
-                                    hex_edit.set_line_length(*n as u8)
+                                    (CommandInstruction::NoOp, hex_edit.set_line_length(*n as u8))
                                 },
                                 (CommandToken::Keyword(CommandKeyword::Fill), CommandToken::Word(word)) => {
                                     println!("Setting fill type");
                                     match parse_filltype(word.to_vec()) {
-                                        Ok(fill) => hex_edit.set_fill(fill),
-                                        Err(s) => ActionResult::error(s)
+                                        Ok(fill) => (CommandInstruction::NoOp, hex_edit.set_fill(fill)),
+                                        Err(s) => (CommandInstruction::NoOp, ActionResult::error(s))
                                     }
                                 },
-                                _ => ActionResult::error("Command not recognized".to_string())
+                                _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
                             }
                         },
-                        _ => ActionResult::error("Command not recognized".to_string())
+                        _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
                     }
                 },
-                _ => ActionResult::error("Command not recognized".to_string())
+                _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
             }
         },
         // FIND IN FILE
         '/' => {
             hex_edit.clear_find();
             hex_edit.find(&command[1..].to_vec());
-            hex_edit.seek_next()
+            (CommandInstruction::NoOp, hex_edit.seek_next())
         }
-        _ => ActionResult::error("Command not recognized".to_string())
+        _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
     }
 
     //Ok(())
@@ -318,6 +325,8 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
 
     let mut line_entry = LineEntry::new(window.get_max_x() as usize - 2 - cursor_index_len, 0, window.get_max_y() as usize - 1);
 
+    let mut manual_view = LargeTextView::new(0, 0, window.get_max_x() as usize - 1, window.get_max_y() as usize - 1, MANUAL_TEXT.to_string());
+
     hex_edit.set_viewport_row(0)?;
     hex_edit.draw(&mut window);
 
@@ -409,7 +418,7 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                     },
                     Some(Input::Character('\n')) => {
                         //println!("Newline: {}", String::from_iter(line_entry.get_text()));
-                        let result = execute_command(&mut hex_edit, line_entry.get_text());
+                        let (instr, result) = execute_command(&mut hex_edit, line_entry.get_text());
                         if let Some(err) = result.error {
                             alert(err, &mut window, &mut line_entry, &mut hex_edit);
                         }
@@ -417,10 +426,25 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                         if let Err(err) = result {
                             alert(err.to_string(), &mut window, &mut line_entry, &mut hex_edit);
                         }
+
                         line_entry.clear();
                         line_entry.draw(&mut window);
-                        edit_state = EditState::Escaped;
-                        hex_edit.refresh_cursor(&mut window);
+
+                        match instr {
+                            CommandInstruction::NoOp => {
+                                edit_state = EditState::Escaped;
+                                hex_edit.refresh_cursor(&mut window);
+                            },
+                            CommandInstruction::Exit => {
+                                endwin();
+                                std::process::exit(0);
+                            },
+                            CommandInstruction::ChangeState(EditState::Manual) => {
+                                edit_state = EditState::Manual;
+                                manual_view.draw(&mut window);
+                            },
+                            _ => () // This should never be hit
+                        }
                     },
                     Some(ch) => { 
                         line_entry.addch(ch); 
@@ -448,6 +472,23 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                         }
                     },
                     None => ()
+                }
+            },
+            EditState::Manual => {
+                match ch_input {
+                    Some(Input::KeyResize) => {
+                        resize_term(0, 0);
+                    },
+                    Some(Input::Character('\u{1b}')) => {
+                        edit_state = EditState::Escaped;
+                        hex_edit.draw(&mut window);
+                        line_entry.draw(&mut window);
+                    },
+                    Some(ch) if matches!(ch, Input::KeyUp | Input::KeyDown) => {
+                        manual_view.addch(ch);
+                        manual_view.draw(&mut window);
+                    },
+                    _ => println!("Invalid Keystroke"),
                 }
             }
         }
