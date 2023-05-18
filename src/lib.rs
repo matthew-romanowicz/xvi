@@ -8,7 +8,7 @@ mod large_text_view;
 use crate::large_text_view::LargeTextView;
 
 mod hex_edit;
-use crate::hex_edit::{FileManager, EditMode, ActionResult, HexEdit};
+use crate::hex_edit::{FileManager, EditMode, ActionResult, FillType, HexEdit};
 pub use crate::hex_edit::FileManagerType;
 
 mod parsers;
@@ -29,16 +29,22 @@ const MANUAL_TEXT: &str = "\\b\\c*********Comands*******
     :set line #         =>  Set the number of bytes per line to #
     :set fill r#        =>  Set the fill value to the contents of register #
     :set fill x#        =>  Set the fill value to # (in hex)
-    :set icase [on|off] => Set ignore case for find function
+    :set icase [on|off] =>  Set ignore case for find function
 
-    :ins fmt #          =>  Insert # encoded as fmt at the cusor location
-    :ovr fmt #          =>  Overwrite # encoded as fmt at the cusor location
+    :ins fmt #          =>  [TODO] Insert # encoded as fmt at the cusor location
+    :ovr fmt #          =>  [TODO] Overwrite # encoded as fmt at the cusor location
+
+    :cat r# r##         =>  Concatenate contents of listed register ## into register #
+    :cat r# x##         =>  Concatenate ## (in hex) into register #
+
+    :man                =>  Show application manual (this text)
 
     :w                  =>  Write all changes to file
     :x                  =>  Write all changes to file and exit
     :wq                 =>  Write all changes to file and exit
     :q                  =>  Exit if there are no unsaved changes
     :q!                 =>  Exit
+    :open file          =>  [TODO] Opens 'file' in another tab
 
     /expr               =>  Find expr in file
 
@@ -67,8 +73,8 @@ const MANUAL_TEXT: &str = "\\b\\c*********Comands*******
 
     #y      =>  Yank (copy) next # bytes from the cursor location to register 0
     #r##y   =>  Yank (copy) next ## bytes from the cursor location to register #
-    p      =>  Insert contents of register # at cursor location
-    P      =>  Overwrite bytes with contents of register # at cursor location
+    p       =>  Insert contents of register # at cursor location
+    P       =>  Overwrite bytes with contents of register # at cursor location
     #p      =>  Insert contents of register # at cursor location
     #P      =>  Overwrite bytes with contents of register # at cursor location
 
@@ -161,6 +167,25 @@ fn execute_command(hex_edit: &mut HexEdit, command: Vec<char>) -> (CommandInstru
                                     println!("Setting fill type");
                                     match parse_filltype(word.to_vec()) {
                                         Ok(fill) => (CommandInstruction::NoOp, hex_edit.set_fill(fill)),
+                                        Err(s) => (CommandInstruction::NoOp, ActionResult::error(s))
+                                    }
+                                },
+                                _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
+                            }
+                        },
+                        CommandToken::Keyword(CommandKeyword::Cat) => { // :cat [] []
+                            match (&tokens[1], &tokens[2]) {
+                                (CommandToken::Word(word1), CommandToken::Word(word2)) => {
+                                    match parse_filltype(word1.to_vec()) {
+                                        Ok(FillType::Register(n)) => {
+                                            match parse_filltype(word2.to_vec()) {
+                                                Ok(fill) => (CommandInstruction::NoOp, hex_edit.concatenate_register(n, fill)),
+                                                Err(s) => (CommandInstruction::NoOp, ActionResult::error(s))
+                                            }
+                                        },
+                                        Ok(FillType::Bytes(_)) => {
+                                            (CommandInstruction::NoOp, ActionResult::error("First 'cat' parameter must be register (r#)".to_string()))
+                                        },
                                         Err(s) => (CommandInstruction::NoOp, ActionResult::error(s))
                                     }
                                 },

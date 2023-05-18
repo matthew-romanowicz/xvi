@@ -3,15 +3,18 @@ use xvi::{run, FileManagerType};
 
 fn main() {
 
-    const HELP_TEXT: &str = "xvi 0.2 (2023-05-14)
+    const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+    let HELP_TEXT: String = format!("xvi v{} (2023-05-14)
 author: Matthew Romanowicz
 usage: xvi path [options]
 
 options:
 -h      Display help text (this message) and exit
--l      Open file in live edit mode (cannot be used with -s)
--s      Open file in swap mode (cannot be used with -l)
--x      Extract file as gzip for editing (cannot be used with -l)";
+-l      Open file in live edit mode (cannot be used with -r or -s)
+-r      Open file in read-only mode (cannot be used with -l or -s)
+-s      Open file in swap mode (cannot be used with -l or -r)
+-x      Extract file as gzip for editing (cannot be used with -l)", VERSION);
 
     let mut extract: bool = false;
     let mut file_manager_type: FileManagerType = FileManagerType::RamOnly;
@@ -37,6 +40,10 @@ options:
                         file_manager_type = FileManagerType::SwapFile;
                         println!("Swap file");
                     },
+                    'r' => {
+                        file_manager_type = FileManagerType::ReadOnly;
+                        println!("Read only");
+                    },
                     'x' => {
                         extract = true;
                     },
@@ -55,7 +62,7 @@ options:
     println!("Extract: {}", extract);
 
 
-    match run("C:\\Users\\Matthew\\Documents\\Git\\xvi\\test_file4.bin.gz".to_string(), file_manager_type, extract) {
+    match run("C:\\Users\\Matthew\\Documents\\Git\\xvi\\test_file2.bin".to_string(), file_manager_type, extract) {
         Ok(_) => {
             std::process::exit(0);
         },

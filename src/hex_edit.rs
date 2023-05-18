@@ -16,7 +16,8 @@ struct FindResult {
 pub enum FileManagerType {
     RamOnly,
     SwapFile,
-    LiveEdit
+    LiveEdit,
+    ReadOnly
 }
 
 pub struct FileManager<'a> {
@@ -26,10 +27,97 @@ pub struct FileManager<'a> {
     handle: File,
     metadata: std::fs::Metadata,
     modified: bool,
-    swap_handle: Option<&'a File>, // Only used for FileManagerType::SwapFile
+    block_size: usize, // Not used for FileManagerType::RamOnly
+    swap_handle: Option<File>, // Only used for FileManagerType::SwapFile
     swap_metadata: Option<&'a std::fs::Metadata>, // Only used for FileManagerType::SwapFile
     file_buffer: Vec<u8>, // Only used for FileManagerType::RamOnly
 }
+
+fn get_bytes_from_handle(handle: &mut File, index: usize, buffer: &mut Vec<u8>) -> std::io::Result<usize> {
+    let file_length = handle.metadata()?.len() as usize;
+    handle.seek(SeekFrom::Start(index as u64))?;
+    if file_length >= index + buffer.len() {
+        match handle.read_exact(buffer) {
+            Ok(_) => Ok(buffer.len()),
+            Err(msg) => Err(msg)
+        }
+    } else {
+        let mut mini_buffer: Vec<u8> = vec![0; file_length - index];
+        handle.read_exact(&mut mini_buffer)?;
+        for (i, c) in mini_buffer.iter().enumerate() {
+            buffer[i] = *c;
+        }
+        Ok(mini_buffer.len())
+    }
+}
+
+fn offset_bytes_from_handle(handle: &mut File, index: usize, n_bytes: u64, block_size: usize) -> std::io::Result<()> {
+    let file_length = handle.metadata()?.len() as usize;
+    let mut buffer: Vec<u8> = vec![0; block_size];
+    let mut i: u64 = index as u64;
+    while i as usize + block_size < file_length {
+        handle.seek(SeekFrom::Start(i))?;
+        handle.read_exact(&mut buffer)?;
+        handle.seek(SeekFrom::Start(i + n_bytes))?;
+        handle.write(&buffer)?;
+        i += block_size as u64;
+    }
+    unsafe {buffer.set_len(file_length - i as usize)}
+    handle.seek(SeekFrom::Start(i))?;
+    handle.read_exact(&mut buffer)?;
+    handle.seek(SeekFrom::Start(i + n_bytes))?;
+    handle.write(&buffer)?;       
+    Ok(())       
+}
+
+fn delete_bytes_from_handle(handle: &mut File, index: usize, n_bytes: u64, block_size: usize) -> std::io::Result<()> {
+    let file_length = handle.metadata()?.len() as usize;
+    let mut buffer: Vec<u8> = vec![0; block_size];
+    let mut i: u64 = index as u64;
+    while (i + n_bytes) as usize + block_size < file_length {
+        handle.seek(SeekFrom::Start(i + n_bytes))?;
+        handle.read_exact(&mut buffer)?;
+        handle.seek(SeekFrom::Start(i))?;
+        handle.write(&buffer)?;
+        i += block_size as u64;
+    }
+    unsafe {buffer.set_len(file_length - (i + n_bytes) as usize)}
+    handle.seek(SeekFrom::Start(i + n_bytes))?;
+    handle.read_exact(&mut buffer)?;
+    handle.seek(SeekFrom::Start(i))?;
+    handle.write(&buffer)?;       
+    handle.set_len(file_length as u64 - n_bytes);
+    Ok(())
+}
+
+fn insert_bytes_from_handle(handle: &mut File, index: usize, buffer: &Vec<u8>, block_size: usize) -> std::io::Result<()> {
+    offset_bytes_from_handle(handle, index, buffer.len() as u64, block_size)?;
+    handle.seek(SeekFrom::Start(index as u64))?;
+    match handle.write(&buffer) {
+        Ok(n) if n == buffer.len() => Ok(()),
+        Ok(_) => Err(std::io::Error::new(std::io::ErrorKind::Other, "Not all bytes could be written".to_string())),
+        Err(msg) => Err(msg)
+    }
+}
+
+fn append_bytes_from_handle(handle: &mut File, buffer: &Vec<u8>) -> std::io::Result<()> {
+    handle.seek(SeekFrom::End(0))?;
+    match handle.write(buffer) {
+        Ok(n) if n == buffer.len() => Ok(()),
+        Ok(_) => Err(std::io::Error::new(std::io::ErrorKind::Other, "Not all bytes could be written".to_string())),
+        Err(msg) => Err(msg)        
+    }
+}
+
+fn overwrite_bytes_from_handle(handle: &mut File, index: usize, buffer: &Vec<u8>) -> std::io::Result<()> {
+    handle.seek(SeekFrom::Start(index as u64))?;
+    match handle.write(buffer) {
+        Ok(n) if n == buffer.len() => Ok(()),
+        Ok(_) => Err(std::io::Error::new(std::io::ErrorKind::Other, "Not all bytes could be written".to_string())),
+        Err(msg) => Err(msg)        
+    }
+}
+
 
 impl FileManager<'_> {
     pub fn new<'a>(filename: String, file_manager_type: FileManagerType, extract: bool) -> std::io::Result<FileManager<'a>>{
@@ -50,10 +138,11 @@ impl FileManager<'_> {
                 }
             },
             FileManagerType::SwapFile => {
-                // TODO
+                todo!()
+                
             },
-            FileManagerType::LiveEdit => {
-                // TODO
+            FileManagerType::LiveEdit | FileManagerType::ReadOnly => {
+                // TODO: Is anything actually needed here?
             }
         }
 
@@ -64,6 +153,7 @@ impl FileManager<'_> {
             handle,
             metadata,
             modified: false,
+            block_size: 65535,
             swap_handle: None,
             swap_metadata: None,
             file_buffer
@@ -71,7 +161,14 @@ impl FileManager<'_> {
     }
 
     pub fn is_modified(&self) -> bool {
-        self.modified
+        match self.file_manager_type {
+            FileManagerType::RamOnly | FileManagerType::SwapFile => {
+                self.modified
+            },
+            FileManagerType::LiveEdit | FileManagerType::ReadOnly => {
+                false
+            }
+        }
     }
 
     pub fn save(&mut self) -> std::io::Result<()>{
@@ -90,7 +187,27 @@ impl FileManager<'_> {
                 self.modified = false;
                 Ok(())
             },
-            _ => Ok(())
+            FileManagerType::SwapFile => {
+                todo!()
+            },
+            FileManagerType::LiveEdit | FileManagerType::ReadOnly => {
+                Err(std::io::Error::new(std::io::ErrorKind::Other, "Operation not valid in read-only and live modes".to_string()))
+            }
+        }
+    }
+
+    fn offset_bytes(&mut self, index: usize, n_bytes: u64) -> std::io::Result<()> { // Only valid for LiveEdit and SwapFile
+        match self.file_manager_type {
+            FileManagerType::LiveEdit => {
+                offset_bytes_from_handle(&mut self.handle, index, n_bytes, self.block_size)        
+            },
+            FileManagerType::SwapFile => {
+                match &mut self.swap_handle {
+                    Some(ref mut handle) => offset_bytes_from_handle(handle, index, n_bytes, self.block_size),
+                    None => Err(std::io::Error::new(std::io::ErrorKind::Other, "No swap handle found".to_string()))
+                }
+            },
+            _ => Err(std::io::Error::new(std::io::ErrorKind::Other, "Operation not valid in read-only and RAM modes".to_string()))
         }
     }
 
@@ -111,14 +228,13 @@ impl FileManager<'_> {
                 }
             },
             FileManagerType::SwapFile => {
-                Ok(0) // TODO
-            },
-            FileManagerType::LiveEdit => {
-                self.handle.seek(SeekFrom::Start(index as u64))?;
-                match self.handle.read_exact(buffer) {
-                    Ok(_) => Ok(buffer.len()),// TODO make the length work
-                    Err(msg) => Err(msg)
+                match &mut self.swap_handle {
+                    Some(ref mut handle) => get_bytes_from_handle(handle, index, buffer),
+                    None => Err(std::io::Error::new(std::io::ErrorKind::Other, "No swap handle found".to_string()))
                 }
+            },
+            FileManagerType::LiveEdit | FileManagerType::ReadOnly => {
+                get_bytes_from_handle(&mut self.handle, index, buffer)
             }
         }
     }
@@ -129,13 +245,18 @@ impl FileManager<'_> {
             FileManagerType::RamOnly => {
                 self.file_buffer[index] = c;
                 Ok(())
-            }
+            },
             FileManagerType::SwapFile => {
-                Ok(())// TODO
-
+                match &mut self.swap_handle {
+                    Some(ref mut handle) => overwrite_bytes_from_handle(handle, index, &vec![c]),
+                    None => Err(std::io::Error::new(std::io::ErrorKind::Other, "No swap handle found".to_string()))
+                }
             },
             FileManagerType::LiveEdit => {
-                Ok(())// TODO
+                overwrite_bytes_from_handle(&mut self.handle, index, &vec![c])
+            },
+            FileManagerType::ReadOnly => {
+                Err(std::io::Error::new(std::io::ErrorKind::Other, "Operation not valid in read-only mode".to_string()))
             }
         }
     }
@@ -146,13 +267,18 @@ impl FileManager<'_> {
             FileManagerType::RamOnly => {
                 self.file_buffer.insert(index, c);
                 Ok(())
-            }
+            },
             FileManagerType::SwapFile => {
-                Ok(())// TODO
-
+                match &mut self.swap_handle {
+                    Some(ref mut handle) => insert_bytes_from_handle(handle, index, &vec![c], self.block_size),
+                    None => Err(std::io::Error::new(std::io::ErrorKind::Other, "No swap handle found".to_string()))
+                }
             },
             FileManagerType::LiveEdit => {
-                Ok(())// TODO
+                insert_bytes_from_handle(&mut self.handle, index, &vec![c], self.block_size)
+            },
+            FileManagerType::ReadOnly => {
+                Err(std::io::Error::new(std::io::ErrorKind::Other, "Operation not valid in read-only mode".to_string()))
             }
         }
     }
@@ -163,13 +289,18 @@ impl FileManager<'_> {
             FileManagerType::RamOnly => {
                 self.file_buffer.remove(index);
                 Ok(())
-            }
+            },
             FileManagerType::SwapFile => {
-                Ok(())// TODO
-
+                match &mut self.swap_handle {
+                    Some(ref mut handle) => delete_bytes_from_handle(handle, index, 1, self.block_size),
+                    None => Err(std::io::Error::new(std::io::ErrorKind::Other, "No swap handle found".to_string()))
+                }
             },
             FileManagerType::LiveEdit => {
-                Ok(())// TODO
+                delete_bytes_from_handle(&mut self.handle, index, 1, self.block_size)
+            },
+            FileManagerType::ReadOnly => {
+                Err(std::io::Error::new(std::io::ErrorKind::Other, "Operation not valid in read-only mode".to_string()))
             }
         }
     }
@@ -184,11 +315,23 @@ impl FileManager<'_> {
                 }
             },
             FileManagerType::SwapFile => {
-                None // TODO
-
+                match &mut self.swap_handle {
+                    Some(ref mut handle) => {
+                        let mut buffer: Vec<u8> = vec![0];
+                        match get_bytes_from_handle(handle, index, &mut buffer) {
+                            Ok(1) => Some(buffer[0]),
+                            _ => None
+                        }
+                    },
+                    None => panic!("Swap handle not found")
+                }
             },
-            FileManagerType::LiveEdit => {
-                None // TODO
+            FileManagerType::LiveEdit | FileManagerType::ReadOnly => {
+                let mut buffer: Vec<u8> = vec![0];
+                match get_bytes_from_handle(&mut self.handle, index, &mut buffer) {
+                    Ok(1) => Some(buffer[0]),
+                    _ => None
+                }
             }
         }
     }
@@ -204,11 +347,16 @@ impl FileManager<'_> {
                 Ok(())
             }
             FileManagerType::SwapFile => {
-                Ok(())// TODO
-
+                match &mut self.swap_handle {
+                    Some(ref mut handle) => insert_bytes_from_handle(handle, index, bytes, self.block_size),
+                    None => Err(std::io::Error::new(std::io::ErrorKind::Other, "No swap handle found".to_string()))
+                }
             },
             FileManagerType::LiveEdit => {
-                Ok(())// TODO
+                insert_bytes_from_handle(&mut self.handle, index, bytes, self.block_size)
+            },
+            FileManagerType::ReadOnly => {
+                Err(std::io::Error::new(std::io::ErrorKind::Other, "Operation not valid in read-only mode".to_string()))
             }
         }
     }
@@ -223,11 +371,16 @@ impl FileManager<'_> {
                 Ok(())
             }
             FileManagerType::SwapFile => {
-                Ok(())// TODO
-
+                match &mut self.swap_handle {
+                    Some(ref mut handle) => overwrite_bytes_from_handle(handle, index, bytes),
+                    None => Err(std::io::Error::new(std::io::ErrorKind::Other, "No swap handle found".to_string()))
+                }
             },
             FileManagerType::LiveEdit => {
-                Ok(())// TODO
+                overwrite_bytes_from_handle(&mut self.handle, index, bytes)
+            },
+            FileManagerType::ReadOnly => {
+                Err(std::io::Error::new(std::io::ErrorKind::Other, "Operation not valid in read-only mode".to_string()))
             }
         }
     }
@@ -238,13 +391,18 @@ impl FileManager<'_> {
             FileManagerType::RamOnly => {
                 self.file_buffer.extend(bytes);
                 Ok(())
-            }
+            },
             FileManagerType::SwapFile => {
-                Ok(())// TODO
-
+                match &mut self.swap_handle {
+                    Some(ref mut handle) => append_bytes_from_handle(handle, bytes),
+                    None => Err(std::io::Error::new(std::io::ErrorKind::Other, "No swap handle found".to_string()))
+                }
             },
             FileManagerType::LiveEdit => {
-                Ok(())// TODO
+                append_bytes_from_handle(&mut self.handle, bytes)
+            },
+            FileManagerType::ReadOnly => {
+                Err(std::io::Error::new(std::io::ErrorKind::Other, "Operation not valid in read-only mode".to_string()))
             }
         }
     }
@@ -259,11 +417,16 @@ impl FileManager<'_> {
                 Ok(())
             }
             FileManagerType::SwapFile => {
-                Ok(())// TODO
-
+                match &mut self.swap_handle {
+                    Some(ref mut handle) => delete_bytes_from_handle(handle, index, n_bytes as u64, self.block_size),
+                    None => Err(std::io::Error::new(std::io::ErrorKind::Other, "No swap handle found".to_string()))
+                }
             },
             FileManagerType::LiveEdit => {
-                Ok(())// TODO
+                delete_bytes_from_handle(&mut self.handle, index, n_bytes as u64, self.block_size)
+            },
+            FileManagerType::ReadOnly => {
+                Err(std::io::Error::new(std::io::ErrorKind::Other, "Operation not valid in read-only mode".to_string()))
             }
         }
     }
@@ -274,11 +437,14 @@ impl FileManager<'_> {
                 self.file_buffer.len()
             }
             FileManagerType::SwapFile => {
-                0// TODO
+                match &self.swap_handle {
+                    Some(handle) => handle.metadata().expect("Error reading metadata").len() as usize, // TODO make this more safe
+                    None => panic!("Swap handle not found")
+                }
 
             },
-            FileManagerType::LiveEdit => {
-                0// TODO
+            FileManagerType::LiveEdit | FileManagerType::ReadOnly => {
+                self.handle.metadata().expect("Error reading metadata").len() as usize // TODO make this more safe
             }
         }        
     }
@@ -308,10 +474,10 @@ impl FileManager<'_> {
                 }
             }
             FileManagerType::SwapFile => {
-                // TODO
+                todo!()
             },
-            FileManagerType::LiveEdit => {
-                // TODO
+            FileManagerType::LiveEdit | FileManagerType::ReadOnly => {
+                todo!()
             }
         } 
         
@@ -691,6 +857,21 @@ impl<'a> HexEdit<'a> {
                 self.clipboard_registers[*n as usize].iter().cycle().take(n_bytes).cloned().collect()
             }
         }
+    }
+
+    pub fn concatenate_register(&mut self, register: u8, fill: FillType) -> ActionResult {
+        if register >= 32 {
+            return ActionResult::error("Register number must be less than 32".to_string())
+        }
+        match fill {
+            FillType::Bytes(bytes) => {
+                self.clipboard_registers[register as usize].extend(bytes.to_vec());
+            },
+            FillType::Register(n) => {
+                self.clipboard_registers[register as usize].extend(self.clipboard_registers[n as usize].to_vec());
+            }
+        }
+        ActionResult::no_error(UpdateDescription::NoUpdate)
     }
 
     pub fn insert_fill(&mut self, index: usize, n_bytes: usize) -> ActionResult {
