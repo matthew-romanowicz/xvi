@@ -1,3 +1,5 @@
+use std::io::SeekFrom;
+
 extern crate pancurses;
 use pancurses::{initscr, endwin, Input, noecho, Window, resize_term};
 
@@ -8,7 +10,7 @@ mod large_text_view;
 use crate::large_text_view::LargeTextView;
 
 mod hex_edit;
-use crate::hex_edit::{FileManager, EditMode, ActionResult, FillType, HexEdit};
+use crate::hex_edit::{FileManager, ActionStack, EditMode, ActionResult, FillType, HexEdit};
 pub use crate::hex_edit::FileManagerType;
 
 mod parsers;
@@ -210,17 +212,17 @@ fn execute_command(hex_edit: &mut HexEdit, command: Vec<char>) -> (CommandInstru
     //Ok(())
 }
 
-fn execute_keystroke(hex_edit: &mut HexEdit, keystroke: Vec<char>) -> ActionResult {
+fn execute_keystroke(hex_edit: &mut HexEdit, action_stack: &mut ActionStack, keystroke: Vec<char>) -> ActionResult {
     let tokens = parse_keystroke(&keystroke);
     match tokens.len() {
 
         1 => {
             match tokens[0] {
                 KeystrokeToken::Character('g') => {
-                    hex_edit.set_cursor_pos(0)
+                    hex_edit.seek(SeekFrom::Start(0))
                 },
                 KeystrokeToken::Character('G') => {
-                    hex_edit.set_cursor_pos(hex_edit.len())
+                    hex_edit.seek(SeekFrom::End(0))
                 },
                 KeystrokeToken::Character('n') => {
                     hex_edit.seek_next()
@@ -229,10 +231,10 @@ fn execute_keystroke(hex_edit: &mut HexEdit, keystroke: Vec<char>) -> ActionResu
                     hex_edit.seek_prev()
                 },
                 KeystrokeToken::Character('u') => {
-                    hex_edit.undo(1)
+                    action_stack.undo(hex_edit)
                 },
                 KeystrokeToken::Character('U') => {
-                    hex_edit.redo(1)
+                    action_stack.redo(hex_edit)
                 },
                 KeystrokeToken::Character('p') => {
                     hex_edit.insert_register(0, hex_edit.get_cursor_pos())
@@ -250,10 +252,10 @@ fn execute_keystroke(hex_edit: &mut HexEdit, keystroke: Vec<char>) -> ActionResu
         2 => {
             match (tokens[0], tokens[1]) {
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('g')) => {
-                    hex_edit.set_cursor_pos(n)
+                    hex_edit.seek(SeekFrom::Start(n as u64))
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('G')) => {
-                    hex_edit.set_cursor_pos(hex_edit.len() - n)
+                    hex_edit.seek(SeekFrom::End(n as i64))
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('f')) => {
                     hex_edit.insert_fill(hex_edit.get_cursor_pos(), n)
@@ -292,10 +294,10 @@ fn execute_keystroke(hex_edit: &mut HexEdit, keystroke: Vec<char>) -> ActionResu
         3 => {
             match (tokens[0], tokens[1], tokens[2]) {
                 (KeystrokeToken::Character('+'), KeystrokeToken::Integer(n), KeystrokeToken::Character('g')) => {
-                    hex_edit.set_cursor_pos(hex_edit.get_cursor_pos() + n)
+                    hex_edit.seek(SeekFrom::Current(n as i64))
                 },
                 (KeystrokeToken::Character('-'), KeystrokeToken::Integer(n), KeystrokeToken::Character('g')) => {
-                    hex_edit.set_cursor_pos(hex_edit.get_cursor_pos() - n)
+                    hex_edit.seek(SeekFrom::Current(-(n as i64)))
                 },
                 _ => {
                     let s: String = keystroke.iter().collect();
@@ -345,6 +347,8 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                                     window.get_max_x() as usize - 1, window.get_max_y()as usize - 1, // width, height
                                     16, true, true, // Line Length, Show Hex, Show ASCII
                                     '.', "  ".to_string(), true); // Invalid ASCII, Separator, Capitalize Hex
+    
+    let mut action_stack = ActionStack::new();
 
     let cursor_index_len = format!("{:x}", hex_edit.len()).len();
 
@@ -407,9 +411,12 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                     Some(Input::Character(c)) => {
                         current_keystroke.push(c);
                         if matches!(c, 'g' | 'G' | 'f' | 'F' | 'd' | 'y' | 'p' | 'P' | 'u' | 'U' | 'n' | 'N' | 's') {
-                            let result = execute_keystroke(&mut hex_edit, current_keystroke);
+                            let result = execute_keystroke(&mut hex_edit, &mut action_stack, current_keystroke);
                             if let Some(err) = result.error {
                                 alert(err, &mut window, &mut line_entry, &mut hex_edit);
+                            }
+                            if let Some(action) = result.action {
+                                action_stack.add(action);
                             }
                             let result = hex_edit.update(&mut window, result.update);
                             if let Err(err) = result {
@@ -422,6 +429,9 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                         let result = hex_edit.addch(ch);
                         if let Some(err) = result.error {
                             alert(err, &mut window, &mut line_entry, &mut hex_edit);
+                        }
+                        if let Some(action) = result.action {
+                            action_stack.add(action);
                         }
                         let result = hex_edit.update(&mut window, result.update);
                         if let Err(err) = result {
@@ -490,6 +500,9 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                         let result = hex_edit.addch(ch);
                         if let Some(err) = result.error {
                             alert(err, &mut window, &mut line_entry, &mut hex_edit);
+                        }
+                        if let Some(action) = result.action {
+                            action_stack.add(action);
                         }
                         let result = hex_edit.update(&mut window, result.update);
                         if let Err(err) = result {
