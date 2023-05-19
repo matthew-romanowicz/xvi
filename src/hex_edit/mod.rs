@@ -1,3 +1,4 @@
+use std::rc::Rc;
 use std::io::SeekFrom;
 
 mod file_manager;
@@ -38,22 +39,23 @@ pub enum FillType {
     Register(u8)
 }
 
+
 pub trait Action {
-    fn undo(&mut self, hex_edit: &mut HexEdit) -> ActionResult;
-    fn redo(&mut self, hex_edit: &mut HexEdit) -> ActionResult;
+    fn undo(&self, hex_edit: &mut HexEdit) -> ActionResult;
+    fn redo(&self, hex_edit: &mut HexEdit) -> ActionResult;
     fn size(&self) -> usize;
+    //fn copy(&self) -> Self;
 }
 
+
 pub struct InsertAction {
-    index: usize,
     n_bytes: usize,
     bytes: Vec<u8>
 }
 
 impl InsertAction {
-    fn new(index: usize, n_bytes: usize) -> InsertAction {
+    fn new(n_bytes: usize) -> InsertAction {
         InsertAction {
-            index,
             n_bytes,
             bytes: Vec::<u8>::new()
         }
@@ -61,101 +63,261 @@ impl InsertAction {
 }
 
 impl Action for InsertAction {
-    fn undo(&mut self, hex_edit: &mut HexEdit) -> ActionResult {
+    fn undo(&self, hex_edit: &mut HexEdit) -> ActionResult {
         println!("Undoing!");
-        hex_edit.delete_bytes(self.index, self.n_bytes) 
+        hex_edit.delete_bytes(self.n_bytes) 
     }
 
-    fn redo(&mut self, hex_edit: &mut HexEdit) -> ActionResult {
-        hex_edit.insert_bytes(self.index, &self.bytes)
+    fn redo(&self, hex_edit: &mut HexEdit) -> ActionResult {
+        hex_edit.insert_bytes(&self.bytes)
     }
 
     fn size(&self) -> usize{
         2*std::mem::size_of::<usize>() + self.bytes.len()
     }
+
+    // fn copy(&self) -> InsertAction {
+    //     InsertAction {
+    //         n_bytes: self.n_bytes,
+    //         bytes: self.bytes.to_vec()
+    //     }
+    // }
 }
 
+
+pub struct InsertFillAction {
+    n_bytes: usize
+}
+
+impl InsertFillAction {
+    fn new(n_bytes: usize) -> InsertFillAction {
+        InsertFillAction {
+            n_bytes
+        }
+    }
+}
+
+impl Action for InsertFillAction {
+    fn undo(&self, hex_edit: &mut HexEdit) -> ActionResult {
+        println!("Undoing!");
+        hex_edit.delete_bytes(self.n_bytes) 
+    }
+
+    fn redo(&self, hex_edit: &mut HexEdit) -> ActionResult {
+        hex_edit.insert_fill(self.n_bytes)
+    }
+
+    fn size(&self) -> usize{
+        std::mem::size_of::<usize>()
+    }
+
+    // fn copy(&self) -> InsertFillAction {
+    //     InsertFillAction {
+    //         n_bytes: self.n_bytes
+    //     }
+    // }
+}
+
+
+pub struct InsertRegisterAction {
+    register: u8
+}
+
+impl InsertRegisterAction {
+    fn new(register: u8) -> InsertRegisterAction {
+        InsertRegisterAction {
+            register
+        }
+    }
+}
+
+impl Action for InsertRegisterAction {
+    fn undo(&self, hex_edit: &mut HexEdit) -> ActionResult {
+        hex_edit.delete_bytes(hex_edit.register_len(self.register)) 
+    }
+
+    fn redo(&self, hex_edit: &mut HexEdit) -> ActionResult {
+        hex_edit.insert_register(self.register)
+    }
+
+    fn size(&self) -> usize{
+        1
+    }
+}
+
+
 pub struct DeleteAction {
-    index: usize,
     bytes: Vec<u8>
 }
 
 impl DeleteAction {
-    fn new(index: usize, bytes: Vec<u8>) -> DeleteAction {
+    fn new(bytes: Vec<u8>) -> DeleteAction {
         DeleteAction {
-            index,
             bytes
         }
     }
 }
 
 impl Action for DeleteAction {
-    fn undo(&mut self, hex_edit: &mut HexEdit) -> ActionResult {
+    fn undo(&self, hex_edit: &mut HexEdit) -> ActionResult {
         println!("Undoing!");
-        hex_edit.insert_bytes(self.index, &self.bytes)
+        hex_edit.insert_bytes(&self.bytes)
     }
 
-    fn redo(&mut self, hex_edit: &mut HexEdit) -> ActionResult {
-        hex_edit.delete_bytes(self.index, self.bytes.len()) 
+    fn redo(&self, hex_edit: &mut HexEdit) -> ActionResult {
+        hex_edit.delete_bytes(self.bytes.len()) 
     }
 
     fn size(&self) -> usize{
-        std::mem::size_of::<usize>() + self.bytes.len()
+        self.bytes.len()
     }
 }
 
+
 pub struct OverwriteAction {
-    index: usize,
-    bytes: Vec<u8>
+    new_bytes: Vec<u8>,
+    original_bytes: Vec<u8>
 }
 
 impl OverwriteAction {
-    fn new(index: usize, bytes: Vec<u8>) -> OverwriteAction {
+    fn new(new_bytes: Vec<u8>, original_bytes: Vec<u8>) -> OverwriteAction {
         OverwriteAction {
-            index,
-            bytes
+            new_bytes,
+            original_bytes
         }
     }
 }
 
 impl Action for OverwriteAction {
-    fn undo(&mut self, hex_edit: &mut HexEdit) -> ActionResult {
-        println!("Undoing overwrite");
-        let mut buffer = vec![0; self.bytes.len()];
-        match hex_edit.get_bytes(self.index, &mut buffer) {
-            Ok(_) => {
-                match hex_edit.overwrite_bytes(self.index, &self.bytes) {
-                    Ok(_) => {
-                        self.bytes = buffer;
-                        ActionResult::no_error(UpdateDescription::All)
-                    },
-                    Err(msg) => ActionResult::error(msg.to_string())
-                }
-            },
-            Err(msg) => ActionResult::error(msg.to_string())
-        }
+    fn undo(&self, hex_edit: &mut HexEdit) -> ActionResult {
+        hex_edit.overwrite_bytes(&self.original_bytes)
     }
 
-    fn redo(&mut self, hex_edit: &mut HexEdit) -> ActionResult {
-        let mut buffer = vec![0; self.bytes.len()];
-        match hex_edit.get_bytes(self.index, &mut buffer) {
-            Ok(_) => {
-                match hex_edit.overwrite_bytes(self.index, &self.bytes) {
-                    Ok(_) => {
-                        self.bytes = buffer;
-                        ActionResult::no_error(UpdateDescription::All)
-                    },
-                    Err(msg) => ActionResult::error(msg.to_string())
-                }
-            },
-            Err(msg) => ActionResult::error(msg.to_string())
-        }
+    fn redo(&self, hex_edit: &mut HexEdit) -> ActionResult {
+        hex_edit.overwrite_bytes(&self.new_bytes)
     }
 
     fn size(&self) -> usize{
-        std::mem::size_of::<usize>() + self.bytes.len()
+        self.new_bytes.len() + self.original_bytes.len()
     }
 }
+
+
+pub struct OverwriteRegisterAction {
+    register: u8,
+    original_bytes: Vec<u8>
+}
+
+impl OverwriteRegisterAction {
+    fn new(register: u8, original_bytes: Vec<u8>) -> OverwriteRegisterAction {
+        OverwriteRegisterAction {
+            register,
+            original_bytes
+        }
+    }
+}
+
+impl Action for OverwriteRegisterAction {
+    fn undo(&self, hex_edit: &mut HexEdit) -> ActionResult {
+        hex_edit.overwrite_bytes(&self.original_bytes) 
+    }
+
+    fn redo(&self, hex_edit: &mut HexEdit) -> ActionResult {
+        hex_edit.overwrite_register(self.register)
+    }
+
+    fn size(&self) -> usize{
+        1 + self.original_bytes.len()
+    }
+}
+
+
+pub struct OverwriteFillAction {
+    original_bytes: Vec<u8>
+}
+
+impl OverwriteFillAction {
+    fn new(original_bytes: Vec<u8>) -> OverwriteFillAction {
+        OverwriteFillAction {
+            original_bytes
+        }
+    }
+}
+
+impl Action for OverwriteFillAction {
+    fn undo(&self, hex_edit: &mut HexEdit) -> ActionResult {
+        hex_edit.overwrite_bytes(&self.original_bytes) 
+    }
+
+    fn redo(&self, hex_edit: &mut HexEdit) -> ActionResult {
+        hex_edit.overwrite_fill(self.original_bytes.len())
+    }
+
+    fn size(&self) -> usize{
+        self.original_bytes.len()
+    }
+}
+
+
+pub struct SwapAction {
+    n_bytes: usize
+}
+
+impl SwapAction {
+    fn new(n_bytes: usize) -> SwapAction {
+        SwapAction {
+            n_bytes
+        }
+    }
+}
+
+impl Action for SwapAction {
+    fn undo(&self, hex_edit: &mut HexEdit) -> ActionResult {
+        println!("Undoing!");
+        hex_edit.swap_bytes(self.n_bytes) 
+    }
+
+    fn redo(&self, hex_edit: &mut HexEdit) -> ActionResult {
+        hex_edit.swap_bytes(self.n_bytes)
+    }
+
+    fn size(&self) -> usize{
+        std::mem::size_of::<usize>()
+    }
+}
+
+
+pub struct YankAction {
+    register: u8,
+    n_bytes: usize,
+    original_bytes: Vec<u8>
+}
+
+impl YankAction {
+    pub fn new(register: u8, n_bytes: usize, original_bytes: Vec<u8>) -> YankAction {
+        YankAction {
+            register,
+            n_bytes,
+            original_bytes
+        }
+    }
+}
+
+impl Action for YankAction {
+    fn undo(&self, hex_edit: &mut HexEdit) -> ActionResult {
+        println!("Undoing seek");
+        hex_edit.set_register(self.register, &self.original_bytes)
+    }
+
+    fn redo(&self, hex_edit: &mut HexEdit) -> ActionResult {
+        hex_edit.yank(self.register, self.n_bytes)
+    }
+
+    fn size(&self) -> usize{
+        1 + std::mem::size_of::<usize>() + self.original_bytes.len()
+    }
+}
+
 
 pub struct SeekAction {
     original_index: usize,
@@ -172,12 +334,12 @@ impl SeekAction {
 }
 
 impl Action for SeekAction {
-    fn undo(&mut self, hex_edit: &mut HexEdit) -> ActionResult {
+    fn undo(&self, hex_edit: &mut HexEdit) -> ActionResult {
         println!("Undoing seek");
         hex_edit.set_cursor_pos(self.original_index)
     }
 
-    fn redo(&mut self, hex_edit: &mut HexEdit) -> ActionResult {
+    fn redo(&self, hex_edit: &mut HexEdit) -> ActionResult {
         hex_edit.seek(self.seek)
     }
 
@@ -186,9 +348,47 @@ impl Action for SeekAction {
     }
 }
 
+pub struct CompoundAction {
+    actions: Vec<Rc<dyn Action>>
+}
+
+// impl CompoundAction {
+//     pub fn new() -> CompoundAction {
+//         CompoundAction {actions: Vec::<Box<&dyn Action>>::new()}
+//     }
+
+//     pub fn add(&mut self, action: Box<&dyn Action>) {
+//         self.actions.push(action);
+//     }
+// }
+
+impl Action for CompoundAction {
+    fn undo(&self, hex_edit: &mut HexEdit) -> ActionResult {
+        for action in self.actions.iter().rev() {
+            (*action).undo(hex_edit);
+        }
+        ActionResult::no_error(UpdateDescription::All) // TODO make this more specific
+    }
+
+    fn redo(&self, hex_edit: &mut HexEdit) -> ActionResult {
+        for action in self.actions.iter() {
+            (*action).redo(hex_edit);
+        }
+        ActionResult::no_error(UpdateDescription::All) // TODO make this more specific
+    }
+
+    fn size(&self) -> usize {
+        let mut s: usize = 0;
+        for action in self.actions.iter() {
+            s += (*action).size();
+        }
+        s
+    }
+}
+
 pub struct ActionStack {
     index: usize,
-    actions: Vec<Box<dyn Action>>
+    actions: Vec<Rc<dyn Action>>
 }
 
 impl ActionStack {
@@ -199,9 +399,13 @@ impl ActionStack {
         }
     }
 
-    pub fn add(&mut self, action: Box<dyn Action>){
+    pub fn current_index(&self) -> usize {
+        self.index
+    }
+
+    pub fn add(&mut self, action: Rc<dyn Action>){
         self.actions.truncate(self.index);
-        self.actions.push(action);
+        self.actions.push(Rc::clone(&action));
         self.index += 1;
     }
 
@@ -227,6 +431,15 @@ impl ActionStack {
             ActionResult::error("No actions in stack".to_string())
         }
     }
+
+    pub fn combine(&self, start_index: usize, stop_index: usize) -> CompoundAction {
+        let mut res = Vec::<Rc<dyn Action>>::new();
+        for i in start_index..stop_index {
+            res.push(Rc::clone(&self.actions[i]));
+        }
+        CompoundAction{actions:res}
+    }
+
 }
 
 pub enum UpdateDescription {
@@ -240,7 +453,7 @@ pub enum UpdateDescription {
 pub struct ActionResult {
     pub error: Option<String>,
     pub update: UpdateDescription,
-    pub action: Option<Box<dyn Action>>
+    pub action: Option<Rc<dyn Action>>
 }
 
 impl ActionResult {
@@ -273,7 +486,7 @@ impl ActionResult {
         self.error = Some(s);
     }
 
-    pub fn set_action(&mut self, action: Option<Box<dyn Action>>) {
+    pub fn set_action(&mut self, action: Option<Rc<dyn Action>>) {
         self.action = action;
     }
 }
@@ -407,13 +620,13 @@ impl<'a> HexEdit<'a> {
     pub fn seek_next(&mut self) -> ActionResult {
         for h in self.highlights.iter() {
             if h.start > self.cursor_pos {
-                return self.set_cursor_pos(h.start);
+                return self.set_cursor_pos(h.start); // TODO add action to this
             }
         }
 
         if self.highlights.len() > 0{
             let mut res = self.set_cursor_pos(self.highlights[0].start);
-            res.set_error("Wrapped around to SOF".to_string());
+            res.set_error("Wrapped around to SOF".to_string()); // TODO add action to this
             res
         } else {
             ActionResult::error("No results".to_string())
@@ -423,12 +636,12 @@ impl<'a> HexEdit<'a> {
     pub fn seek_prev(&mut self) -> ActionResult {
         for h in self.highlights.iter().rev() {
             if h.start < self.cursor_pos {
-                return self.set_cursor_pos(h.start);
+                return self.set_cursor_pos(h.start); // TODO add action to this
             }
         }
 
         if self.highlights.len() > 0{
-            let mut res = self.set_cursor_pos(self.highlights[self.highlights.len() - 1].start);
+            let mut res = self.set_cursor_pos(self.highlights[self.highlights.len() - 1].start); // TODO add action to this
             res.set_error("Wrapped around to EOF".to_string());
             res
         } else {
@@ -438,6 +651,10 @@ impl<'a> HexEdit<'a> {
 
     pub fn len(&self) -> usize {
         self.file_manager.len()
+    }
+
+    fn register_len(&self, register: u8) -> usize {
+        self.clipboard_registers[register as usize].len()
     }
 
     fn get_fill_bytes(&self, n_bytes: usize) -> Vec<u8> {
@@ -457,16 +674,17 @@ impl<'a> HexEdit<'a> {
         }
         match fill {
             FillType::Bytes(bytes) => {
-                self.clipboard_registers[register as usize].extend(bytes.to_vec());
+                self.clipboard_registers[register as usize].extend(bytes.to_vec()); // TODO add action to this
             },
             FillType::Register(n) => {
-                self.clipboard_registers[register as usize].extend(self.clipboard_registers[n as usize].to_vec());
+                self.clipboard_registers[register as usize].extend(self.clipboard_registers[n as usize].to_vec()); // TODO add action to this
             }
         }
         ActionResult::no_error(UpdateDescription::NoUpdate)
     }
 
-    pub fn insert_fill(&mut self, index: usize, n_bytes: usize) -> ActionResult {
+    pub fn insert_fill(&mut self, n_bytes: usize) -> ActionResult {
+        let index = self.cursor_pos;
         let mut start_byte = index;
         if index > self.file_manager.len() {
             start_byte = self.file_manager.len();
@@ -478,17 +696,18 @@ impl<'a> HexEdit<'a> {
             Ok(_) => ActionResult {
                 error: None,
                 update: UpdateDescription::After(start_byte),
-                action: Some(Box::new(InsertAction::new(index, n_bytes)))
+                action: Some(Rc::new(InsertFillAction::new(n_bytes)))
             },
             Err(msg) => ActionResult::error(msg.to_string())
         }
     }
 
-    pub fn overwrite_fill(&mut self, index: usize, n_bytes: usize) -> ActionResult {
+    pub fn overwrite_fill(&mut self, n_bytes: usize) -> ActionResult {
+        let index = self.cursor_pos;
         let mut start_byte = index;
         if index + n_bytes > self.file_manager.len() {
             start_byte = self.file_manager.len();
-            if let Err(msg) = self.append_fill(index + n_bytes - self.file_manager.len()) {
+            if let Err(msg) = self.append_fill(index + n_bytes - self.file_manager.len()) { // TODO: Add this to the action as well
                 return ActionResult::error(msg.to_string())
             }
         }
@@ -498,13 +717,14 @@ impl<'a> HexEdit<'a> {
             Ok(_) => ActionResult {
                 error: None,
                 update: UpdateDescription::Range(start_byte, index + n_bytes),
-                action: Some(Box::new(OverwriteAction::new(index, original_bytes)))
+                action: Some(Rc::new(OverwriteFillAction::new(original_bytes)))
             },
             Err(msg) => ActionResult::error(msg.to_string())
         }
     }
 
-    pub fn insert_register(&mut self, register: u8, index: usize) -> ActionResult {
+    pub fn insert_register(&mut self, register: u8) -> ActionResult {
+        let index = self.cursor_pos;
         if register < 32 {
             if self.clipboard_registers[register as usize].len() > 0 {
                 let mut start_byte = index;
@@ -515,7 +735,11 @@ impl<'a> HexEdit<'a> {
                     }
                 }
                 match self.file_manager.insert_bytes(index, &self.clipboard_registers[register as usize]) {
-                    Ok(_) => ActionResult::no_error(UpdateDescription::After(start_byte)), // TODO: add action here
+                    Ok(_) => ActionResult {
+                        error: None,
+                        update: UpdateDescription::After(start_byte),
+                        action: Some(Rc::new(InsertRegisterAction::new(register)))
+                    },
                     Err(msg) => ActionResult::error(msg.to_string())
                 }
             } else {
@@ -527,19 +751,28 @@ impl<'a> HexEdit<'a> {
 
     }
 
-    pub fn overwrite_register(&mut self, register: u8, index: usize) -> ActionResult {
+    pub fn overwrite_register(&mut self, register: u8) -> ActionResult {
+        let index = self.cursor_pos;
         if register < 32 {
             if self.clipboard_registers[register as usize].len() > 0 {
-                let n = &self.clipboard_registers[register as usize].len();
+                let n_bytes = self.clipboard_registers[register as usize].len();
                 let mut start_byte = index;
-                if index + n > self.file_manager.len() {
+                if index + n_bytes > self.file_manager.len() {
                     start_byte = self.file_manager.len();
-                    if let Err(msg) = self.append_fill(index + n - self.file_manager.len()) {
+                    if let Err(msg) = self.append_fill(index + n_bytes - self.file_manager.len()) {
                         return ActionResult::error(msg.to_string())
                     }
                 }
+
+                let mut original_bytes: Vec<u8> = vec![0; n_bytes];
+                self.file_manager.get_bytes(index, &mut original_bytes); // TODO: take care of action result here
+
                 match self.file_manager.overwrite_bytes(index, &self.clipboard_registers[register as usize]) {
-                    Ok(_) => ActionResult::no_error(UpdateDescription::Range(start_byte, index + n)), // TODO: add action here
+                    Ok(_) => ActionResult {
+                        error: None,
+                        update: UpdateDescription::Range(start_byte, index + n_bytes),
+                        action: Some(Rc::new(OverwriteRegisterAction::new(register, original_bytes)))
+                    },
                     Err(msg) => ActionResult::error(msg.to_string())
                 }
             } else {
@@ -550,14 +783,29 @@ impl<'a> HexEdit<'a> {
         }
     }
 
-    pub fn yank(&mut self, register: u8, index: usize, n_bytes: usize) -> ActionResult {
+    fn set_register(&mut self, register: u8, bytes: &Vec<u8>) -> ActionResult {
+        if register < 32 {
+            self.clipboard_registers[register as usize] = bytes.to_vec();
+            ActionResult::empty() // TODO: Maybe add an action here
+        } else {
+            ActionResult::error("Registers must be less than 32".to_string())
+        }
+    }
+
+    pub fn yank(&mut self, register: u8, n_bytes: usize) -> ActionResult {
+        let index = self.cursor_pos;
         if register < 32 {
             if index + n_bytes <= self.file_manager.len() {
                 let mut buffer = vec![0; n_bytes];
                 match self.file_manager.get_bytes(index, &mut buffer) {
                     Ok(_) => {
+                        let original_bytes = self.clipboard_registers[register as usize].to_vec();
                         self.clipboard_registers[register as usize] = buffer;
-                        ActionResult::empty() // TODO: add action here
+                        ActionResult {
+                            error: None,
+                            update: UpdateDescription::NoUpdate,
+                            action: Some(Rc::new(YankAction::new(register, n_bytes, original_bytes)))
+                        }
                     },
                     Err(msg) => {
                         ActionResult::error(msg.to_string())
@@ -571,7 +819,8 @@ impl<'a> HexEdit<'a> {
         }
     }
 
-    pub fn delete_bytes(&mut self, index: usize, n_bytes: usize) -> ActionResult {
+    pub fn delete_bytes(&mut self, n_bytes: usize) -> ActionResult {
+        let index = self.cursor_pos;
         if index + n_bytes <= self.file_manager.len() {
             let mut original_bytes: Vec<u8> = vec![0; n_bytes];
             self.file_manager.get_bytes(index, &mut original_bytes); // TODO take care of this ActionResult
@@ -579,7 +828,7 @@ impl<'a> HexEdit<'a> {
                 Ok(_) => ActionResult {
                     error: None,
                     update: UpdateDescription::After(index),
-                    action: Some(Box::new(DeleteAction::new(index, original_bytes)))
+                    action: Some(Rc::new(DeleteAction::new(original_bytes)))
                 },
                 Err(msg) => ActionResult::error(msg.to_string())
             }
@@ -588,7 +837,8 @@ impl<'a> HexEdit<'a> {
         }
     }
 
-    pub fn insert_bytes(&mut self, index: usize, bytes: &Vec<u8>) -> ActionResult{
+    pub fn insert_bytes(&mut self, bytes: &Vec<u8>) -> ActionResult{
+        let index = self.cursor_pos;
         let mut start_byte = index;
         if index > self.file_manager.len() {
             start_byte = self.file_manager.len();
@@ -600,24 +850,32 @@ impl<'a> HexEdit<'a> {
             Ok(_) => ActionResult {
                 error: None,
                 update: UpdateDescription::After(start_byte),
-                action: Some(Box::new(InsertAction::new(index, bytes.len())))
+                action: Some(Rc::new(InsertAction::new(bytes.len())))
             },
             Err(msg) => ActionResult::error(msg.to_string())
         }
     }
 
-    pub fn overwrite_bytes(&mut self, index: usize, bytes: &Vec<u8>) -> std::io::Result<()> {
-        self.file_manager.overwrite_bytes(index, bytes)
+    pub fn overwrite_bytes(&mut self, bytes: &Vec<u8>) -> ActionResult {
+        match self.file_manager.overwrite_bytes(self.cursor_pos, bytes) { // TODO make this return an action
+            Ok(()) => ActionResult::no_error(UpdateDescription::Range(self.cursor_pos, self.cursor_pos + bytes.len())),
+            Err(msg) => ActionResult::error(msg.to_string())
+        }
     }
 
-    pub fn swap_bytes(&mut self, index: usize, n_bytes: usize) -> ActionResult {
+    pub fn swap_bytes(&mut self, n_bytes: usize) -> ActionResult {
+        let index = self.cursor_pos;
         if index + n_bytes <= self.file_manager.len() {
             let mut data = vec![0; n_bytes];
             match self.file_manager.get_bytes(index, &mut data) {
                 Ok(_) => {
                     data.reverse();
                     match self.file_manager.overwrite_bytes(index, &data) {
-                        Ok(_) => ActionResult::no_error(UpdateDescription::Range(index, index + n_bytes)), // TODO: add action here
+                        Ok(_) => ActionResult {
+                            error: None,
+                            update: UpdateDescription::Range(index, index + n_bytes), // TODO: add action here
+                            action: Some(Rc::new(SwapAction::new(n_bytes)))
+                        },
                         Err(msg) => ActionResult::error(msg.to_string())
                     }
                 },
@@ -736,7 +994,7 @@ impl<'a> HexEdit<'a> {
         }
         match self.file_manager.overwrite_byte(index, c) {
             Ok(_) => {
-                //self.action_stack.add(Box::new(OverwriteAction::new(index, vec![c])));
+                //self.action_stack.add(Rc::new(OverwriteAction::new(index, vec![c])));
                 ActionResult::no_error(UpdateDescription::Range(start_byte, index + 1)) // TODO: add action here
             },
             Err(msg) => ActionResult::error(msg.to_string())
@@ -753,7 +1011,7 @@ impl<'a> HexEdit<'a> {
         }
         match self.file_manager.insert_byte(index, c) {
             Ok(_) => {
-                //self.action_stack.add(Box::new(InsertAction::new(index, 1)));
+                //self.action_stack.add(Rc::new(InsertAction::new(index, 1)));
                 ActionResult::no_error(UpdateDescription::After(start_byte)) // TODO: add action here
             },
             Err(msg) => ActionResult::error(msg.to_string())
@@ -783,7 +1041,7 @@ impl<'a> HexEdit<'a> {
             }
         };
         
-        res.set_action(Some(Box::new(SeekAction::new(current_pos, seek))));
+        res.set_action(Some(Rc::new(SeekAction::new(current_pos, seek))));
         res
     }
 

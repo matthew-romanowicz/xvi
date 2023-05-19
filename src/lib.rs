@@ -10,7 +10,7 @@ mod large_text_view;
 use crate::large_text_view::LargeTextView;
 
 mod hex_edit;
-use crate::hex_edit::{FileManager, ActionStack, EditMode, ActionResult, FillType, HexEdit};
+use crate::hex_edit::{FileManager, Action, CompoundAction, ActionStack, EditMode, ActionResult, FillType, HexEdit};
 pub use crate::hex_edit::FileManagerType;
 
 mod parsers;
@@ -212,7 +212,48 @@ fn execute_command(hex_edit: &mut HexEdit, command: Vec<char>) -> (CommandInstru
     //Ok(())
 }
 
-fn execute_keystroke(hex_edit: &mut HexEdit, action_stack: &mut ActionStack, keystroke: Vec<char>) -> ActionResult {
+struct MacroManager {
+    macros: [Option<CompoundAction>; 32], //Needs to be 32 or less for Default::default() to work
+    start_index: usize,
+    current_macro: Option<u8>
+}
+
+impl MacroManager {
+
+    fn new() -> MacroManager {
+        MacroManager {
+            macros: Default::default(),
+            start_index: 0,
+            current_macro: None
+        }
+    }
+
+    fn start(&mut self, n: u8, action_stack: &ActionStack) -> ActionResult {
+        self.start_index = action_stack.current_index();
+        self.current_macro = Some(n);
+        ActionResult::empty()
+    }
+
+    fn finish(&mut self, action_stack: &ActionStack) -> ActionResult {
+        match self.current_macro {
+            Some(n) => {
+                self.macros[n as usize] = Some(action_stack.combine(self.start_index, action_stack.current_index()));
+                self.current_macro = None;
+                ActionResult::empty()
+            },
+            None => ActionResult::error("No macros being recorded".to_string())
+        }
+    }
+
+    fn run(&self, n: u8, hex_edit: &mut HexEdit) -> ActionResult {
+        match &self.macros[n as usize] {
+            Some(m) => m.redo(hex_edit),
+            None => ActionResult::error(format!("Macro {} not defined", n))
+        }
+    }
+}
+
+fn execute_keystroke(hex_edit: &mut HexEdit, action_stack: &mut ActionStack, macro_manager: &mut MacroManager, keystroke: Vec<char>) -> ActionResult {
     let tokens = parse_keystroke(&keystroke);
     match tokens.len() {
 
@@ -237,10 +278,13 @@ fn execute_keystroke(hex_edit: &mut HexEdit, action_stack: &mut ActionStack, key
                     action_stack.redo(hex_edit)
                 },
                 KeystrokeToken::Character('p') => {
-                    hex_edit.insert_register(0, hex_edit.get_cursor_pos())
+                    hex_edit.insert_register(0)
                 },
                 KeystrokeToken::Character('P') => {
-                    hex_edit.overwrite_register(0, hex_edit.get_cursor_pos())
+                    hex_edit.overwrite_register(0)
+                },
+                KeystrokeToken::Character('M') => {
+                    macro_manager.finish(&action_stack)
                 },
                 _ => {
                     let s: String = keystroke.iter().collect();
@@ -258,31 +302,37 @@ fn execute_keystroke(hex_edit: &mut HexEdit, action_stack: &mut ActionStack, key
                     hex_edit.seek(SeekFrom::End(n as i64))
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('f')) => {
-                    hex_edit.insert_fill(hex_edit.get_cursor_pos(), n)
+                    hex_edit.insert_fill(n)
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('F')) => {
-                    hex_edit.overwrite_fill(hex_edit.get_cursor_pos(), n)
+                    hex_edit.overwrite_fill(n)
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('d')) => {
-                    hex_edit.delete_bytes(hex_edit.get_cursor_pos(), n)
+                    hex_edit.delete_bytes(n)
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('s')) => {
-                    hex_edit.swap_bytes(hex_edit.get_cursor_pos(), n)
+                    hex_edit.swap_bytes(n)
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('y')) => {
-                    hex_edit.yank(0, hex_edit.get_cursor_pos(), n)
+                    hex_edit.yank(0, n)
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('p')) => {
-                    hex_edit.insert_register(n as u8, hex_edit.get_cursor_pos())
+                    hex_edit.insert_register(n as u8)
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('P')) => {
-                    hex_edit.overwrite_register(n as u8, hex_edit.get_cursor_pos())
+                    hex_edit.overwrite_register(n as u8)
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('u')) => {
                     hex_edit.undo(n)
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('U')) => {
                     hex_edit.redo(n)
+                },
+                (KeystrokeToken::Integer(n), KeystrokeToken::Character('m')) => {
+                    macro_manager.run(n as u8, hex_edit)
+                },
+                (KeystrokeToken::Integer(n), KeystrokeToken::Character('M')) => {
+                    macro_manager.start(n as u8, &action_stack)
                 },
                 _ => {
                     let s: String = keystroke.iter().collect();
@@ -309,7 +359,7 @@ fn execute_keystroke(hex_edit: &mut HexEdit, action_stack: &mut ActionStack, key
         4 => {
             match (tokens[0], tokens[1], tokens[2], tokens[3]) {
                 (KeystrokeToken::Integer(n1), KeystrokeToken::Character('r'), KeystrokeToken::Integer(n2), KeystrokeToken::Character('y')) => {
-                    hex_edit.yank(n1 as u8, hex_edit.get_cursor_pos(), n2)
+                    hex_edit.yank(n1 as u8, n2)
                 },
                 _ => {
                     let s: String = keystroke.iter().collect();
@@ -349,6 +399,8 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                                     '.', "  ".to_string(), true); // Invalid ASCII, Separator, Capitalize Hex
     
     let mut action_stack = ActionStack::new();
+
+    let mut macro_manager = MacroManager::new();
 
     let cursor_index_len = format!("{:x}", hex_edit.len()).len();
 
@@ -410,8 +462,8 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                     }, 
                     Some(Input::Character(c)) => {
                         current_keystroke.push(c);
-                        if matches!(c, 'g' | 'G' | 'f' | 'F' | 'd' | 'y' | 'p' | 'P' | 'u' | 'U' | 'n' | 'N' | 's') {
-                            let result = execute_keystroke(&mut hex_edit, &mut action_stack, current_keystroke);
+                        if matches!(c, 'g' | 'G' | 'f' | 'F' | 'd' | 'y' | 'p' | 'P' | 'u' | 'U' | 'n' | 'N' | 's' | 'm' | 'M') {
+                            let result = execute_keystroke(&mut hex_edit, &mut action_stack, &mut macro_manager, current_keystroke);
                             if let Some(err) = result.error {
                                 alert(err, &mut window, &mut line_entry, &mut hex_edit);
                             }
