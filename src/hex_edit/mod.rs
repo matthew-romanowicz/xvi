@@ -387,16 +387,31 @@ impl Action for CompoundAction {
 }
 
 pub struct ActionStack {
+    length: usize,
     index: usize,
     actions: Vec<Rc<dyn Action>>
 }
 
 impl ActionStack {
-    pub fn new() -> ActionStack {
+    pub fn new(length: usize) -> ActionStack {
         ActionStack {
+            length,
             index: 0,
             actions: Vec::new()
         }
+    }
+
+    pub fn clear(&mut self) {
+        self.index = 0;
+        self.actions = Vec::new();
+    }
+
+    pub fn set_length(&mut self, length: usize) {
+        self.length = length;
+        while self.actions.len() > self.length && self.index > 0 {
+            self.actions.remove(0);
+            self.index -= 1;
+        }        
     }
 
     pub fn current_index(&self) -> usize {
@@ -407,6 +422,10 @@ impl ActionStack {
         self.actions.truncate(self.index);
         self.actions.push(Rc::clone(&action));
         self.index += 1;
+        while self.actions.len() > self.length && self.index > 0 {
+            self.actions.remove(0);
+            self.index -= 1;
+        }
     }
 
     pub fn undo(&mut self, hex_edit: &mut HexEdit) -> ActionResult {
@@ -1130,19 +1149,19 @@ impl<'a> HexEdit<'a> {
 
     pub fn refresh_cursor(&self, window: &Window) {
 
-        //let mut underline_attr = Attributes::new();
-        //underline_attr.set_underline(true);
-        //let underline_attr = chtype::from(underline_attr);
+        let mut underline_attr = Attributes::new();
+        underline_attr.set_underline(true);
+        let underline_attr = chtype::from(underline_attr);
 
         match self.edit_mode {
             EditMode::HexOverwrite | EditMode::HexInsert => {
-                //window.mvchgat(self.cursor_y(), self.ascii_cursor_x(), 1, underline_attr, 0);
+                window.mvchgat(self.cursor_y(), self.ascii_cursor_x(), 1, underline_attr, 0);
 
                 window.mv(self.cursor_y(), self.hex_cursor_x());
 
             },
             EditMode::AsciiOverwrite | EditMode::AsciiInsert => {
-                //window.mvchgat(self.cursor_y(), self.hex_cursor_x(), 2, underline_attr, 0);
+                window.mvchgat(self.cursor_y(), self.hex_cursor_x(), 2, underline_attr, 0);
 
                 window.mv(self.cursor_y(), self.ascii_cursor_x());
             },
@@ -1380,6 +1399,7 @@ impl<'a> HexEdit<'a> {
             },
             UpdateDescription::AttrsOnly => {
                 println!("Refreshing attrs");
+                self.populate(window, 0, self.height); //TODO: Get rid of this! It's only needed to refresh the attributes.
                 self.refresh_cursor(window);
                 self.refresh_highlights(window);
             },
@@ -1416,10 +1436,12 @@ impl<'a> HexEdit<'a> {
 
     fn populate(&self, window: &mut Window, start: usize, end: usize) {
 
+        let start = 0; //TODO: GET RID OF THIS!!!
+        let end = self.height;
 
         let mut s = String::new();
         for i in start..end {
-            println!("{}", i);
+            //println!("{}", i);
             if self.capitalize_hex {
                 s += &format!("{:0width$x}", (self.start_line + i) * (self.line_length as usize), width=self.file_manager.line_label_len()).to_ascii_uppercase();
             } else {

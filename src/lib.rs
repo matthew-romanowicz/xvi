@@ -1,3 +1,4 @@
+use std::rc::Rc;
 use std::io::SeekFrom;
 
 extern crate pancurses;
@@ -16,6 +17,9 @@ pub use crate::hex_edit::FileManagerType;
 mod parsers;
 use crate::parsers::{CommandToken, CommandKeyword, parse_command, parse_filltype, KeystrokeToken, parse_keystroke};
 
+mod bin_format;
+use crate::bin_format::{Endianness, UIntFormat, IIntFormat, FloatFormat, BinaryFormat, DataType, to_bytes};
+
 enum EditState {
     Escaped,
     Command,
@@ -32,12 +36,16 @@ const MANUAL_TEXT: &str = "\\b\\c*********Comands*******
     :set fill r#        =>  Set the fill value to the contents of register #
     :set fill x#        =>  Set the fill value to # (in hex)
     :set icase [on|off] =>  Set ignore case for find function
+    :set undo #         =>  Set the maximum length of the undo/redo stack to #
+
+    :clear undo         =>  Clear the contents of the undo/redo stack
 
     :ins fmt #          =>  [TODO] Insert # encoded as fmt at the cusor location
     :ovr fmt #          =>  [TODO] Overwrite # encoded as fmt at the cusor location
 
     :cat r# r##         =>  Concatenate contents of listed register ## into register #
     :cat r# x##         =>  Concatenate ## (in hex) into register #
+    :swap r#            =>  [TODO] Swap the byte order of register #
 
     :man                =>  Show application manual (this text)
 
@@ -82,11 +90,16 @@ const MANUAL_TEXT: &str = "\\b\\c*********Comands*******
 
     u       =>  Undo last action
     U       =>  Redo last action
-    #u      =>  Undo last # actions
-    #U      =>  Redo last # actions
+    #u      =>  [TODO] Undo last # actions
+    #U      =>  [TODO] Redo last # actions
     #M      =>  Start recording #th macro
     M       =>  Stop recording macro
     #m      =>  Run #th macro";
+
+const BUGS: &str = "Macro executions can't be undone
+Inputting numbers greater than usize maximum in commands/keystrokes causes panic
+Setting line length to value greater than width of terminal causes panic
+";
 
 enum CommandInstruction {
     NoOp,
@@ -94,7 +107,7 @@ enum CommandInstruction {
     ChangeState(EditState)
 }
 
-fn execute_command(hex_edit: &mut HexEdit, command: Vec<char>) -> (CommandInstruction, ActionResult) {
+fn execute_command(hex_edit: &mut HexEdit, action_stack: &mut ActionStack, command: Vec<char>) -> (CommandInstruction, ActionResult) {
 
     match command[0] {
         ':' => {
@@ -134,6 +147,15 @@ fn execute_command(hex_edit: &mut HexEdit, command: Vec<char>) -> (CommandInstru
                         _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
                     }
                 }
+                2 => {
+                    match (&tokens[0], &tokens[1]) {
+                        (CommandToken::Keyword(CommandKeyword::Clear), CommandToken::Keyword(CommandKeyword::Undo)) => {
+                            action_stack.clear();
+                            (CommandInstruction::NoOp, ActionResult::empty())
+                        },
+                        _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
+                    }
+                }
                 3 => {
                     match tokens[0] {
                         CommandToken::Keyword(CommandKeyword::Set) => { // :set [] []
@@ -165,6 +187,10 @@ fn execute_command(hex_edit: &mut HexEdit, command: Vec<char>) -> (CommandInstru
                                 (CommandToken::Keyword(CommandKeyword::Line), CommandToken::Integer(_, n)) => {
                                     (CommandInstruction::NoOp, hex_edit.set_line_length(*n as u8))
                                 },
+                                (CommandToken::Keyword(CommandKeyword::Undo), CommandToken::Integer(_, n)) => {
+                                    action_stack.set_length(*n);
+                                    (CommandInstruction::NoOp, ActionResult::empty())
+                                },
                                 (CommandToken::Keyword(CommandKeyword::Fill), CommandToken::Word(word)) => {
                                     println!("Setting fill type");
                                     match parse_filltype(word.to_vec()) {
@@ -194,6 +220,29 @@ fn execute_command(hex_edit: &mut HexEdit, command: Vec<char>) -> (CommandInstru
                                 _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
                             }
                         },
+                        CommandToken::Keyword(CommandKeyword::Ins) => { // :ins [] []
+                            let input = match &tokens[2] {
+                                CommandToken::Integer(word, _) => word,
+                                CommandToken::Word(word) => word,
+                                _ => return (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
+                            };
+
+                            let fmt = match &tokens[1] {
+                                CommandToken::Keyword(CommandKeyword::U8) => BinaryFormat::UInt(UIntFormat::U8),
+                                CommandToken::Keyword(CommandKeyword::U16) => BinaryFormat::UInt(UIntFormat::U16),
+                                CommandToken::Keyword(CommandKeyword::U32) => BinaryFormat::UInt(UIntFormat::U32),
+                                CommandToken::Keyword(CommandKeyword::U64) => BinaryFormat::UInt(UIntFormat::U64),
+                                CommandToken::Keyword(CommandKeyword::I8) => BinaryFormat::IInt(IIntFormat::I8),
+                                CommandToken::Keyword(CommandKeyword::I16) => BinaryFormat::IInt(IIntFormat::I16),
+                                CommandToken::Keyword(CommandKeyword::I32) => BinaryFormat::IInt(IIntFormat::I32),
+                                CommandToken::Keyword(CommandKeyword::I64) => BinaryFormat::IInt(IIntFormat::I64),
+                                _ => return (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
+                            };
+
+                            println!("U32: {:?}", to_bytes(input, DataType {fmt, end: Endianness::Big}));
+                            (CommandInstruction::NoOp, ActionResult::empty())
+
+                        },
                         _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
                     }
                 },
@@ -213,7 +262,7 @@ fn execute_command(hex_edit: &mut HexEdit, command: Vec<char>) -> (CommandInstru
 }
 
 struct MacroManager {
-    macros: [Option<CompoundAction>; 32], //Needs to be 32 or less for Default::default() to work
+    macros: [Option<Rc<CompoundAction>>; 32], //Needs to be 32 or less for Default::default() to work
     start_index: usize,
     current_macro: Option<u8>
 }
@@ -228,6 +277,17 @@ impl MacroManager {
         }
     }
 
+    fn get(&self, n: u8) -> Option<Rc<CompoundAction>> {
+        if n < 32 {
+            match &self.macros[n as usize] {
+                Some(m) => Some(Rc::clone(&m)),
+                None => None
+            }
+        } else {
+            None
+        }
+    }
+
     fn start(&mut self, n: u8, action_stack: &ActionStack) -> ActionResult {
         self.start_index = action_stack.current_index();
         self.current_macro = Some(n);
@@ -237,7 +297,7 @@ impl MacroManager {
     fn finish(&mut self, action_stack: &ActionStack) -> ActionResult {
         match self.current_macro {
             Some(n) => {
-                self.macros[n as usize] = Some(action_stack.combine(self.start_index, action_stack.current_index()));
+                self.macros[n as usize] = Some(Rc::new(action_stack.combine(self.start_index, action_stack.current_index())));
                 self.current_macro = None;
                 ActionResult::empty()
             },
@@ -329,7 +389,13 @@ fn execute_keystroke(hex_edit: &mut HexEdit, action_stack: &mut ActionStack, mac
                     hex_edit.redo(n)
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('m')) => {
-                    macro_manager.run(n as u8, hex_edit)
+                    let res = macro_manager.run(n as u8, hex_edit);
+                    match macro_manager.get(n as u8) { 
+                        // Need to manually add the action here for now since I can't return a Rc
+                        Some(m) => action_stack.add(m),
+                        None => ()
+                    };
+                    res
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('M')) => {
                     macro_manager.start(n as u8, &action_stack)
@@ -398,7 +464,7 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                                     16, true, true, // Line Length, Show Hex, Show ASCII
                                     '.', "  ".to_string(), true); // Invalid ASCII, Separator, Capitalize Hex
     
-    let mut action_stack = ActionStack::new();
+    let mut action_stack = ActionStack::new(256);
 
     let mut macro_manager = MacroManager::new();
 
@@ -505,7 +571,7 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                     },
                     Some(Input::Character('\n')) => {
                         //println!("Newline: {}", String::from_iter(line_entry.get_text()));
-                        let (instr, result) = execute_command(&mut hex_edit, line_entry.get_text());
+                        let (instr, result) = execute_command(&mut hex_edit, &mut action_stack, line_entry.get_text());
                         if let Some(err) = result.error {
                             alert(err, &mut window, &mut line_entry, &mut hex_edit);
                         }
