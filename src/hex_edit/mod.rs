@@ -318,6 +318,62 @@ impl Action for YankAction {
     }
 }
 
+pub struct SwapRegisterAction {
+    register: u8
+}
+
+impl SwapRegisterAction {
+    pub fn new(register: u8) -> SwapRegisterAction {
+        SwapRegisterAction {
+            register
+        }
+    }
+}
+
+impl Action for SwapRegisterAction {
+    fn undo(&self, hex_edit: &mut HexEdit) -> ActionResult {
+        println!("Undoing swap regiser");
+        hex_edit.swap_register(self.register)
+    }
+
+    fn redo(&self, hex_edit: &mut HexEdit) -> ActionResult {
+        hex_edit.swap_register(self.register)
+    }
+
+    fn size(&self) -> usize{
+        1
+    }
+}
+
+pub struct ShiftRegisterAction {
+    register: u8,
+    shift: i8
+}
+
+impl ShiftRegisterAction {
+    pub fn new(register: u8, shift: i8) -> ShiftRegisterAction {
+        ShiftRegisterAction {
+            register,
+            shift
+        }
+    }
+}
+
+impl Action for ShiftRegisterAction {
+    fn undo(&self, hex_edit: &mut HexEdit) -> ActionResult {
+        println!("Undoing shift regiser");
+        hex_edit.shift_register(self.register, -self.shift)
+    }
+
+    fn redo(&self, hex_edit: &mut HexEdit) -> ActionResult {
+        hex_edit.shift_register(self.register, self.shift)
+    }
+
+    fn size(&self) -> usize{
+        2
+    }
+}
+
 
 pub struct SeekAction {
     original_index: usize,
@@ -700,6 +756,55 @@ impl<'a> HexEdit<'a> {
             }
         }
         ActionResult::no_error(UpdateDescription::NoUpdate)
+    }
+
+    pub fn swap_register(&mut self, register: u8) -> ActionResult {
+        if register >= 32 {
+            return ActionResult::error("Register number must be less than 32".to_string())
+        }
+        self.clipboard_registers[register as usize].reverse();
+        ActionResult {
+            error: None,
+            update: UpdateDescription::NoUpdate,
+            action: Some(Rc::new(SwapRegisterAction::new(register)))
+        }
+    }
+
+    pub fn shift_register(&mut self, register: u8, shift: i8) -> ActionResult { // negative is left
+        if shift < -8 || shift > 8 {
+            return ActionResult::error("Shift value must be less than or equal to 8".to_string())
+        }
+        if register >= 32 {
+            return ActionResult::error("Register number must be less than 32".to_string())
+        }
+        let mut reg = &mut self.clipboard_registers[register as usize];
+        let mut curr;
+        if shift > 0 {
+            let cshift = 8 - shift;
+            let mask = 0xff >> cshift;
+            let mut prev = reg[reg.len() - 1];
+            for i in 0..reg.len() {
+                curr = reg[i];
+                reg[i] = (curr >> shift) + ((prev & mask) << cshift);
+                prev = curr;
+            }
+        } else {
+            let shift = -shift;
+            let cshift = 8 - shift;
+            let mask = 0xff << cshift;
+            let mut prev = reg[0];
+            for i in (0..reg.len()).rev() {
+                curr = reg[i];
+                reg[i] = (curr << shift) + ((prev & mask) >> cshift);
+                prev = curr;
+            }            
+        }
+        ActionResult {
+            error: None,
+            update: UpdateDescription::NoUpdate,
+            action: Some(Rc::new(ShiftRegisterAction::new(register, shift)))
+        }
+
     }
 
     pub fn insert_fill(&mut self, n_bytes: usize) -> ActionResult {

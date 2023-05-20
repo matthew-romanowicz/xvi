@@ -27,8 +27,8 @@ enum EditState {
     Manual
 }
 
-const MANUAL_TEXT: &str = "\\b\\c*********Comands*******
-
+const MANUAL_TEXT: &str = "\\b\\cCOMMANDS
+\\b  SETTINGS:
     :set caps [on|off]  =>  Toggle the case of display hexadecimal values
     :set hex [on|off]   =>  Toggle the hex display
     :set ascii [on|off] =>  Toggle the ascii display
@@ -37,18 +37,21 @@ const MANUAL_TEXT: &str = "\\b\\c*********Comands*******
     :set fill x#        =>  Set the fill value to # (in hex)
     :set icase [on|off] =>  Set ignore case for find function
     :set undo #         =>  Set the maximum length of the undo/redo stack to #
+    :set endian [big|little] => [TODO] Set the endianness that will be used in the 'ins' and 'ovr' commands
+    :set chunk #        => [TODO] Set the chunk size used to insert bytes in swap and live mode
 
-    :clear undo         =>  Clear the contents of the undo/redo stack
-
+\\b  INSERTION/OVERWRITE:
     :ins fmt #          =>  [TODO] Insert # encoded as fmt at the cusor location
     :ovr fmt #          =>  [TODO] Overwrite # encoded as fmt at the cusor location
 
+\\b  REGISTER OPERATIONS:
     :cat r# r##         =>  Concatenate contents of listed register ## into register #
     :cat r# x##         =>  Concatenate ## (in hex) into register #
-    :swap r#            =>  [TODO] Swap the byte order of register #
+    :swap r#            =>  Swap the byte order of register #
+    :rshft r# ##        =>  Bitshift the contens of register # right ## bits
+    :lshft r# ##        =>  Bitshift the contens of register # left ## bits
 
-    :man                =>  Show application manual (this text)
-
+\\b  READ/WRITE:
     :w                  =>  Write all changes to file
     :x                  =>  Write all changes to file and exit
     :wq                 =>  Write all changes to file and exit
@@ -56,9 +59,15 @@ const MANUAL_TEXT: &str = "\\b\\c*********Comands*******
     :q!                 =>  Exit
     :open file          =>  [TODO] Opens 'file' in another tab
 
-    /expr               =>  Find expr in file
+\\b  FIND:
+    /expr               =>  Find ASCII 'expr' in file
 
-\\b\\c*******Keystroke Commands*******
+\\b  MISC:
+    :clear undo         =>  Clear the contents of the undo/redo stack
+    :man                =>  Show application manual (this text)
+
+
+\\b\\cKEYSTROKE COMMANDS
 
     ESC     =>  Clear the current keystroke buffer
 
@@ -149,6 +158,16 @@ fn execute_command(hex_edit: &mut HexEdit, action_stack: &mut ActionStack, comma
                 }
                 2 => {
                     match (&tokens[0], &tokens[1]) {
+                        (CommandToken::Keyword(CommandKeyword::Swap), CommandToken::Word(word)) => {
+                            println!("Setting fill type");
+                            match parse_filltype(word.to_vec()) { // TODO: Don't use this function, use something more direct
+                                Ok(fill) => match fill {
+                                    FillType::Register(n) => (CommandInstruction::NoOp, hex_edit.swap_register(n)),
+                                    _ => (CommandInstruction::NoOp, ActionResult::error("Could not parse register number".to_string()))
+                                },
+                                Err(s) => (CommandInstruction::NoOp, ActionResult::error(s))
+                            }
+                        },
                         (CommandToken::Keyword(CommandKeyword::Clear), CommandToken::Keyword(CommandKeyword::Undo)) => {
                             action_stack.clear();
                             (CommandInstruction::NoOp, ActionResult::empty())
@@ -192,7 +211,6 @@ fn execute_command(hex_edit: &mut HexEdit, action_stack: &mut ActionStack, comma
                                     (CommandInstruction::NoOp, ActionResult::empty())
                                 },
                                 (CommandToken::Keyword(CommandKeyword::Fill), CommandToken::Word(word)) => {
-                                    println!("Setting fill type");
                                     match parse_filltype(word.to_vec()) {
                                         Ok(fill) => (CommandInstruction::NoOp, hex_edit.set_fill(fill)),
                                         Err(s) => (CommandInstruction::NoOp, ActionResult::error(s))
@@ -204,7 +222,7 @@ fn execute_command(hex_edit: &mut HexEdit, action_stack: &mut ActionStack, comma
                         CommandToken::Keyword(CommandKeyword::Cat) => { // :cat [] []
                             match (&tokens[1], &tokens[2]) {
                                 (CommandToken::Word(word1), CommandToken::Word(word2)) => {
-                                    match parse_filltype(word1.to_vec()) {
+                                    match parse_filltype(word1.to_vec()) { // TODO: use a different function here
                                         Ok(FillType::Register(n)) => {
                                             match parse_filltype(word2.to_vec()) {
                                                 Ok(fill) => (CommandInstruction::NoOp, hex_edit.concatenate_register(n, fill)),
@@ -242,6 +260,30 @@ fn execute_command(hex_edit: &mut HexEdit, action_stack: &mut ActionStack, comma
                             println!("U32: {:?}", to_bytes(input, DataType {fmt, end: Endianness::Big}));
                             (CommandInstruction::NoOp, ActionResult::empty())
 
+                        },
+                        CommandToken::Keyword(CommandKeyword::RShift | CommandKeyword::LShift) => { // :rshft | lshft [] []
+                            match (&tokens[1], &tokens[2]) {
+                                (CommandToken::Word(word), CommandToken::Integer(_, n)) => {
+                                    match parse_filltype(word.to_vec()) { // TODO: use a different function here
+                                        Ok(FillType::Register(register)) => {
+                                            match &tokens[0] {
+                                                CommandToken::Keyword(CommandKeyword::RShift) => {
+                                                    (CommandInstruction::NoOp, hex_edit.shift_register(register, *n as i8))
+                                                },
+                                                CommandToken::Keyword(CommandKeyword::LShift) => {
+                                                    (CommandInstruction::NoOp, hex_edit.shift_register(register, -(*n as i8)))
+                                                },
+                                                _ => (CommandInstruction::NoOp, ActionResult::error("Impossible state".to_string()))
+                                            }
+                                        },
+                                        Ok(FillType::Bytes(_)) => {
+                                            (CommandInstruction::NoOp, ActionResult::error("First 'rshft/lshft' parameter must be register (r#)".to_string()))
+                                        },
+                                        Err(s) => (CommandInstruction::NoOp, ActionResult::error(s))
+                                    }
+                                },
+                                _ => return (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
+                            }
                         },
                         _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
                     }
@@ -574,6 +616,9 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                         let (instr, result) = execute_command(&mut hex_edit, &mut action_stack, line_entry.get_text());
                         if let Some(err) = result.error {
                             alert(err, &mut window, &mut line_entry, &mut hex_edit);
+                        }
+                        if let Some(action) = result.action {
+                            action_stack.add(action);
                         }
                         let result = hex_edit.update(&mut window, result.update);
                         if let Err(err) = result {
