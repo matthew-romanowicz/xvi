@@ -22,6 +22,7 @@ pub enum Nibble {
     Right,
 }
 
+#[derive(Copy, Clone)]
 pub enum EditMode {
     HexOverwrite,
     AsciiOverwrite,
@@ -1057,10 +1058,10 @@ impl<'a> HexEdit<'a> {
         ActionResult::empty()
     }
 
-    pub fn resize(&mut self, width: usize, height: usize) -> std::io::Result<()> {
+    pub fn resize(&mut self, width: usize, height: usize) {
         self.width = width;
         self.height = height;
-        self.refresh_viewport()
+        //self.refresh_viewport()
     }
 
     fn bytes_to_hex_line(buffer: &Vec<u8>, eof_char: char, n_valid: usize) -> String {

@@ -11,7 +11,7 @@ mod large_text_view;
 use crate::large_text_view::LargeTextView;
 
 mod hex_edit;
-use crate::hex_edit::{FileManager, Action, CompoundAction, ActionStack, EditMode, ActionResult, ShowType, FillType, HexEdit};
+use crate::hex_edit::{FileManager, Action, CompoundAction, ActionStack, UpdateDescription, EditMode, ActionResult, ShowType, FillType, HexEdit};
 pub use crate::hex_edit::FileManagerType;
 
 mod parsers;
@@ -27,12 +27,12 @@ enum EditState {
     Manual
 }
 
-const MANUAL_TEXT: &str = "\\b\\cCOMMANDS
-\\b  SETTINGS:
+const MANUAL_TEXT: &str = r"\b\cCOMMANDS
+\b  SETTINGS:
     :set caps [on|off]  =>  Toggle the case of display hexadecimal values
     :set hex [on|off]   =>  Toggle the hex display
     :set ascii [on|off] =>  Toggle the ascii display
-    :set lnum [hex|dec|off]  =>  [TODO] Toggle line number display/base
+    :set lnum [hex|dec|off]  =>  Toggle line number display/base
     :set cnum [hex|dec|off]  =>  [TODO] Toggle cursor index display/base
     :set line #         =>  Set the number of bytes per line to #
     :set fill r#        =>  Set the fill value to the contents of register #
@@ -43,11 +43,11 @@ const MANUAL_TEXT: &str = "\\b\\cCOMMANDS
     :set endian [be|le] =>  [TODO] Set the endianness that will be used in the 'ins' and 'ovr' commands
     :set chunk #        =>  Set the chunk size used to insert bytes in swap and live mode
 
-\\b  INSERTION/OVERWRITE:
+\b  INSERTION/OVERWRITE:
     :ins fmt #          =>  [TODO] Insert # encoded as fmt at the cusor location
     :ovr fmt #          =>  [TODO] Overwrite # encoded as fmt at the cusor location
 
-\\b  REGISTER OPERATIONS:
+\b  REGISTER OPERATIONS:
     :cat r# r##         =>  Concatenate contents of listed register ## into register #
     :cat r# x##         =>  Concatenate ## (in hex) into register #
     :swap r#            =>  Swap the byte order of register #
@@ -57,28 +57,28 @@ const MANUAL_TEXT: &str = "\\b\\cCOMMANDS
     :or r# r##          =>  [TODO] Perform bitwise OR on register # with register ##
     :not r#             =>  [TODO] Perform bitwise NOT on regiser #
 
-\\b  READ/WRITE:
+\b  READ/WRITE:
     :w                  =>  Write all changes to file
     :x                  =>  Write all changes to file and exit
     :wq                 =>  Write all changes to file and exit
     :q                  =>  Exit if there are no unsaved changes
     :q!                 =>  Exit
-    :open file          =>  [TODO] Opens 'file' in another tab
+    :open file          =>  Opens 'file' in another tab
 
-\\b  FIND:
+\b  FIND:
     /expr               =>  Find ASCII 'expr' in file
     ?expr               =>  Backwards find ASCII 'expr' in file
-    \\expr              =>  Find hex 'expr' in file
-    |expr               =>  Backwards find hex 'expr' in file
+    \expr               =>  [TODO] Find hex 'expr' in file
+    |expr               =>  [TODO] Backwards find hex 'expr' in file
 
-\\b  MISC:
+\b  MISC:
     :clear undo         =>  Clear the contents of the undo/redo stack
     :show hist          =>  [TODO] Show command history
     :show m#            =>  [TODO] Show details about macro number #
     :man                =>  Show application manual (this text)
 
 
-\\b\\cKEYSTROKE COMMANDS
+\b\cKEYSTROKE COMMANDS
 
     ESC     =>  Clear the current keystroke buffer
 
@@ -108,6 +108,9 @@ const MANUAL_TEXT: &str = "\\b\\cCOMMANDS
     #p      =>  Insert contents of register # at cursor location
     #P      =>  Overwrite bytes with contents of register # at cursor location
 
+    t       =>  Change to next open file
+    T       =>  [TODO] Change to previous open file
+
     u       =>  Undo last action
     U       =>  Redo last action
     #u      =>  [TODO] Undo last # actions
@@ -121,22 +124,100 @@ Inputting numbers greater than usize maximum in commands/keystrokes causes panic
 Setting line length to value greater than width of terminal causes panic
 ";
 
+struct HexEditManager<'a> {
+    hex_edit: HexEdit<'a>,
+    action_stack: ActionStack
+}
+
+struct EditorStack<'a> {
+    editors: Vec<HexEditManager<'a>>,
+    current: usize,
+    x: usize,
+    y: usize,
+    width: usize,
+    height: usize
+}
+
+impl<'a> EditorStack<'a> {
+    fn new(x: usize, y: usize, width: usize, height: usize) -> EditorStack<'a> {
+        EditorStack {
+            editors: Vec::new(),
+            current: 0,
+            x,
+            y,
+            width,
+            height
+        }
+    }
+
+    fn push(&mut self, filename: String, file_manager_type: FileManagerType, extract: bool) -> std::io::Result<usize> {
+        let fm = FileManager::new(filename, file_manager_type, extract)?;
+        self.editors.push(HexEditManager {
+            hex_edit: HexEdit::new(fm, self.x, self.y, self.width, self.height,
+                16, true, true, // Line Length, Show Hex, Show ASCII
+                '.', "  ".to_string(), true), // Invalid ASCII, Separator, Capitalize Hex
+            action_stack: ActionStack::new(256)
+        });
+
+        Ok(self.editors.len() - 1)
+    }
+
+    fn set_current(&mut self, index: usize) {
+        self.current = index;
+    }
+
+    fn tab(&mut self) {
+        self.current = (self.current + 1) % self.editors.len();
+    }
+
+    fn apply<F>(&mut self, f: F) -> ActionResult where F: Fn(&mut HexEdit) -> ActionResult {
+        for (i, mut hm) in self.editors.iter_mut().enumerate() {
+            if i != self.current {
+                f(&mut hm.hex_edit);
+            }
+        }
+        f(&mut self.editors[self.current].hex_edit)
+    }
+
+    fn set_edit_mode(&mut self, edit_mode: EditMode) -> ActionResult {
+        for (i, mut hm) in self.editors.iter_mut().enumerate() {
+            if i != self.current {
+                hm.hex_edit.set_edit_mode(edit_mode);
+            }
+        }
+        self.editors[self.current].hex_edit.set_edit_mode(edit_mode)
+    }
+
+    fn resize(&mut self, width: usize, height: usize)  {
+        for hm in self.editors.iter_mut() {
+            hm.hex_edit.resize(width, height);
+        }
+    }
+
+
+    // fn current(&mut self) -> &mut HexEditManager {
+    //     &mut self.editors[self.current]
+    // }
+}
+
 enum CommandInstruction {
     NoOp,
     Exit,
-    ChangeState(EditState)
+    ChangeState(EditState),
+    Open(String)
 }
 
-fn execute_command(hex_edit: &mut HexEdit, action_stack: &mut ActionStack, command: Vec<char>) -> (CommandInstruction, ActionResult) {
+fn execute_command(editor_stack: &mut EditorStack, command: Vec<char>) -> (CommandInstruction, ActionResult) {
 
     match command[0] {
         ':' => {
             let tokens = parse_command(&command[1..].to_vec());
             match tokens.len() {
                 1 => {
+                    let mut hm = &mut editor_stack.editors[editor_stack.current];
                     match &tokens[0] {
                         CommandToken::Keyword(CommandKeyword::Save) => {
-                            let result = hex_edit.save();
+                            let result = hm.hex_edit.save();
                             if let Some(err) = result.error {
                                 (CommandInstruction::NoOp, ActionResult::error(err.to_string()))
                             } else {
@@ -144,7 +225,7 @@ fn execute_command(hex_edit: &mut HexEdit, action_stack: &mut ActionStack, comma
                             }
                         },
                         CommandToken::Keyword(CommandKeyword::SaveAndQuit) => {
-                            let result = hex_edit.save();
+                            let result = hm.hex_edit.save();
                             if let Some(err) = result.error {
                                 (CommandInstruction::NoOp, ActionResult::error(err.to_string()))
                             } else {
@@ -155,7 +236,7 @@ fn execute_command(hex_edit: &mut HexEdit, action_stack: &mut ActionStack, comma
                             (CommandInstruction::Exit, ActionResult::empty())
                         },
                         CommandToken::Keyword(CommandKeyword::Quit) => {
-                            if hex_edit.is_modified() {
+                            if hm.hex_edit.is_modified() {
                                 (CommandInstruction::NoOp, ActionResult::error("File has unsaved changes".to_string()))
                             } else {
                                 (CommandInstruction::Exit, ActionResult::empty())
@@ -168,20 +249,24 @@ fn execute_command(hex_edit: &mut HexEdit, action_stack: &mut ActionStack, comma
                     }
                 }
                 2 => {
+                    let mut hm = &mut editor_stack.editors[editor_stack.current];
                     match (&tokens[0], &tokens[1]) {
                         (CommandToken::Keyword(CommandKeyword::Swap), CommandToken::Word(word)) => {
-                            println!("Setting fill type");
                             match parse_filltype(word.to_vec()) { // TODO: Don't use this function, use something more direct
                                 Ok(fill) => match fill {
-                                    FillType::Register(n) => (CommandInstruction::NoOp, hex_edit.swap_register(n)),
+                                    FillType::Register(n) => (CommandInstruction::NoOp, hm.hex_edit.swap_register(n)),
                                     _ => (CommandInstruction::NoOp, ActionResult::error("Could not parse register number".to_string()))
                                 },
                                 Err(s) => (CommandInstruction::NoOp, ActionResult::error(s))
                             }
                         },
                         (CommandToken::Keyword(CommandKeyword::Clear), CommandToken::Keyword(CommandKeyword::Undo)) => {
-                            action_stack.clear();
+                            hm.action_stack.clear();
                             (CommandInstruction::NoOp, ActionResult::empty())
+                        },
+                        (CommandToken::Keyword(CommandKeyword::Open), CommandToken::Word(word)) => {
+                            println!("Opening!");
+                            (CommandInstruction::Open(word.iter().collect()), ActionResult::empty())
                         },
                         _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
                     }
@@ -191,40 +276,42 @@ fn execute_command(hex_edit: &mut HexEdit, action_stack: &mut ActionStack, comma
                         CommandToken::Keyword(CommandKeyword::Set) => { // :set [] []
                             match (&tokens[1], &tokens[2]) {
                                 (CommandToken::Keyword(CommandKeyword::Caps), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::On | CommandKeyword::Off) => {
-                                    (CommandInstruction::NoOp, hex_edit.set_capitalize_hex(matches!(kwrd, CommandKeyword::On)))
+                                    (CommandInstruction::NoOp, editor_stack.apply(|h| h.set_capitalize_hex(matches!(kwrd, CommandKeyword::On))))
                                 },
                                 (CommandToken::Keyword(CommandKeyword::Hex), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::On | CommandKeyword::Off) => {
-                                    (CommandInstruction::NoOp, hex_edit.set_show_hex(matches!(kwrd, CommandKeyword::On)))
+                                    (CommandInstruction::NoOp, editor_stack.apply(|h| h.set_show_hex(matches!(kwrd, CommandKeyword::On))))
                                 },
                                 (CommandToken::Keyword(CommandKeyword::Ascii), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::On | CommandKeyword::Off) => {
-                                    (CommandInstruction::NoOp, hex_edit.set_show_ascii(matches!(kwrd, CommandKeyword::On)))
+                                    (CommandInstruction::NoOp, editor_stack.apply(|h| h.set_show_ascii(matches!(kwrd, CommandKeyword::On))))
                                 },
                                 (CommandToken::Keyword(CommandKeyword::Icase), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::On | CommandKeyword::Off) => {
-                                    (CommandInstruction::NoOp, hex_edit.set_ignore_case(matches!(kwrd, CommandKeyword::On)))
+                                    (CommandInstruction::NoOp, editor_stack.apply(|h| h.set_ignore_case(matches!(kwrd, CommandKeyword::On))))
                                 },
                                 (CommandToken::Keyword(CommandKeyword::Regex), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::On | CommandKeyword::Off) => {
-                                    (CommandInstruction::NoOp, hex_edit.set_use_regex(matches!(kwrd, CommandKeyword::On)))
+                                    (CommandInstruction::NoOp, editor_stack.apply(|h| h.set_use_regex(matches!(kwrd, CommandKeyword::On))))
                                 },
                                 (CommandToken::Keyword(CommandKeyword::LNum), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::Off | CommandKeyword::Hex | CommandKeyword::Dec) => {
-                                    (CommandInstruction::NoOp, hex_edit.set_show_lnum(match kwrd {
+                                    (CommandInstruction::NoOp, editor_stack.apply(|h| h.set_show_lnum(match kwrd {
                                         CommandKeyword::Off => ShowType::Off,
                                         CommandKeyword::Dec => ShowType::Dec,
                                         _ => ShowType::Hex,
-                                    }))
+                                    })))
                                 },
                                 (CommandToken::Keyword(CommandKeyword::Line), CommandToken::Integer(_, n)) => {
-                                    (CommandInstruction::NoOp, hex_edit.set_line_length(*n as u8))
+                                    (CommandInstruction::NoOp, editor_stack.apply(|h| h.set_line_length(*n as u8)))
                                 },
                                 (CommandToken::Keyword(CommandKeyword::Chunk), CommandToken::Integer(_, n)) => {
-                                    (CommandInstruction::NoOp, hex_edit.set_block_size(*n))
+                                    (CommandInstruction::NoOp, editor_stack.apply(|h| h.set_block_size(*n)))
                                 },
                                 (CommandToken::Keyword(CommandKeyword::Undo), CommandToken::Integer(_, n)) => {
-                                    action_stack.set_length(*n);
+                                    for mut hm in editor_stack.editors.iter_mut() {
+                                        hm.action_stack.set_length(*n);
+                                    }
                                     (CommandInstruction::NoOp, ActionResult::empty())
                                 },
                                 (CommandToken::Keyword(CommandKeyword::Fill), CommandToken::Word(word)) => {
                                     match parse_filltype(word.to_vec()) {
-                                        Ok(fill) => (CommandInstruction::NoOp, hex_edit.set_fill(fill)),
+                                        Ok(fill) => (CommandInstruction::NoOp, editor_stack.editors[editor_stack.current].hex_edit.set_fill(fill)),
                                         Err(s) => (CommandInstruction::NoOp, ActionResult::error(s))
                                     }
                                 },
@@ -232,12 +319,13 @@ fn execute_command(hex_edit: &mut HexEdit, action_stack: &mut ActionStack, comma
                             }
                         },
                         CommandToken::Keyword(CommandKeyword::Cat) => { // :cat [] []
+                            let mut hm = &mut editor_stack.editors[editor_stack.current];
                             match (&tokens[1], &tokens[2]) {
                                 (CommandToken::Word(word1), CommandToken::Word(word2)) => {
                                     match parse_filltype(word1.to_vec()) { // TODO: use a different function here
                                         Ok(FillType::Register(n)) => {
                                             match parse_filltype(word2.to_vec()) {
-                                                Ok(fill) => (CommandInstruction::NoOp, hex_edit.concatenate_register(n, fill)),
+                                                Ok(fill) => (CommandInstruction::NoOp, hm.hex_edit.concatenate_register(n, fill)),
                                                 Err(s) => (CommandInstruction::NoOp, ActionResult::error(s))
                                             }
                                         },
@@ -251,6 +339,7 @@ fn execute_command(hex_edit: &mut HexEdit, action_stack: &mut ActionStack, comma
                             }
                         },
                         CommandToken::Keyword(CommandKeyword::Ins) => { // :ins [] []
+                            let mut hm = &mut editor_stack.editors[editor_stack.current];
                             let input = match &tokens[2] {
                                 CommandToken::Integer(word, _) => word,
                                 CommandToken::Word(word) => word,
@@ -274,16 +363,17 @@ fn execute_command(hex_edit: &mut HexEdit, action_stack: &mut ActionStack, comma
 
                         },
                         CommandToken::Keyword(CommandKeyword::RShift | CommandKeyword::LShift) => { // :rshft | lshft [] []
+                            let mut hm = &mut editor_stack.editors[editor_stack.current];
                             match (&tokens[1], &tokens[2]) {
                                 (CommandToken::Word(word), CommandToken::Integer(_, n)) => {
                                     match parse_filltype(word.to_vec()) { // TODO: use a different function here
                                         Ok(FillType::Register(register)) => {
                                             match &tokens[0] {
                                                 CommandToken::Keyword(CommandKeyword::RShift) => {
-                                                    (CommandInstruction::NoOp, hex_edit.shift_register(register, *n as i8))
+                                                    (CommandInstruction::NoOp, hm.hex_edit.shift_register(register, *n as i8))
                                                 },
                                                 CommandToken::Keyword(CommandKeyword::LShift) => {
-                                                    (CommandInstruction::NoOp, hex_edit.shift_register(register, -(*n as i8)))
+                                                    (CommandInstruction::NoOp, hm.hex_edit.shift_register(register, -(*n as i8)))
                                                 },
                                                 _ => (CommandInstruction::NoOp, ActionResult::error("Impossible state".to_string()))
                                             }
@@ -305,9 +395,16 @@ fn execute_command(hex_edit: &mut HexEdit, action_stack: &mut ActionStack, comma
         },
         // FIND IN FILE
         '/' => {
-            hex_edit.clear_find();
-            hex_edit.find(&command[1..].to_vec());
-            (CommandInstruction::NoOp, hex_edit.seek_next())
+            let mut hm = &mut editor_stack.editors[editor_stack.current];
+            hm.hex_edit.clear_find();
+            hm.hex_edit.find(&command[1..].to_vec());
+            (CommandInstruction::NoOp, hm.hex_edit.seek_next())
+        },
+        '?' => {
+            let mut hm = &mut editor_stack.editors[editor_stack.current];
+            hm.hex_edit.clear_find();
+            hm.hex_edit.find(&command[1..].to_vec());
+            (CommandInstruction::NoOp, hm.hex_edit.seek_prev())
         }
         _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
     }
@@ -367,38 +464,41 @@ impl MacroManager {
     }
 }
 
-fn execute_keystroke(hex_edit: &mut HexEdit, action_stack: &mut ActionStack, macro_manager: &mut MacroManager, keystroke: Vec<char>) -> ActionResult {
+fn execute_keystroke(editor_stack: &mut EditorStack, macro_manager: &mut MacroManager, keystroke: Vec<char>) -> ActionResult {
+
+    let mut hm = &mut editor_stack.editors[editor_stack.current];
+
     let tokens = parse_keystroke(&keystroke);
     match tokens.len() {
 
         1 => {
             match tokens[0] {
                 KeystrokeToken::Character('g') => {
-                    hex_edit.seek(SeekFrom::Start(0))
+                    hm.hex_edit.seek(SeekFrom::Start(0))
                 },
                 KeystrokeToken::Character('G') => {
-                    hex_edit.seek(SeekFrom::End(0))
+                    hm.hex_edit.seek(SeekFrom::End(0))
                 },
                 KeystrokeToken::Character('n') => {
-                    hex_edit.seek_next()
+                    hm.hex_edit.seek_next()
                 },
                 KeystrokeToken::Character('N') => {
-                    hex_edit.seek_prev()
+                    hm.hex_edit.seek_prev()
                 },
                 KeystrokeToken::Character('u') => {
-                    action_stack.undo(hex_edit)
+                    hm.action_stack.undo(&mut hm.hex_edit)
                 },
                 KeystrokeToken::Character('U') => {
-                    action_stack.redo(hex_edit)
+                    hm.action_stack.redo(&mut hm.hex_edit)
                 },
                 KeystrokeToken::Character('p') => {
-                    hex_edit.insert_register(0)
+                    hm.hex_edit.insert_register(0)
                 },
                 KeystrokeToken::Character('P') => {
-                    hex_edit.overwrite_register(0)
+                    hm.hex_edit.overwrite_register(0)
                 },
                 KeystrokeToken::Character('M') => {
-                    macro_manager.finish(&action_stack)
+                    macro_manager.finish(&hm.action_stack)
                 },
                 _ => {
                     let s: String = keystroke.iter().collect();
@@ -410,49 +510,49 @@ fn execute_keystroke(hex_edit: &mut HexEdit, action_stack: &mut ActionStack, mac
         2 => {
             match (tokens[0], tokens[1]) {
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('g')) => {
-                    hex_edit.seek(SeekFrom::Start(n as u64))
+                    hm.hex_edit.seek(SeekFrom::Start(n as u64))
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('G')) => {
-                    hex_edit.seek(SeekFrom::End(n as i64))
+                    hm.hex_edit.seek(SeekFrom::End(n as i64))
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('f')) => {
-                    hex_edit.insert_fill(n)
+                    hm.hex_edit.insert_fill(n)
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('F')) => {
-                    hex_edit.overwrite_fill(n)
+                    hm.hex_edit.overwrite_fill(n)
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('d')) => {
-                    hex_edit.delete_bytes(n)
+                    hm.hex_edit.delete_bytes(n)
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('s')) => {
-                    hex_edit.swap_bytes(n)
+                    hm.hex_edit.swap_bytes(n)
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('y')) => {
-                    hex_edit.yank(0, n)
+                    hm.hex_edit.yank(0, n)
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('p')) => {
-                    hex_edit.insert_register(n as u8)
+                    hm.hex_edit.insert_register(n as u8)
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('P')) => {
-                    hex_edit.overwrite_register(n as u8)
+                    hm.hex_edit.overwrite_register(n as u8)
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('u')) => {
-                    hex_edit.undo(n)
+                    hm.hex_edit.undo(n)
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('U')) => {
-                    hex_edit.redo(n)
+                    hm.hex_edit.redo(n)
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('m')) => {
-                    let res = macro_manager.run(n as u8, hex_edit);
+                    let res = macro_manager.run(n as u8, &mut hm.hex_edit);
                     match macro_manager.get(n as u8) { 
                         // Need to manually add the action here for now since I can't return a Rc
-                        Some(m) => action_stack.add(m),
+                        Some(m) => hm.action_stack.add(m),
                         None => ()
                     };
                     res
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('M')) => {
-                    macro_manager.start(n as u8, &action_stack)
+                    macro_manager.start(n as u8, &hm.action_stack)
                 },
                 _ => {
                     let s: String = keystroke.iter().collect();
@@ -464,10 +564,10 @@ fn execute_keystroke(hex_edit: &mut HexEdit, action_stack: &mut ActionStack, mac
         3 => {
             match (tokens[0], tokens[1], tokens[2]) {
                 (KeystrokeToken::Character('+'), KeystrokeToken::Integer(n), KeystrokeToken::Character('g')) => {
-                    hex_edit.seek(SeekFrom::Current(n as i64))
+                    hm.hex_edit.seek(SeekFrom::Current(n as i64))
                 },
                 (KeystrokeToken::Character('-'), KeystrokeToken::Integer(n), KeystrokeToken::Character('g')) => {
-                    hex_edit.seek(SeekFrom::Current(-(n as i64)))
+                    hm.hex_edit.seek(SeekFrom::Current(-(n as i64)))
                 },
                 _ => {
                     let s: String = keystroke.iter().collect();
@@ -479,7 +579,7 @@ fn execute_keystroke(hex_edit: &mut HexEdit, action_stack: &mut ActionStack, mac
         4 => {
             match (tokens[0], tokens[1], tokens[2], tokens[3]) {
                 (KeystrokeToken::Integer(n1), KeystrokeToken::Character('r'), KeystrokeToken::Integer(n2), KeystrokeToken::Character('y')) => {
-                    hex_edit.yank(n1 as u8, n2)
+                    hm.hex_edit.yank(n1 as u8, n2)
                 },
                 _ => {
                     let s: String = keystroke.iter().collect();
@@ -510,26 +610,24 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
 
     let mut current_keystroke = Vec::<char>::new();
 
-    let fm = FileManager::new(filename, file_manager_type, extract)?;
-
-    let mut hex_edit = HexEdit::new(fm, // File Manager
-                                    0, 0, // x, y
-                                    window.get_max_x() as usize - 1, window.get_max_y()as usize - 1, // width, height
-                                    16, true, true, // Line Length, Show Hex, Show ASCII
-                                    '.', "  ".to_string(), true); // Invalid ASCII, Separator, Capitalize Hex
-    
-    let mut action_stack = ActionStack::new(256);
+    let mut editors = EditorStack::new(0, 0, window.get_max_x() as usize - 1, window.get_max_y()as usize - 1);
+    editors.push(filename, file_manager_type, extract);
 
     let mut macro_manager = MacroManager::new();
 
-    let cursor_index_len = format!("{:x}", hex_edit.len()).len();
+    let mut cursor_index_len = 0;
+
+    {
+        let mut hm = &mut editors.editors[editors.current];
+
+        cursor_index_len = format!("{:x}", hm.hex_edit.len()).len();
+        hm.hex_edit.set_viewport_row(0)?;
+        hm.hex_edit.draw(&mut window);
+    }
 
     let mut line_entry = LineEntry::new(window.get_max_x() as usize - 2 - cursor_index_len, 0, window.get_max_y() as usize - 1);
 
     let mut manual_view = LargeTextView::new(0, 0, window.get_max_x() as usize - 1, window.get_max_y() as usize - 1, MANUAL_TEXT.to_string());
-
-    hex_edit.set_viewport_row(0)?;
-    hex_edit.draw(&mut window);
 
     loop {
         let ch_input = window.getch();
@@ -544,70 +642,73 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                 match ch_input {
                     Some(Input::KeyResize) => {
                         resize_term(0, 0);
-                        println!("{}", window.get_max_y());
-                        if let Err(err) = hex_edit.resize(window.get_max_x() as usize - 1, window.get_max_y()as usize - 1) {
-                            alert(err.to_string(), &mut window, &mut line_entry, &mut hex_edit);
-                        }
+                        editors.resize(window.get_max_x() as usize - 1, window.get_max_y()as usize - 1);
                         line_entry.reset_geometry(window.get_max_x() as usize - 2 - cursor_index_len, 0, window.get_max_y() as usize - 1);
-                        hex_edit.draw(&mut window);
                         line_entry.draw(&mut window);
+                        editors.editors[editors.current].hex_edit.update(&mut window, UpdateDescription::All); // TODO: Handle this result
                     },
                     Some(Input::Character('\u{1b}')) => {
                         current_keystroke = Vec::<char>::new();
                     },
                     Some(Input::Character('o')) => {
                         edit_state = EditState::Edit;
-                        hex_edit.set_edit_mode(EditMode::HexOverwrite);
-                        hex_edit.refresh_cursor(&mut window)
+                        editors.set_edit_mode(EditMode::HexOverwrite);
+                        editors.editors[editors.current].hex_edit.refresh_cursor(&mut window)
                     },
                     Some(Input::Character('O')) => {
                         edit_state = EditState::Edit;
-                        hex_edit.set_edit_mode(EditMode::AsciiOverwrite);
-                        hex_edit.refresh_cursor(&mut window)
+                        editors.set_edit_mode(EditMode::AsciiOverwrite);
+                        editors.editors[editors.current].hex_edit.refresh_cursor(&mut window)
                     },
                     Some(Input::Character('i')) => {
                         edit_state = EditState::Edit;
-                        hex_edit.set_edit_mode(EditMode::HexInsert);
-                        hex_edit.refresh_cursor(&mut window)
+                        editors.set_edit_mode(EditMode::HexInsert);
+                        editors.editors[editors.current].hex_edit.refresh_cursor(&mut window)
                     },
                     Some(Input::Character('I')) => {
                         edit_state = EditState::Edit;
-                        hex_edit.set_edit_mode(EditMode::AsciiInsert);
-                        hex_edit.refresh_cursor(&mut window)
+                        editors.set_edit_mode(EditMode::AsciiInsert);
+                        editors.editors[editors.current].hex_edit.refresh_cursor(&mut window)
                     },
                     Some(Input::Character(':')) | Some(Input::Character('/')) => {
                         edit_state = EditState::Command;
                         line_entry.addch(ch_input.unwrap()); 
                         line_entry.draw(&mut window);
                     }, 
+                    Some(Input::Character('t')) => {
+                        editors.tab();
+                        editors.editors[editors.current].hex_edit.update(&mut window, UpdateDescription::All); // TODO: Handle this result
+                    }
                     Some(Input::Character(c)) => {
                         current_keystroke.push(c);
                         if matches!(c, 'g' | 'G' | 'f' | 'F' | 'd' | 'y' | 'p' | 'P' | 'u' | 'U' | 'n' | 'N' | 's' | 'm' | 'M') {
-                            let result = execute_keystroke(&mut hex_edit, &mut action_stack, &mut macro_manager, current_keystroke);
+                            let result = execute_keystroke(&mut editors, &mut macro_manager, current_keystroke);
+                            let mut hm = &mut editors.editors[editors.current];
                             if let Some(err) = result.error {
-                                alert(err, &mut window, &mut line_entry, &mut hex_edit);
+                                alert(err, &mut window, &mut line_entry, &mut hm.hex_edit);
                             }
                             if let Some(action) = result.action {
-                                action_stack.add(action);
+                                hm.action_stack.add(action);
                             }
-                            let result = hex_edit.update(&mut window, result.update);
+                            let result = hm.hex_edit.update(&mut window, result.update);
                             if let Err(err) = result {
-                                alert(err.to_string(), &mut window, &mut line_entry, &mut hex_edit);
+                                alert(err.to_string(), &mut window, &mut line_entry, &mut hm.hex_edit);
                             }
                             current_keystroke = Vec::<char>::new();
                         }
                     },
                     Some(ch) if matches!(ch, Input::KeyRight | Input::KeyLeft | Input::KeyUp | Input::KeyDown | Input::KeyNPage | Input::KeyPPage | Input::KeyHome | Input::KeyEnd) => {
-                        let result = hex_edit.addch(ch);
+                        let mut hm = &mut editors.editors[editors.current];
+                        let result = hm.hex_edit.addch(ch);
                         if let Some(err) = result.error {
-                            alert(err, &mut window, &mut line_entry, &mut hex_edit);
+                            alert(err, &mut window, &mut line_entry, &mut hm.hex_edit);
                         }
                         if let Some(action) = result.action {
-                            action_stack.add(action);
+                            hm.action_stack.add(action);
                         }
-                        let result = hex_edit.update(&mut window, result.update);
+                        let result = hm.hex_edit.update(&mut window, result.update);
                         if let Err(err) = result {
-                            alert(err.to_string(), &mut window, &mut line_entry, &mut hex_edit);
+                            alert(err.to_string(), &mut window, &mut line_entry, &mut hm.hex_edit);
                         }
                     },
                     _ => {
@@ -616,6 +717,7 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                 }
             },
             EditState::Command => {
+
                 match ch_input {
                     Some(Input::KeyResize) => {
                         resize_term(0, 0);
@@ -625,16 +727,19 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                     },
                     Some(Input::Character('\n')) => {
                         //println!("Newline: {}", String::from_iter(line_entry.get_text()));
-                        let (instr, result) = execute_command(&mut hex_edit, &mut action_stack, line_entry.get_text());
+                        let (instr, result) = execute_command(&mut editors, line_entry.get_text());
+
+                        let mut hm = &mut editors.editors[editors.current];
+
                         if let Some(err) = result.error {
-                            alert(err, &mut window, &mut line_entry, &mut hex_edit);
+                            alert(err, &mut window, &mut line_entry, &mut hm.hex_edit);
                         }
                         if let Some(action) = result.action {
-                            action_stack.add(action);
+                            hm.action_stack.add(action);
                         }
-                        let result = hex_edit.update(&mut window, result.update);
+                        let result = hm.hex_edit.update(&mut window, result.update);
                         if let Err(err) = result {
-                            alert(err.to_string(), &mut window, &mut line_entry, &mut hex_edit);
+                            alert(err.to_string(), &mut window, &mut line_entry, &mut hm.hex_edit);
                         }
 
                         line_entry.clear();
@@ -643,7 +748,7 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                         match instr {
                             CommandInstruction::NoOp => {
                                 edit_state = EditState::Escaped;
-                                hex_edit.refresh_cursor(&mut window);
+                                hm.hex_edit.refresh_cursor(&mut window);
                             },
                             CommandInstruction::Exit => {
                                 endwin();
@@ -653,6 +758,12 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                                 edit_state = EditState::Manual;
                                 manual_view.draw(&mut window);
                             },
+                            CommandInstruction::Open(filename) => {
+                                if let Ok(i) = editors.push(filename, FileManagerType::ReadOnly, extract) {
+                                    editors.current = i;
+                                    editors.editors[editors.current].hex_edit.update(&mut window, UpdateDescription::All);
+                                }
+                            }
                             _ => () // This should never be hit
                         }
                     },
@@ -664,6 +775,7 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                 }
             },
             EditState::Edit => {
+                let mut hm = &mut editors.editors[editors.current];
                 match ch_input {
                     Some(Input::KeyResize) => {
                         resize_term(0, 0);
@@ -672,29 +784,30 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                         edit_state = EditState::Escaped;
                     },
                     Some(ch) => { 
-                        let result = hex_edit.addch(ch);
+                        let result = hm.hex_edit.addch(ch);
                         if let Some(err) = result.error {
-                            alert(err, &mut window, &mut line_entry, &mut hex_edit);
+                            alert(err, &mut window, &mut line_entry, &mut hm.hex_edit);
                         }
                         if let Some(action) = result.action {
-                            action_stack.add(action);
+                            hm.action_stack.add(action);
                         }
-                        let result = hex_edit.update(&mut window, result.update);
+                        let result = hm.hex_edit.update(&mut window, result.update);
                         if let Err(err) = result {
-                            alert(err.to_string(), &mut window, &mut line_entry, &mut hex_edit);
+                            alert(err.to_string(), &mut window, &mut line_entry, &mut hm.hex_edit);
                         }
                     },
                     None => ()
                 }
             },
             EditState::Manual => {
+                let mut hm = &mut editors.editors[editors.current];
                 match ch_input {
                     Some(Input::KeyResize) => {
                         resize_term(0, 0);
                     },
                     Some(Input::Character('\u{1b}')) => {
                         edit_state = EditState::Escaped;
-                        hex_edit.draw(&mut window);
+                        hm.hex_edit.draw(&mut window);
                         line_entry.draw(&mut window);
                     },
                     Some(ch) if matches!(ch, Input::KeyUp | Input::KeyDown) => {
@@ -709,8 +822,8 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
         let (y, x) = window.get_cur_yx();
 
         // Draw cursor index
-        let mut cursor_index_string: String = format!("{:0width$x}", hex_edit.get_cursor_pos(), width=cursor_index_len);
-        if hex_edit.get_capitalize_hex() {
+        let mut cursor_index_string: String = format!("{:0width$x}", editors.editors[editors.current].hex_edit.get_cursor_pos(), width=cursor_index_len);
+        if editors.editors[editors.current].hex_edit.get_capitalize_hex() {
             cursor_index_string = cursor_index_string.to_ascii_uppercase();
         }
         window.mvaddstr((window.get_max_y() as usize - 1) as i32,

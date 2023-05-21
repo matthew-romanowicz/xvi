@@ -33,6 +33,7 @@ pub enum CommandKeyword {
     Quit,
     ForceQuit,
     SaveAndQuit,
+    Open,
     Cat,
     Manual
 }
@@ -72,6 +73,7 @@ fn parse_command_keyword(word: Vec<char>) -> Option<CommandKeyword> {
         "q" => Some(CommandKeyword::Quit),
         "q!" => Some(CommandKeyword::ForceQuit),
         "x" | "wq" => Some(CommandKeyword::SaveAndQuit),
+        "open" => Some(CommandKeyword::Open),
         "cat" => Some(CommandKeyword::Cat),
         "man" => Some(CommandKeyword::Manual),
         _ => None
