@@ -1,6 +1,8 @@
 use std::fs::File;
 use std::io::{Read, Write, Seek, SeekFrom};
 
+use regex::bytes::RegexBuilder;
+
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
@@ -155,6 +157,10 @@ impl FileManager<'_> {
             swap_metadata: None,
             file_buffer
         })
+    }
+
+    pub fn set_block_size(&mut self, block_size: usize) {
+        self.block_size = block_size;
     }
 
     pub fn is_modified(&self) -> bool {
@@ -431,15 +437,19 @@ impl FileManager<'_> {
         }        
     }
 
-    pub fn line_label_len(&self) -> usize{
-        format!("{:x}", self.metadata.len()).len()
-    }
-
-    pub fn find(&self, expr: &Vec<u8>, ignore_case: bool) -> Vec<FindResult>{
+    pub fn find(&self, expr: &Vec<u8>, ignore_case: bool, use_regex: bool) -> Vec<FindResult>{
         let mut result = Vec::<FindResult>::new();
         match self.file_manager_type {
             FileManagerType::RamOnly => {
-                if ignore_case {
+                if use_regex {
+                    let re = RegexBuilder::new(std::str::from_utf8(expr).unwrap()).case_insensitive(ignore_case).build().unwrap();
+                    for cap in re.captures_iter(&self.file_buffer) {
+                        if let Some(m) = cap.get(0) {
+                            result.push(FindResult {start: m.start(), span: m.len()});
+                        }
+                    }
+
+                } else if ignore_case {
                     let slice = expr.as_slice().to_ascii_lowercase();
                     for (i, w) in self.file_buffer.windows(expr.len()).enumerate() {
                         if w.to_ascii_lowercase() == slice {

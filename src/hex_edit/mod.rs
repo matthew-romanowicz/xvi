@@ -29,6 +29,12 @@ pub enum EditMode {
     AsciiInsert
 }
 
+pub enum ShowType {
+    Off,
+    Dec,
+    Hex
+}
+
 pub struct Highlight {
     pub start: usize,
     pub span: usize
@@ -575,12 +581,14 @@ pub struct HexEdit<'a> {
     line_length: u8,
     show_hex: bool,
     show_ascii: bool,
+    show_lnum: ShowType,
     invalid_ascii_char: char,
     eof_ascii_char: char,
     eof_hex_char: char,
     separator: String,
     capitalize_hex: bool,
     ignore_case: bool,
+    use_regex: bool,
     fill: FillType,
     cursor_pos: usize,
     nibble: Nibble,
@@ -604,12 +612,14 @@ impl<'a> HexEdit<'a> {
             line_length,
             show_hex,
             show_ascii,
+            show_lnum: ShowType::Hex,
             invalid_ascii_char,
             eof_ascii_char: '~',
             eof_hex_char: '~',
             separator,
             capitalize_hex,
             ignore_case: false,
+            use_regex: true,
             fill: FillType::Bytes(vec![0]),
             cursor_pos: 0,
             nibble: Nibble::Left,
@@ -631,6 +641,11 @@ impl<'a> HexEdit<'a> {
             Ok(()) => ActionResult::empty(),
             Err(msg) => ActionResult::error(msg.to_string())
         }
+    }
+
+    pub fn set_block_size(&mut self, block_size: usize) -> ActionResult {
+        self.file_manager.set_block_size(block_size);
+        ActionResult::empty()
     }
 
     pub fn set_capitalize_hex(&mut self, caps: bool) -> ActionResult {
@@ -660,8 +675,18 @@ impl<'a> HexEdit<'a> {
         ActionResult::no_error(UpdateDescription::All)
     }
 
+    pub fn set_show_lnum(&mut self, show_lnum: ShowType) -> ActionResult {
+        self.show_lnum = show_lnum;
+        ActionResult::no_error(UpdateDescription::All)
+    }
+
     pub fn set_ignore_case(&mut self, ignore_case: bool) -> ActionResult {
         self.ignore_case = ignore_case;
+        ActionResult::no_error(UpdateDescription::NoUpdate)
+    }
+
+    pub fn set_use_regex(&mut self, use_regex: bool) -> ActionResult {
+        self.use_regex = use_regex;
         ActionResult::no_error(UpdateDescription::NoUpdate)
     }
 
@@ -686,7 +711,7 @@ impl<'a> HexEdit<'a> {
 
     pub fn find(&mut self, expr: &Vec<char>) -> ActionResult {
         let expr: Vec<u8> = expr.iter().map(|c| *c as u8).collect();
-        for res in self.file_manager.find(&expr, self.ignore_case) {
+        for res in self.file_manager.find(&expr, self.ignore_case, self.use_regex) {
             self.highlights.push(Highlight {start: res.start, span: res.span})
         }
         ActionResult::no_error(UpdateDescription::AttrsOnly)
@@ -1239,12 +1264,12 @@ impl<'a> HexEdit<'a> {
     }
 
     fn hex_cursor_x(&self) -> i32 {
-        let offset = self.file_manager.line_label_len() + self.separator.len();
+        let offset = self.line_label_len() + self.separator.len();
         (self.x + (self.cursor_pos % (self.line_length as usize))*3 + offset + match self.nibble {Nibble::Left => 0, Nibble::Right => 1}) as i32
     }
 
     fn ascii_cursor_x(&self) -> i32 {
-        let offset = self.file_manager.line_label_len() + self.separator.len() * 2 + (self.line_length as usize) * 3 - 1;
+        let offset = self.line_label_len() + self.separator.len() * 2 + (self.line_length as usize) * 3 - 1;
         (self.x + (self.cursor_pos % (self.line_length as usize)) + offset) as i32
     }
 
@@ -1471,8 +1496,8 @@ impl<'a> HexEdit<'a> {
         let start: usize = self.start_line * (self.line_length as usize);
         let end: usize = start + self.height * (self.line_length as usize);
 
-        let hex_offset = self.file_manager.line_label_len() + self.separator.len();
-        let ascii_offset = self.file_manager.line_label_len() + self.separator.len() * 2 + (self.line_length as usize) * 3 - 1;
+        let hex_offset = self.line_label_len() + self.separator.len();
+        let ascii_offset = self.line_label_len() + self.separator.len() * 2 + (self.line_length as usize) * 3 - 1;
 
         for h in self.highlights.iter() {
             //println!("{}, {}", h.start, h.span);
@@ -1539,6 +1564,25 @@ impl<'a> HexEdit<'a> {
         Ok(())
     }
 
+    fn line_label_len(&self) -> usize {
+        match self.show_lnum {
+            ShowType::Off => 0,
+            ShowType::Dec => format!("{}", self.len()).len(),
+            ShowType::Hex => format!("{:x}", self.len()).len()
+        }
+    }
+
+    fn format_line_label(&self, lnum: usize) -> String {
+        match self.show_lnum {
+            ShowType::Off => "".to_string(),
+            ShowType::Dec => format!("{:0width$}", lnum, width=self.line_label_len()),
+            ShowType::Hex => match self.capitalize_hex {
+                true => format!("{:0width$x}", lnum, width=self.line_label_len()).to_ascii_uppercase(),
+                false => format!("{:0width$x}", lnum, width=self.line_label_len())
+            }
+        }
+    }
+
     fn populate(&self, window: &mut Window, start: usize, end: usize) {
 
         let start = 0; //TODO: GET RID OF THIS!!!
@@ -1547,11 +1591,7 @@ impl<'a> HexEdit<'a> {
         let mut s = String::new();
         for i in start..end {
             //println!("{}", i);
-            if self.capitalize_hex {
-                s += &format!("{:0width$x}", (self.start_line + i) * (self.line_length as usize), width=self.file_manager.line_label_len()).to_ascii_uppercase();
-            } else {
-                s += &format!("{:0width$x}", (self.start_line + i) * (self.line_length as usize), width=self.file_manager.line_label_len());
-            }
+            s += &self.format_line_label((self.start_line + i) * (self.line_length as usize));
             s += &self.separator;
             if self.valid_bytes > i * (self.line_length as usize) {
                 s += &self.read_to_composite_line(&self.get_display_line(i), self.valid_bytes - i * (self.line_length as usize));

@@ -11,7 +11,7 @@ mod large_text_view;
 use crate::large_text_view::LargeTextView;
 
 mod hex_edit;
-use crate::hex_edit::{FileManager, Action, CompoundAction, ActionStack, EditMode, ActionResult, FillType, HexEdit};
+use crate::hex_edit::{FileManager, Action, CompoundAction, ActionStack, EditMode, ActionResult, ShowType, FillType, HexEdit};
 pub use crate::hex_edit::FileManagerType;
 
 mod parsers;
@@ -32,13 +32,16 @@ const MANUAL_TEXT: &str = "\\b\\cCOMMANDS
     :set caps [on|off]  =>  Toggle the case of display hexadecimal values
     :set hex [on|off]   =>  Toggle the hex display
     :set ascii [on|off] =>  Toggle the ascii display
+    :set lnum [hex|dec|off]  =>  [TODO] Toggle line number display/base
+    :set cnum [hex|dec|off]  =>  [TODO] Toggle cursor index display/base
     :set line #         =>  Set the number of bytes per line to #
     :set fill r#        =>  Set the fill value to the contents of register #
     :set fill x#        =>  Set the fill value to # (in hex)
     :set icase [on|off] =>  Set ignore case for find function
+    :set regex [on|off] =>  Enable/disable regular expressions for find function
     :set undo #         =>  Set the maximum length of the undo/redo stack to #
-    :set endian [big|little] => [TODO] Set the endianness that will be used in the 'ins' and 'ovr' commands
-    :set chunk #        => [TODO] Set the chunk size used to insert bytes in swap and live mode
+    :set endian [be|le] =>  [TODO] Set the endianness that will be used in the 'ins' and 'ovr' commands
+    :set chunk #        =>  Set the chunk size used to insert bytes in swap and live mode
 
 \\b  INSERTION/OVERWRITE:
     :ins fmt #          =>  [TODO] Insert # encoded as fmt at the cusor location
@@ -50,6 +53,9 @@ const MANUAL_TEXT: &str = "\\b\\cCOMMANDS
     :swap r#            =>  Swap the byte order of register #
     :rshft r# ##        =>  Bitshift the contens of register # right ## bits
     :lshft r# ##        =>  Bitshift the contens of register # left ## bits
+    :and r# r##         =>  [TODO] Perform bitwise AND on register # with register ##
+    :or r# r##          =>  [TODO] Perform bitwise OR on register # with register ##
+    :not r#             =>  [TODO] Perform bitwise NOT on regiser #
 
 \\b  READ/WRITE:
     :w                  =>  Write all changes to file
@@ -61,9 +67,14 @@ const MANUAL_TEXT: &str = "\\b\\cCOMMANDS
 
 \\b  FIND:
     /expr               =>  Find ASCII 'expr' in file
+    ?expr               =>  Backwards find ASCII 'expr' in file
+    \\expr              =>  Find hex 'expr' in file
+    |expr               =>  Backwards find hex 'expr' in file
 
 \\b  MISC:
     :clear undo         =>  Clear the contents of the undo/redo stack
+    :show hist          =>  [TODO] Show command history
+    :show m#            =>  [TODO] Show details about macro number #
     :man                =>  Show application manual (this text)
 
 
@@ -179,32 +190,33 @@ fn execute_command(hex_edit: &mut HexEdit, action_stack: &mut ActionStack, comma
                     match tokens[0] {
                         CommandToken::Keyword(CommandKeyword::Set) => { // :set [] []
                             match (&tokens[1], &tokens[2]) {
-                                (CommandToken::Keyword(CommandKeyword::Caps), CommandToken::Keyword(CommandKeyword::On)) => {
-                                    (CommandInstruction::NoOp, hex_edit.set_capitalize_hex(true))
+                                (CommandToken::Keyword(CommandKeyword::Caps), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::On | CommandKeyword::Off) => {
+                                    (CommandInstruction::NoOp, hex_edit.set_capitalize_hex(matches!(kwrd, CommandKeyword::On)))
                                 },
-                                (CommandToken::Keyword(CommandKeyword::Caps), CommandToken::Keyword(CommandKeyword::Off)) => {
-                                    (CommandInstruction::NoOp, hex_edit.set_capitalize_hex(false))
+                                (CommandToken::Keyword(CommandKeyword::Hex), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::On | CommandKeyword::Off) => {
+                                    (CommandInstruction::NoOp, hex_edit.set_show_hex(matches!(kwrd, CommandKeyword::On)))
                                 },
-                                (CommandToken::Keyword(CommandKeyword::Hex), CommandToken::Keyword(CommandKeyword::On)) => {
-                                    (CommandInstruction::NoOp, hex_edit.set_show_hex(true))
+                                (CommandToken::Keyword(CommandKeyword::Ascii), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::On | CommandKeyword::Off) => {
+                                    (CommandInstruction::NoOp, hex_edit.set_show_ascii(matches!(kwrd, CommandKeyword::On)))
                                 },
-                                (CommandToken::Keyword(CommandKeyword::Hex), CommandToken::Keyword(CommandKeyword::Off)) => {
-                                    (CommandInstruction::NoOp, hex_edit.set_show_hex(false))
+                                (CommandToken::Keyword(CommandKeyword::Icase), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::On | CommandKeyword::Off) => {
+                                    (CommandInstruction::NoOp, hex_edit.set_ignore_case(matches!(kwrd, CommandKeyword::On)))
                                 },
-                                (CommandToken::Keyword(CommandKeyword::Ascii), CommandToken::Keyword(CommandKeyword::On)) => {
-                                    (CommandInstruction::NoOp, hex_edit.set_show_ascii(true))
+                                (CommandToken::Keyword(CommandKeyword::Regex), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::On | CommandKeyword::Off) => {
+                                    (CommandInstruction::NoOp, hex_edit.set_use_regex(matches!(kwrd, CommandKeyword::On)))
                                 },
-                                (CommandToken::Keyword(CommandKeyword::Ascii), CommandToken::Keyword(CommandKeyword::Off)) => {
-                                    (CommandInstruction::NoOp, hex_edit.set_show_ascii(false))
-                                },
-                                (CommandToken::Keyword(CommandKeyword::Icase), CommandToken::Keyword(CommandKeyword::On)) => {
-                                    (CommandInstruction::NoOp, hex_edit.set_ignore_case(true))
-                                },
-                                (CommandToken::Keyword(CommandKeyword::Icase), CommandToken::Keyword(CommandKeyword::Off)) => {
-                                    (CommandInstruction::NoOp, hex_edit.set_ignore_case(false))
+                                (CommandToken::Keyword(CommandKeyword::LNum), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::Off | CommandKeyword::Hex | CommandKeyword::Dec) => {
+                                    (CommandInstruction::NoOp, hex_edit.set_show_lnum(match kwrd {
+                                        CommandKeyword::Off => ShowType::Off,
+                                        CommandKeyword::Dec => ShowType::Dec,
+                                        _ => ShowType::Hex,
+                                    }))
                                 },
                                 (CommandToken::Keyword(CommandKeyword::Line), CommandToken::Integer(_, n)) => {
                                     (CommandInstruction::NoOp, hex_edit.set_line_length(*n as u8))
+                                },
+                                (CommandToken::Keyword(CommandKeyword::Chunk), CommandToken::Integer(_, n)) => {
+                                    (CommandInstruction::NoOp, hex_edit.set_block_size(*n))
                                 },
                                 (CommandToken::Keyword(CommandKeyword::Undo), CommandToken::Integer(_, n)) => {
                                     action_stack.set_length(*n);
