@@ -119,8 +119,7 @@ const MANUAL_TEXT: &str = r"\b\cCOMMANDS
     M       =>  Stop recording macro
     #m      =>  Run #th macro";
 
-const BUGS: &str = "Macro executions can't be undone
-Inputting numbers greater than usize maximum in commands/keystrokes causes panic
+const BUGS: &str = "Inputting numbers greater than usize maximum in commands/keystrokes causes panic
 Setting line length to value greater than width of terminal causes panic
 ";
 
@@ -558,13 +557,7 @@ fn execute_keystroke(editor_stack: &mut EditorStack, macro_manager: &mut MacroMa
                     editor_stack.editors[editor_stack.current].hex_edit.redo(n)
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('m')) => {
-                    let res = macro_manager.run(n as u8, &mut editor_stack.editors[editor_stack.current].hex_edit);
-                    match macro_manager.get(n as u8) { 
-                        // Need to manually add the action here for now since I can't return a Rc
-                        Some(m) => editor_stack.editors[editor_stack.current].action_stack.add(m),
-                        None => ()
-                    };
-                    res
+                    macro_manager.run(n as u8, &mut editor_stack.editors[editor_stack.current].hex_edit)
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('M')) => {
                     macro_manager.start(n as u8, &editor_stack.editors[editor_stack.current].action_stack)

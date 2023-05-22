@@ -80,13 +80,6 @@ impl Action for InsertAction {
     fn size(&self) -> usize{
         self.bytes.len()
     }
-
-    // fn copy(&self) -> InsertAction {
-    //     InsertAction {
-    //         n_bytes: self.n_bytes,
-    //         bytes: self.bytes.to_vec()
-    //     }
-    // }
 }
 
 
@@ -116,11 +109,6 @@ impl Action for InsertFillAction {
         std::mem::size_of::<usize>()
     }
 
-    // fn copy(&self) -> InsertFillAction {
-    //     InsertFillAction {
-    //         n_bytes: self.n_bytes
-    //     }
-    // }
 }
 
 
@@ -413,16 +401,6 @@ pub struct CompoundAction {
     actions: Vec<Rc<dyn Action>>
 }
 
-// impl CompoundAction {
-//     pub fn new() -> CompoundAction {
-//         CompoundAction {actions: Vec::<Box<&dyn Action>>::new()}
-//     }
-
-//     pub fn add(&mut self, action: Box<&dyn Action>) {
-//         self.actions.push(action);
-//     }
-// }
-
 impl Action for CompoundAction {
     fn undo(&self, hex_edit: &mut HexEdit) -> ActionResult {
         for action in self.actions.iter().rev() {
@@ -432,10 +410,17 @@ impl Action for CompoundAction {
     }
 
     fn redo(&self, hex_edit: &mut HexEdit) -> ActionResult {
+        let mut res = Vec::<Rc<dyn Action>>::new();
         for action in self.actions.iter() {
-            (*action).redo(hex_edit);
+            if let Some(a) = (*action).redo(hex_edit).action {
+                res.push(Rc::clone(&a));
+            }
         }
-        ActionResult::no_error(UpdateDescription::All) // TODO make this more specific
+        ActionResult {
+            error: None,
+            update: UpdateDescription::All, // TODO make this more specific
+            action: Some(Rc::new(CompoundAction{actions: res}))
+        }
     }
 
     fn size(&self) -> usize {
