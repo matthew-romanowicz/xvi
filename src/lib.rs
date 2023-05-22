@@ -135,7 +135,8 @@ struct EditorStack<'a> {
     x: usize,
     y: usize,
     width: usize,
-    height: usize
+    height: usize,
+    clipboard_registers: [Vec<u8>; 32]
 }
 
 impl<'a> EditorStack<'a> {
@@ -146,7 +147,8 @@ impl<'a> EditorStack<'a> {
             x,
             y,
             width,
-            height
+            height,
+            clipboard_registers: Default::default()
         }
     }
 
@@ -466,12 +468,11 @@ impl MacroManager {
 
 fn execute_keystroke(editor_stack: &mut EditorStack, macro_manager: &mut MacroManager, keystroke: Vec<char>) -> ActionResult {
 
-    let mut hm = &mut editor_stack.editors[editor_stack.current];
-
     let tokens = parse_keystroke(&keystroke);
     match tokens.len() {
 
         1 => {
+            let mut hm = &mut editor_stack.editors[editor_stack.current];
             match tokens[0] {
                 KeystrokeToken::Character('g') => {
                     hm.hex_edit.seek(SeekFrom::Start(0))
@@ -510,49 +511,63 @@ fn execute_keystroke(editor_stack: &mut EditorStack, macro_manager: &mut MacroMa
         2 => {
             match (tokens[0], tokens[1]) {
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('g')) => {
-                    hm.hex_edit.seek(SeekFrom::Start(n as u64))
+                    editor_stack.editors[editor_stack.current].hex_edit.seek(SeekFrom::Start(n as u64))
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('G')) => {
-                    hm.hex_edit.seek(SeekFrom::End(n as i64))
+                    editor_stack.editors[editor_stack.current].hex_edit.seek(SeekFrom::End(n as i64))
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('f')) => {
-                    hm.hex_edit.insert_fill(n)
+                    editor_stack.editors[editor_stack.current].hex_edit.insert_fill(n)
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('F')) => {
-                    hm.hex_edit.overwrite_fill(n)
+                    editor_stack.editors[editor_stack.current].hex_edit.overwrite_fill(n)
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('d')) => {
-                    hm.hex_edit.delete_bytes(n)
+                    editor_stack.editors[editor_stack.current].hex_edit.delete_bytes(n)
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('s')) => {
-                    hm.hex_edit.swap_bytes(n)
+                    editor_stack.editors[editor_stack.current].hex_edit.swap_bytes(n)
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('y')) => {
-                    hm.hex_edit.yank(0, n)
+                    editor_stack.editors[editor_stack.current].hex_edit.yank(0, n)
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('p')) => {
-                    hm.hex_edit.insert_register(n as u8)
+                    if n < 32 {
+                        editor_stack.editors[editor_stack.current].hex_edit.insert_register(n as u8)
+                    } else if n < 64 {
+                        let v = editor_stack.clipboard_registers[n - 32].to_vec();
+                        editor_stack.editors[editor_stack.current].hex_edit.insert_bytes(&v)
+                    } else {
+                        ActionResult::error("Register indices must be less than 64".to_string())
+                    }
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('P')) => {
-                    hm.hex_edit.overwrite_register(n as u8)
+                    if n < 32 {
+                        editor_stack.editors[editor_stack.current].hex_edit.overwrite_register(n as u8)
+                    } else if n < 64 {
+                        let v = editor_stack.clipboard_registers[n - 32].to_vec();
+                        editor_stack.editors[editor_stack.current].hex_edit.overwrite_bytes(&v)
+                    } else {
+                        ActionResult::error("Register indices must be less than 64".to_string())
+                    }
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('u')) => {
-                    hm.hex_edit.undo(n)
+                    editor_stack.editors[editor_stack.current].hex_edit.undo(n)
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('U')) => {
-                    hm.hex_edit.redo(n)
+                    editor_stack.editors[editor_stack.current].hex_edit.redo(n)
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('m')) => {
-                    let res = macro_manager.run(n as u8, &mut hm.hex_edit);
+                    let res = macro_manager.run(n as u8, &mut editor_stack.editors[editor_stack.current].hex_edit);
                     match macro_manager.get(n as u8) { 
                         // Need to manually add the action here for now since I can't return a Rc
-                        Some(m) => hm.action_stack.add(m),
+                        Some(m) => editor_stack.editors[editor_stack.current].action_stack.add(m),
                         None => ()
                     };
                     res
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('M')) => {
-                    macro_manager.start(n as u8, &hm.action_stack)
+                    macro_manager.start(n as u8, &editor_stack.editors[editor_stack.current].action_stack)
                 },
                 _ => {
                     let s: String = keystroke.iter().collect();
@@ -562,12 +577,13 @@ fn execute_keystroke(editor_stack: &mut EditorStack, macro_manager: &mut MacroMa
         },
 
         3 => {
+            let mut hm = &mut editor_stack.editors[editor_stack.current].hex_edit;
             match (tokens[0], tokens[1], tokens[2]) {
                 (KeystrokeToken::Character('+'), KeystrokeToken::Integer(n), KeystrokeToken::Character('g')) => {
-                    hm.hex_edit.seek(SeekFrom::Current(n as i64))
+                    hm.seek(SeekFrom::Current(n as i64))
                 },
                 (KeystrokeToken::Character('-'), KeystrokeToken::Integer(n), KeystrokeToken::Character('g')) => {
-                    hm.hex_edit.seek(SeekFrom::Current(-(n as i64)))
+                    hm.seek(SeekFrom::Current(-(n as i64)))
                 },
                 _ => {
                     let s: String = keystroke.iter().collect();
@@ -579,7 +595,22 @@ fn execute_keystroke(editor_stack: &mut EditorStack, macro_manager: &mut MacroMa
         4 => {
             match (tokens[0], tokens[1], tokens[2], tokens[3]) {
                 (KeystrokeToken::Integer(n1), KeystrokeToken::Character('r'), KeystrokeToken::Integer(n2), KeystrokeToken::Character('y')) => {
-                    hm.hex_edit.yank(n1 as u8, n2)
+                    if n1 < 32 {
+                        editor_stack.editors[editor_stack.current].hex_edit.yank(n1 as u8, n2)
+                    } else if n1 < 64 {
+                        let pos = editor_stack.editors[editor_stack.current].hex_edit.get_cursor_pos();
+                        let mut v: Vec<u8> = vec![0;n2];
+                        let res = editor_stack.editors[editor_stack.current].hex_edit.get_bytes(pos, &mut v);
+                        match res {
+                            Ok(_) => { // TODO: Check if this is less han n2
+                                editor_stack.clipboard_registers[n1 - 32] = v.to_vec();
+                                ActionResult::empty()
+                            },
+                            Err(msg) => ActionResult::error(msg.to_string())
+                        } 
+                    } else {
+                        ActionResult::error("Register indices must be less than 64".to_string())
+                    }
                 },
                 _ => {
                     let s: String = keystroke.iter().collect();

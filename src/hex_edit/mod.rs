@@ -56,15 +56,13 @@ pub trait Action {
 
 
 pub struct InsertAction {
-    n_bytes: usize,
     bytes: Vec<u8>
 }
 
 impl InsertAction {
-    fn new(n_bytes: usize) -> InsertAction {
+    fn new(bytes: Vec<u8>) -> InsertAction {
         InsertAction {
-            n_bytes,
-            bytes: Vec::<u8>::new()
+            bytes
         }
     }
 }
@@ -72,7 +70,7 @@ impl InsertAction {
 impl Action for InsertAction {
     fn undo(&self, hex_edit: &mut HexEdit) -> ActionResult {
         println!("Undoing!");
-        hex_edit.delete_bytes(self.n_bytes) 
+        hex_edit.delete_bytes(self.bytes.len()) 
     }
 
     fn redo(&self, hex_edit: &mut HexEdit) -> ActionResult {
@@ -80,7 +78,7 @@ impl Action for InsertAction {
     }
 
     fn size(&self) -> usize{
-        2*std::mem::size_of::<usize>() + self.bytes.len()
+        self.bytes.len()
     }
 
     // fn copy(&self) -> InsertAction {
@@ -1000,15 +998,21 @@ impl<'a> HexEdit<'a> {
             Ok(_) => ActionResult {
                 error: None,
                 update: UpdateDescription::After(start_byte),
-                action: Some(Rc::new(InsertAction::new(bytes.len())))
+                action: Some(Rc::new(InsertAction::new(bytes.to_vec())))
             },
             Err(msg) => ActionResult::error(msg.to_string())
         }
     }
 
     pub fn overwrite_bytes(&mut self, bytes: &Vec<u8>) -> ActionResult {
-        match self.file_manager.overwrite_bytes(self.cursor_pos, bytes) { // TODO make this return an action
-            Ok(()) => ActionResult::no_error(UpdateDescription::Range(self.cursor_pos, self.cursor_pos + bytes.len())),
+        let mut original_bytes: Vec<u8> = vec![0; bytes.len()];
+        self.file_manager.get_bytes(self.cursor_pos, &mut original_bytes); // TODO take care of this ActionResult
+        match self.file_manager.overwrite_bytes(self.cursor_pos, bytes) {
+            Ok(()) => ActionResult {
+                error: None,
+                update: UpdateDescription::Range(self.cursor_pos, self.cursor_pos + bytes.len()),
+                action: Some(Rc::new(OverwriteAction::new(bytes.to_vec(), original_bytes)))
+            },
             Err(msg) => ActionResult::error(msg.to_string())
         }
     }
