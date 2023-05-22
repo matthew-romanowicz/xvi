@@ -7,9 +7,81 @@ pub struct LineEntry {
     text: Vec::<char>,
     cursor_pos: usize,
     offset: usize,
+    path_autocomplete: bool,
+    autocomplete_options: Option<Vec<String>>,
+    autocomplete_index: usize,
+    autocomplete_range: (usize, usize),
+    original_text: Vec<char>,
     alert_text: Vec<char>,
     alert_active: bool
 }
+
+fn get_word_range(text: &Vec<char>, index: usize) -> Option<(usize, usize)> {
+    let mut in_quotes: bool = false;
+    let mut word_start: usize = 0;
+    for (i, c) in text.iter().enumerate() {
+        match c {
+            ' ' if !in_quotes => {
+                if i >= index {
+                    return Some((word_start, i))
+                } else {
+                    word_start = i + 1;
+                }
+            },
+            '"' => {
+                in_quotes = !in_quotes;
+            },
+            _ => ()
+        }
+    }
+
+    if text.len() >= index {
+        Some((word_start, text.len()))
+    } else {
+        None
+    }
+}
+
+fn autocomplete_path(text: &String) -> Vec<String> {
+    let mut res = Vec::<String>::new();
+
+    let mut path = std::path::Path::new(text);
+    let mut fname = "";
+
+    match path.file_name() {
+        Some(f) => {
+            if !(text.ends_with(r"\") || text.ends_with(r"/")) {
+                fname = f.to_str().unwrap();
+                println!("{}", fname);
+                match path.parent() {
+                    Some(p) => {
+                        path = p;
+                    },
+                    None => return res
+                }
+            }
+        },
+        None => return res
+    }
+
+    match std::fs::read_dir(path) {
+        Ok(reader) => {
+            for subpath in reader {
+                if let Ok(entry) = subpath {
+                    if let Some(fname2) = entry.path().file_name() {
+                        if fname2.to_str().unwrap().starts_with(fname) {
+                            res.push(entry.path().display().to_string());
+                        }
+                    }
+                }
+            }
+            res
+        },
+        _ => res
+    }
+
+}
+
 
 impl LineEntry {
 
@@ -21,6 +93,11 @@ impl LineEntry {
             text: Vec::<char>::new(),
             cursor_pos: 0,
             offset: 0,
+            path_autocomplete: true,
+            autocomplete_options: None,
+            autocomplete_index: 0,
+            autocomplete_range: (0, 0),
+            original_text: Vec::<char>::new(),
             alert_text: Vec::<char>::new(),
             alert_active: false
         }
@@ -79,6 +156,9 @@ impl LineEntry {
     pub fn addch(&mut self, ch: Input) {
         //println!("cursor_pos={}, offset={}, text.len={}, length={}", self.cursor_pos, self.offset, self.text.len(), self.length);
         self.alert_active = false;
+        if !matches!(ch, Input::Character('\t')) {
+            self.autocomplete_options = None;
+        }
         match ch {
             Input::KeyLeft => {
                 self.retreat_cursor();
@@ -153,6 +233,43 @@ impl LineEntry {
                         self.cursor_pos += diff;
                     }
                 }
+            },
+            Input::Character('\t') => {
+                match &self.autocomplete_options {
+                    Some(v) => {
+                        self.autocomplete_index = (self.autocomplete_index + 1) % v.len();
+                        let s = &v[self.autocomplete_index];
+                        self.text = self.original_text[..self.autocomplete_range.0].to_vec();
+                        self.text.extend(&s.chars().collect::<Vec<char>>());
+                        self.text.extend(&self.original_text[self.autocomplete_range.1..]);
+                        self.cursor_pos = self.autocomplete_range.0 + s.len() - self.offset; // TODO: Make this more safe
+
+                    },
+                    None => {
+                        match get_word_range(&self.text, self.cursor_pos + self.offset) {
+                            Some((a, b)) => {
+                                self.autocomplete_options = Some(autocomplete_path(&self.text[a..b].iter().collect::<String>()));
+                                if let Some(v) = &self.autocomplete_options {
+                                    if v.len() == 0 {
+                                        self.autocomplete_options = None;
+                                    } else {
+                                        self.original_text = self.text.to_vec();
+                                        self.autocomplete_range = (a, b);
+                                        self.autocomplete_index = 0;
+                                        let s = &v[self.autocomplete_index];
+                                        self.text = self.original_text[..self.autocomplete_range.0].to_vec();
+                                        self.text.extend(&s.chars().collect::<Vec<char>>());
+                                        self.text.extend(&self.original_text[self.autocomplete_range.1..]);
+                                        self.cursor_pos = self.autocomplete_range.0 + s.len() - self.offset; // TODO: Make this more safe
+                                    }
+                                }
+
+                            },
+                            None => println!("Nothing found")
+                        }
+                    }
+                }
+
             },
             Input::Character(c) => {
                 self.text.insert(self.cursor_pos + self.offset, c);
