@@ -427,7 +427,6 @@ impl SeekAction {
 
 impl Action for SeekAction {
     fn undo(&self, hex_edit: &mut HexEdit) -> ActionResult {
-        println!("Undoing seek");
         hex_edit.set_cursor_pos(self.original_index)
     }
 
@@ -518,7 +517,6 @@ impl ActionStack {
     }
 
     pub fn undo(&mut self, hex_edit: &mut HexEdit) -> ActionResult {
-        println!("Undoing? {}", self.index);
         if self.index >= 1 {
             self.index -= 1;
             let mut res = self.actions[self.index].undo(hex_edit);
@@ -1088,18 +1086,6 @@ impl<'a> HexEdit<'a> {
 
     pub fn get_byte(&mut self, index: usize) -> Option<u8> {
         self.file_manager.get_byte(index)
-    }
-
-    pub fn undo(&mut self, n: usize) -> ActionResult {
-        //self.action_stack.undo(self);
-        println!("Undoing {} actions", n); //TODO
-        ActionResult::empty()
-    }
-
-    pub fn redo(&mut self, n: usize) -> ActionResult {
-        //self.action_stack.redo(self);
-        println!("Redoing {} actions", n); //TODO
-        ActionResult::empty()
     }
 
     pub fn resize(&mut self, width: usize, height: usize) {

@@ -1,3 +1,4 @@
+#[derive(Copy, Clone)]
 pub enum Endianness {
     Big,
     Little,
@@ -139,6 +140,7 @@ macro_rules! str_res {
 
 pub fn to_bytes(input: &Vec<char>, datatype: DataType) -> Result<Vec<u8>, String> {
     let s: String = input.iter().collect::<String>();
+    println!("Number: {:?}", str_res!(s.parse::<f32>()));
     match &datatype.end {
         Endianness::Big => {
             match &datatype.fmt {

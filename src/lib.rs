@@ -40,12 +40,12 @@ const MANUAL_TEXT: &str = r"\b\cCOMMANDS
     :set icase [on|off] =>  Set ignore case for find function
     :set regex [on|off] =>  Enable/disable regular expressions for find function
     :set undo #         =>  Set the maximum length of the undo/redo stack to #
-    :set endian [be|le] =>  [TODO] Set the endianness that will be used in the 'ins' and 'ovr' commands
+    :set endian [be|le] =>  Set the endianness that will be used in the 'ins' and 'ovr' commands
     :set chunk #        =>  Set the chunk size used to insert bytes in swap and live mode
 
 \b  INSERTION/OVERWRITE:
-    :ins fmt #          =>  [TODO] Insert # encoded as fmt at the cusor location
-    :ovr fmt #          =>  [TODO] Overwrite # encoded as fmt at the cusor location
+    :ins fmt #          =>  Insert # encoded as fmt at the cusor location
+    :ovr fmt #          =>  Overwrite # encoded as fmt at the cusor location
 
 \b  REGISTER OPERATIONS:
     :cat r# r##         =>  Concatenate contents of listed register ## into register #
@@ -113,8 +113,6 @@ const MANUAL_TEXT: &str = r"\b\cCOMMANDS
 
     u       =>  Undo last action
     U       =>  Redo last action
-    #u      =>  [TODO] Undo last # actions
-    #U      =>  [TODO] Redo last # actions
     #M      =>  Start recording #th macro
     M       =>  Stop recording macro
     #m      =>  Run #th macro";
@@ -135,7 +133,8 @@ struct EditorStack<'a> {
     y: usize,
     width: usize,
     height: usize,
-    clipboard_registers: [Vec<u8>; 32]
+    clipboard_registers: [Vec<u8>; 32],
+    endianness: Endianness
 }
 
 impl<'a> EditorStack<'a> {
@@ -147,7 +146,8 @@ impl<'a> EditorStack<'a> {
             y,
             width,
             height,
-            clipboard_registers: Default::default()
+            clipboard_registers: Default::default(),
+            endianness: Endianness::Network
         }
     }
 
@@ -266,14 +266,13 @@ fn execute_command(editor_stack: &mut EditorStack, command: Vec<char>) -> (Comma
                             (CommandInstruction::NoOp, ActionResult::empty())
                         },
                         (CommandToken::Keyword(CommandKeyword::Open), CommandToken::Word(word)) => {
-                            println!("Opening!");
                             (CommandInstruction::Open(word.iter().collect()), ActionResult::empty())
                         },
                         _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
                     }
                 }
                 3 => {
-                    match tokens[0] {
+                    match &tokens[0] {
                         CommandToken::Keyword(CommandKeyword::Set) => { // :set [] []
                             match (&tokens[1], &tokens[2]) {
                                 (CommandToken::Keyword(CommandKeyword::Caps), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::On | CommandKeyword::Off) => {
@@ -297,6 +296,15 @@ fn execute_command(editor_stack: &mut EditorStack, command: Vec<char>) -> (Comma
                                         CommandKeyword::Dec => ShowType::Dec,
                                         _ => ShowType::Hex,
                                     })))
+                                },
+                                (CommandToken::Keyword(CommandKeyword::Endian), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::BigEndian | CommandKeyword::LittleEndian | CommandKeyword::NetworkEndian) => {
+                                    editor_stack.endianness = match kwrd {
+                                        CommandKeyword::BigEndian => Endianness::Big,
+                                        CommandKeyword::LittleEndian => Endianness::Little,
+                                        CommandKeyword::NetworkEndian => Endianness::Network,
+                                        _ => return (CommandInstruction::NoOp, ActionResult::error("Impossible state".to_string()))
+                                    };
+                                    (CommandInstruction::NoOp, ActionResult::empty())
                                 },
                                 (CommandToken::Keyword(CommandKeyword::Line), CommandToken::Integer(_, n)) => {
                                     (CommandInstruction::NoOp, editor_stack.apply(|h| h.set_line_length(*n as u8)))
@@ -339,7 +347,7 @@ fn execute_command(editor_stack: &mut EditorStack, command: Vec<char>) -> (Comma
                                 _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
                             }
                         },
-                        CommandToken::Keyword(CommandKeyword::Ins) => { // :ins [] []
+                        CommandToken::Keyword(kwrd) if matches!(kwrd, CommandKeyword::Ins | CommandKeyword::Ovr) => { // :ins | ovr [] []
                             let mut hm = &mut editor_stack.editors[editor_stack.current];
                             let input = match &tokens[2] {
                                 CommandToken::Integer(word, _) => word,
@@ -356,11 +364,23 @@ fn execute_command(editor_stack: &mut EditorStack, command: Vec<char>) -> (Comma
                                 CommandToken::Keyword(CommandKeyword::I16) => BinaryFormat::IInt(IIntFormat::I16),
                                 CommandToken::Keyword(CommandKeyword::I32) => BinaryFormat::IInt(IIntFormat::I32),
                                 CommandToken::Keyword(CommandKeyword::I64) => BinaryFormat::IInt(IIntFormat::I64),
+                                CommandToken::Keyword(CommandKeyword::F32) => BinaryFormat::Float(FloatFormat::F32),
+                                CommandToken::Keyword(CommandKeyword::F64) => BinaryFormat::Float(FloatFormat::F64),
                                 _ => return (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
                             };
 
-                            println!("U32: {:?}", to_bytes(input, DataType {fmt, end: Endianness::Big}));
-                            (CommandInstruction::NoOp, ActionResult::empty())
+                            //println!("U32: {:?}", to_bytes(input, DataType {fmt, end: Endianness::Big}));
+                            match to_bytes(input, DataType {fmt, end: editor_stack.endianness}){
+                                Ok(bytes) => {
+                                    match kwrd {
+                                        CommandKeyword::Ins => (CommandInstruction::NoOp, hm.hex_edit.insert_bytes(&bytes)),
+                                        CommandKeyword::Ovr => (CommandInstruction::NoOp, hm.hex_edit.overwrite_bytes(&bytes)),
+                                        _ => (CommandInstruction::NoOp, ActionResult::error("Impossible state".to_string()))
+                                    }
+                                },
+                                Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg))
+                            }
+                            
 
                         },
                         CommandToken::Keyword(CommandKeyword::RShift | CommandKeyword::LShift) => { // :rshft | lshft [] []
@@ -549,12 +569,6 @@ fn execute_keystroke(editor_stack: &mut EditorStack, macro_manager: &mut MacroMa
                     } else {
                         ActionResult::error("Register indices must be less than 64".to_string())
                     }
-                },
-                (KeystrokeToken::Integer(n), KeystrokeToken::Character('u')) => {
-                    editor_stack.editors[editor_stack.current].hex_edit.undo(n)
-                },
-                (KeystrokeToken::Integer(n), KeystrokeToken::Character('U')) => {
-                    editor_stack.editors[editor_stack.current].hex_edit.redo(n)
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('m')) => {
                     macro_manager.run(n as u8, &mut editor_stack.editors[editor_stack.current].hex_edit)
