@@ -367,6 +367,49 @@ impl Action for ShiftRegisterAction {
     }
 }
 
+struct ConcatenateRegisterAction {
+    register: u8,
+    fill: FillType
+}
+
+impl ConcatenateRegisterAction {
+    fn new(register: u8, fill: FillType) -> ConcatenateRegisterAction {
+        ConcatenateRegisterAction {
+            register,
+            fill
+        }
+    }
+}
+
+impl Action for ConcatenateRegisterAction {
+    fn undo(&self, hex_edit: &mut HexEdit) -> ActionResult {
+        let length = match &self.fill {
+            FillType::Register(n) => hex_edit.register_len(*n),
+            FillType::Bytes(v) => v.len()
+        };
+        if length <= hex_edit.register_len(self.register) {
+            match hex_edit.get_register(self.register) {
+                Ok(v) => hex_edit.set_register(self.register, &v[0..(hex_edit.register_len(self.register) - length)].to_vec()),
+                Err(msg) => ActionResult::error(msg)
+            }
+        } else {
+            ActionResult::error("Register does not have enough bytes to truncate".to_string())
+        }
+    }
+
+    fn redo(&self, hex_edit: &mut HexEdit) -> ActionResult {
+        let fill = match &self.fill {
+            FillType::Register(n) => FillType::Register(*n),
+            FillType::Bytes(v) => FillType::Bytes(v.to_vec())
+        };
+        hex_edit.concatenate_register(self.register, fill)
+    }
+
+    fn size(&self) -> usize{
+        16 // TODO this is wrong
+    }
+}
+
 
 pub struct SeekAction {
     original_index: usize,
@@ -756,15 +799,19 @@ impl<'a> HexEdit<'a> {
         if register >= 32 {
             return ActionResult::error("Register number must be less than 32".to_string())
         }
-        match fill {
+        match &fill {
             FillType::Bytes(bytes) => {
                 self.clipboard_registers[register as usize].extend(bytes.to_vec()); // TODO add action to this
             },
             FillType::Register(n) => {
-                self.clipboard_registers[register as usize].extend(self.clipboard_registers[n as usize].to_vec()); // TODO add action to this
+                self.clipboard_registers[register as usize].extend(self.clipboard_registers[*n as usize].to_vec()); // TODO add action to this
             }
         }
-        ActionResult::no_error(UpdateDescription::NoUpdate)
+        ActionResult {
+            error: None,
+            update: UpdateDescription::NoUpdate,
+            action: Some(Rc::new(ConcatenateRegisterAction::new(register, fill)))
+        }
     }
 
     pub fn swap_register(&mut self, register: u8) -> ActionResult {
@@ -913,6 +960,14 @@ impl<'a> HexEdit<'a> {
             }
         } else {
             ActionResult::error("Registers must be less than 32".to_string())
+        }
+    }
+
+    fn get_register(&mut self, register: u8) -> Result<Vec<u8>, String>{
+        if register < 32 {
+            Ok(self.clipboard_registers[register as usize].to_vec())
+        } else {
+            Err("Registers must be less than 32".to_string())
         }
     }
 
