@@ -50,12 +50,13 @@ const MANUAL_TEXT: &str = r"\b\cCOMMANDS
 \b  REGISTER OPERATIONS:
     :cat r# r##         =>  Concatenate contents of listed register ## into register #
     :cat r# x##         =>  Concatenate ## (in hex) into register #
+    :clear r#           =>  Delete the contents of register #
     :swap r#            =>  Swap the byte order of register #
     :rshft r# ##        =>  Bitshift the contens of register # right ## bits
     :lshft r# ##        =>  Bitshift the contens of register # left ## bits
     :and r# r##         =>  [TODO] Perform bitwise AND on register # with register ##
     :or r# r##          =>  [TODO] Perform bitwise OR on register # with register ##
-    :not r#             =>  [TODO] Perform bitwise NOT on regiser #
+    :not r#             =>  Perform bitwise NOT on regiser #
 
 \b  READ/WRITE:
     :w                  =>  Write all changes to file
@@ -250,13 +251,42 @@ fn execute_command(editor_stack: &mut EditorStack, command: Vec<char>) -> (Comma
                     }
                 }
                 2 => {
-                    let mut hm = &mut editor_stack.editors[editor_stack.current];
                     match (&tokens[0], &tokens[1]) {
                         (CommandToken::Keyword(CommandKeyword::Swap), CommandToken::Register(n)) => {
-                            (CommandInstruction::NoOp, hm.hex_edit.swap_register(*n as u8))
+                            if *n < 32 {
+                                (CommandInstruction::NoOp, editor_stack.editors[editor_stack.current].hex_edit.swap_register(*n as u8))
+                            } else if *n < 64 {
+                                editor_stack.clipboard_registers[*n - 32].reverse();
+                                (CommandInstruction::NoOp, ActionResult::empty())
+                            } else {
+                                (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
+                            }
+                            
+                        },
+                        (CommandToken::Keyword(CommandKeyword::Not), CommandToken::Register(n)) => {
+                            if *n < 32 {
+                                (CommandInstruction::NoOp, editor_stack.editors[editor_stack.current].hex_edit.invert_register(*n as u8))
+                            } else if *n < 64 {
+                                let new = editor_stack.clipboard_registers[*n - 32].iter().map(|x| !x).collect();
+                                editor_stack.clipboard_registers[*n - 32] = new;
+                                (CommandInstruction::NoOp, ActionResult::empty())
+                            } else {
+                                (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
+                            }
+                            
+                        },
+                        (CommandToken::Keyword(CommandKeyword::Clear), CommandToken::Register(n)) => {
+                            if *n < 32 {
+                                (CommandInstruction::NoOp, editor_stack.editors[editor_stack.current].hex_edit.set_register(*n as u8, &Vec::<u8>::new()))
+                            } else if *n < 64 {
+                                editor_stack.clipboard_registers[*n - 32] = Vec::<u8>::new();
+                                (CommandInstruction::NoOp, ActionResult::empty())
+                            } else {
+                                (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
+                            }
                         },
                         (CommandToken::Keyword(CommandKeyword::Clear), CommandToken::Keyword(CommandKeyword::Undo)) => {
-                            hm.action_stack.clear();
+                            editor_stack.editors[editor_stack.current].action_stack.clear();
                             (CommandInstruction::NoOp, ActionResult::empty())
                         },
                         (CommandToken::Keyword(CommandKeyword::Open), CommandToken::Word(word)) => {
@@ -325,14 +355,46 @@ fn execute_command(editor_stack: &mut EditorStack, command: Vec<char>) -> (Comma
                             }
                         },
                         CommandToken::Keyword(CommandKeyword::Cat) => { // :cat [] []
-                            let mut hm = &mut editor_stack.editors[editor_stack.current];
                             match (&tokens[1], &tokens[2]) {
                                 (CommandToken::Register(n1), CommandToken::Register(n2)) => {
-                                    (CommandInstruction::NoOp, hm.hex_edit.concatenate_register(*n1 as u8, FillType::Register(*n2 as u8)))
+                                    if *n1 < 32 {
+                                        if *n2 < 32 {
+                                            (CommandInstruction::NoOp, editor_stack.editors[editor_stack.current].hex_edit.concatenate_register(*n1 as u8, FillType::Register(*n2 as u8)))
+                                        } else if *n2 < 64 { 
+                                            let fill = FillType::Bytes(editor_stack.clipboard_registers[*n2 - 32].to_vec());
+                                            (CommandInstruction::NoOp, editor_stack.editors[editor_stack.current].hex_edit.concatenate_register(*n1 as u8, fill))
+                                        } else {
+                                            (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
+                                        }
+                                    } else if *n1 < 64 {
+                                        if *n2 < 32 {
+                                            let fill = editor_stack.editors[editor_stack.current].hex_edit.get_register(*n2 as u8).unwrap().to_vec();
+                                            editor_stack.clipboard_registers[*n1 - 32].extend(fill);
+                                            (CommandInstruction::NoOp, ActionResult::empty())
+                                        } else if *n2 < 64 { 
+                                            let fill = editor_stack.clipboard_registers[*n1 - 32].to_vec();
+                                            editor_stack.clipboard_registers[*n1 - 32].extend(fill);
+                                            (CommandInstruction::NoOp, ActionResult::empty())
+                                        } else {
+                                            (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
+                                        }
+                                    } else {
+                                        (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
+                                    }
+                                    
                                 },
                                 (CommandToken::Register(n), CommandToken::Word(word)) => {
                                     match parse_bytes(word) {
-                                        Ok(v) => (CommandInstruction::NoOp, hm.hex_edit.concatenate_register(*n as u8, FillType::Bytes(v))),
+                                        Ok(v) => {
+                                            if *n < 32 {
+                                                (CommandInstruction::NoOp, editor_stack.editors[editor_stack.current].hex_edit.concatenate_register(*n as u8, FillType::Bytes(v)))
+                                            } else if *n < 64 {
+                                                editor_stack.clipboard_registers[*n - 32].extend(v);
+                                                (CommandInstruction::NoOp, ActionResult::empty())
+                                            } else {
+                                                (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
+                                            }
+                                        },
                                         Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg))
                                     }
                                 },
@@ -377,7 +439,7 @@ fn execute_command(editor_stack: &mut EditorStack, command: Vec<char>) -> (Comma
                         CommandToken::Keyword(CommandKeyword::RShift | CommandKeyword::LShift) => { // :rshft | lshft [] []
                             let mut hm = &mut editor_stack.editors[editor_stack.current];
                             match (&tokens[1], &tokens[2]) {
-                                (CommandToken::Register(register), CommandToken::Integer(_, n)) => {
+                                (CommandToken::Register(register), CommandToken::Integer(_, n)) => { // TODO: Make this work for registers 32-63
                                     match &tokens[0] {
                                         CommandToken::Keyword(CommandKeyword::RShift) => {
                                             (CommandInstruction::NoOp, hm.hex_edit.shift_register(*register as u8, *n as i8))

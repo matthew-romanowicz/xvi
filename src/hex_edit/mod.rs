@@ -311,6 +311,36 @@ impl Action for YankAction {
     }
 }
 
+pub struct SetRegisterAction {
+    register: u8,
+    new_bytes: Vec<u8>,
+    original_bytes: Vec<u8>
+}
+
+impl SetRegisterAction {
+    pub fn new(register: u8, new_bytes: Vec<u8>, original_bytes: Vec<u8>) -> SetRegisterAction {
+        SetRegisterAction {
+            register,
+            new_bytes,
+            original_bytes
+        }
+    }
+}
+
+impl Action for SetRegisterAction {
+    fn undo(&self, hex_edit: &mut HexEdit) -> ActionResult {
+        hex_edit.set_register(self.register, &self.original_bytes)
+    }
+
+    fn redo(&self, hex_edit: &mut HexEdit) -> ActionResult {
+        hex_edit.set_register(self.register, &self.new_bytes)
+    }
+
+    fn size(&self) -> usize{
+        1 + std::mem::size_of::<usize>() + self.original_bytes.len()
+    }
+}
+
 pub struct SwapRegisterAction {
     register: u8
 }
@@ -331,6 +361,32 @@ impl Action for SwapRegisterAction {
 
     fn redo(&self, hex_edit: &mut HexEdit) -> ActionResult {
         hex_edit.swap_register(self.register)
+    }
+
+    fn size(&self) -> usize{
+        1
+    }
+}
+
+pub struct InvertRegisterAction {
+    register: u8
+}
+
+impl InvertRegisterAction {
+    pub fn new(register: u8) -> InvertRegisterAction {
+        InvertRegisterAction {
+            register
+        }
+    }
+}
+
+impl Action for InvertRegisterAction {
+    fn undo(&self, hex_edit: &mut HexEdit) -> ActionResult {
+        hex_edit.invert_register(self.register)
+    }
+
+    fn redo(&self, hex_edit: &mut HexEdit) -> ActionResult {
+        hex_edit.invert_register(self.register)
     }
 
     fn size(&self) -> usize{
@@ -824,6 +880,19 @@ impl<'a> HexEdit<'a> {
         }
     }
 
+    pub fn invert_register(&mut self, register: u8) -> ActionResult {
+        if register >= 32 {
+            return ActionResult::error("Register number must be less than 32".to_string())
+        }
+        let new = self.clipboard_registers[register as usize].iter().map(|x| !x).collect();
+        self.clipboard_registers[register as usize] = new;
+        ActionResult {
+            error: None,
+            update: UpdateDescription::NoUpdate,
+            action: Some(Rc::new(InvertRegisterAction::new(register)))
+        }
+    }
+
     pub fn shift_register(&mut self, register: u8, shift: i8) -> ActionResult { // negative is left
         if shift < -8 || shift > 8 {
             return ActionResult::error("Shift value must be less than or equal to 8".to_string())
@@ -961,7 +1030,7 @@ impl<'a> HexEdit<'a> {
         }
     }
 
-    fn get_register(&mut self, register: u8) -> Result<Vec<u8>, String>{
+    pub fn get_register(&mut self, register: u8) -> Result<Vec<u8>, String>{
         if register < 32 {
             Ok(self.clipboard_registers[register as usize].to_vec())
         } else {
@@ -969,10 +1038,15 @@ impl<'a> HexEdit<'a> {
         }
     }
 
-    fn set_register(&mut self, register: u8, bytes: &Vec<u8>) -> ActionResult {
+    pub fn set_register(&mut self, register: u8, bytes: &Vec<u8>) -> ActionResult {
         if register < 32 {
+            let original_bytes = self.clipboard_registers[register as usize].to_vec();
             self.clipboard_registers[register as usize] = bytes.to_vec();
-            ActionResult::empty() // TODO: Maybe add an action here
+            ActionResult {
+                error: None,
+                update: UpdateDescription::NoUpdate,
+                action: Some(Rc::new(SetRegisterAction::new(register, bytes.to_vec(), original_bytes)))
+            }
         } else {
             ActionResult::error("Registers must be less than 32".to_string())
         }
