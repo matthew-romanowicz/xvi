@@ -15,7 +15,7 @@ use crate::hex_edit::{FileManager, Action, CompoundAction, ActionStack, UpdateDe
 pub use crate::hex_edit::FileManagerType;
 
 mod parsers;
-use crate::parsers::{CommandToken, CommandKeyword, parse_command, parse_filltype, KeystrokeToken, parse_keystroke};
+use crate::parsers::{CommandToken, CommandKeyword, parse_command, parse_bytes, KeystrokeToken, parse_keystroke};
 
 mod bin_format;
 use crate::bin_format::{Endianness, UIntFormat, IIntFormat, FloatFormat, BinaryFormat, DataType, to_bytes};
@@ -40,7 +40,7 @@ const MANUAL_TEXT: &str = r"\b\cCOMMANDS
     :set icase [on|off] =>  Set ignore case for find function
     :set regex [on|off] =>  Enable/disable regular expressions for find function
     :set undo #         =>  Set the maximum length of the undo/redo stack to #
-    :set endian [be|le] =>  Set the endianness that will be used in the 'ins' and 'ovr' commands
+    :set endian [be|le|ne] =>  Set the endianness that will be used in the 'ins' and 'ovr' commands
     :set chunk #        =>  Set the chunk size used to insert bytes in swap and live mode
 
 \b  INSERTION/OVERWRITE:
@@ -252,14 +252,8 @@ fn execute_command(editor_stack: &mut EditorStack, command: Vec<char>) -> (Comma
                 2 => {
                     let mut hm = &mut editor_stack.editors[editor_stack.current];
                     match (&tokens[0], &tokens[1]) {
-                        (CommandToken::Keyword(CommandKeyword::Swap), CommandToken::Word(word)) => {
-                            match parse_filltype(word.to_vec()) { // TODO: Don't use this function, use something more direct
-                                Ok(fill) => match fill {
-                                    FillType::Register(n) => (CommandInstruction::NoOp, hm.hex_edit.swap_register(n)),
-                                    _ => (CommandInstruction::NoOp, ActionResult::error("Could not parse register number".to_string()))
-                                },
-                                Err(s) => (CommandInstruction::NoOp, ActionResult::error(s))
-                            }
+                        (CommandToken::Keyword(CommandKeyword::Swap), CommandToken::Register(n)) => {
+                            (CommandInstruction::NoOp, hm.hex_edit.swap_register(*n as u8))
                         },
                         (CommandToken::Keyword(CommandKeyword::Clear), CommandToken::Keyword(CommandKeyword::Undo)) => {
                             hm.action_stack.clear();
@@ -318,10 +312,13 @@ fn execute_command(editor_stack: &mut EditorStack, command: Vec<char>) -> (Comma
                                     }
                                     (CommandInstruction::NoOp, ActionResult::empty())
                                 },
+                                (CommandToken::Keyword(CommandKeyword::Fill), CommandToken::Register(n)) => {
+                                    (CommandInstruction::NoOp, editor_stack.editors[editor_stack.current].hex_edit.set_fill(FillType::Register(*n as u8)))
+                                },
                                 (CommandToken::Keyword(CommandKeyword::Fill), CommandToken::Word(word)) => {
-                                    match parse_filltype(word.to_vec()) {
-                                        Ok(fill) => (CommandInstruction::NoOp, editor_stack.editors[editor_stack.current].hex_edit.set_fill(fill)),
-                                        Err(s) => (CommandInstruction::NoOp, ActionResult::error(s))
+                                    match parse_bytes(word) {
+                                        Ok(v) => (CommandInstruction::NoOp, editor_stack.editors[editor_stack.current].hex_edit.set_fill(FillType::Bytes(v))),
+                                        Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg))
                                     }
                                 },
                                 _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
@@ -330,18 +327,13 @@ fn execute_command(editor_stack: &mut EditorStack, command: Vec<char>) -> (Comma
                         CommandToken::Keyword(CommandKeyword::Cat) => { // :cat [] []
                             let mut hm = &mut editor_stack.editors[editor_stack.current];
                             match (&tokens[1], &tokens[2]) {
-                                (CommandToken::Word(word1), CommandToken::Word(word2)) => {
-                                    match parse_filltype(word1.to_vec()) { // TODO: use a different function here
-                                        Ok(FillType::Register(n)) => {
-                                            match parse_filltype(word2.to_vec()) {
-                                                Ok(fill) => (CommandInstruction::NoOp, hm.hex_edit.concatenate_register(n, fill)),
-                                                Err(s) => (CommandInstruction::NoOp, ActionResult::error(s))
-                                            }
-                                        },
-                                        Ok(FillType::Bytes(_)) => {
-                                            (CommandInstruction::NoOp, ActionResult::error("First 'cat' parameter must be register (r#)".to_string()))
-                                        },
-                                        Err(s) => (CommandInstruction::NoOp, ActionResult::error(s))
+                                (CommandToken::Register(n1), CommandToken::Register(n2)) => {
+                                    (CommandInstruction::NoOp, hm.hex_edit.concatenate_register(*n1 as u8, FillType::Register(*n2 as u8)))
+                                },
+                                (CommandToken::Register(n), CommandToken::Word(word)) => {
+                                    match parse_bytes(word) {
+                                        Ok(v) => (CommandInstruction::NoOp, hm.hex_edit.concatenate_register(*n as u8, FillType::Bytes(v))),
+                                        Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg))
                                     }
                                 },
                                 _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
@@ -369,7 +361,6 @@ fn execute_command(editor_stack: &mut EditorStack, command: Vec<char>) -> (Comma
                                 _ => return (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
                             };
 
-                            //println!("U32: {:?}", to_bytes(input, DataType {fmt, end: Endianness::Big}));
                             match to_bytes(input, DataType {fmt, end: editor_stack.endianness}){
                                 Ok(bytes) => {
                                     match kwrd {
@@ -386,23 +377,15 @@ fn execute_command(editor_stack: &mut EditorStack, command: Vec<char>) -> (Comma
                         CommandToken::Keyword(CommandKeyword::RShift | CommandKeyword::LShift) => { // :rshft | lshft [] []
                             let mut hm = &mut editor_stack.editors[editor_stack.current];
                             match (&tokens[1], &tokens[2]) {
-                                (CommandToken::Word(word), CommandToken::Integer(_, n)) => {
-                                    match parse_filltype(word.to_vec()) { // TODO: use a different function here
-                                        Ok(FillType::Register(register)) => {
-                                            match &tokens[0] {
-                                                CommandToken::Keyword(CommandKeyword::RShift) => {
-                                                    (CommandInstruction::NoOp, hm.hex_edit.shift_register(register, *n as i8))
-                                                },
-                                                CommandToken::Keyword(CommandKeyword::LShift) => {
-                                                    (CommandInstruction::NoOp, hm.hex_edit.shift_register(register, -(*n as i8)))
-                                                },
-                                                _ => (CommandInstruction::NoOp, ActionResult::error("Impossible state".to_string()))
-                                            }
+                                (CommandToken::Register(register), CommandToken::Integer(_, n)) => {
+                                    match &tokens[0] {
+                                        CommandToken::Keyword(CommandKeyword::RShift) => {
+                                            (CommandInstruction::NoOp, hm.hex_edit.shift_register(*register as u8, *n as i8))
                                         },
-                                        Ok(FillType::Bytes(_)) => {
-                                            (CommandInstruction::NoOp, ActionResult::error("First 'rshft/lshft' parameter must be register (r#)".to_string()))
+                                        CommandToken::Keyword(CommandKeyword::LShift) => {
+                                            (CommandInstruction::NoOp, hm.hex_edit.shift_register(*register as u8, -(*n as i8)))
                                         },
-                                        Err(s) => (CommandInstruction::NoOp, ActionResult::error(s))
+                                        _ => (CommandInstruction::NoOp, ActionResult::error("Impossible state".to_string()))
                                     }
                                 },
                                 _ => return (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))

@@ -44,7 +44,7 @@ pub enum CommandKeyword {
     Manual
 }
 
-fn parse_command_keyword(word: Vec<char>) -> Option<CommandKeyword> {
+fn parse_command_keyword(word: &Vec<char>) -> Option<CommandKeyword> {
     let s: String = word.iter().collect();
     match s.as_str() {
         "set" => Some(CommandKeyword::Set),
@@ -92,63 +92,46 @@ fn parse_command_keyword(word: Vec<char>) -> Option<CommandKeyword> {
     }
 }
 
-pub fn parse_filltype(word: Vec<char>) -> Result<FillType, String> {
+pub fn parse_bytes(word: &Vec<char>) -> Result<Vec<u8>, String> { 
     let mut word_iter = word.iter();
-    match word_iter.next().unwrap() {
-        'r' => {
-            let mut n: usize = 0;
-            for c in word_iter {
-                match c {
-                    '0'..='9' => {
-                        n *= 10;
-                        n += *c as usize - 48;
-                    },
-                    _ => return Err("Invalid character in register number".to_string())
-                }
+    if *word_iter.next().unwrap() == 'x'{
+        let mut buffer = Vec::<u8>::new();
+        let mut left = true;
+        let mut n: u8 = 0;
+        for c in word_iter {
+            match c {
+                '0'..='9' => {
+                    if left {
+                        n = ((*c as u8) -  48) << 4;
+                    } else {
+                        buffer.push(n + ((*c as u8) -  48));
+                        n = 0;
+                    }
+                },
+                'a'..='f' => {
+                    if left {
+                        n = ((*c as u8) -  87) << 4;
+                    } else {
+                        buffer.push(n + ((*c as u8) -  87));
+                        n = 0;
+                    }
+                },
+                'A'..='F' => {
+                    if left {
+                        n = ((*c as u8) -  55) << 4;
+                    } else {
+                        buffer.push(n + ((*c as u8) -  55));
+                        n = 0;
+                    }
+                },
+                _ => return Err("Invalid character in hex string".to_string())
             }
-            if n < 256 {
-                return Ok(FillType::Register(n as u8));
-            } else {
-                return Err("Register number greater than maximum".to_string())
-            }
-        },
-        'x' => {
-            let mut buffer = Vec::<u8>::new();
-            let mut left = true;
-            let mut n: u8 = 0;
-            for c in word_iter {
-                match c {
-                    '0'..='9' => {
-                        if left {
-                            n = ((*c as u8) -  48) << 4;
-                        } else {
-                            buffer.push(n + ((*c as u8) -  48));
-                            n = 0;
-                        }
-                    },
-                    'a'..='f' => {
-                        if left {
-                            n = ((*c as u8) -  87) << 4;
-                        } else {
-                            buffer.push(n + ((*c as u8) -  87));
-                            n = 0;
-                        }
-                    },
-                    'A'..='F' => {
-                        if left {
-                            n = ((*c as u8) -  55) << 4;
-                        } else {
-                            buffer.push(n + ((*c as u8) -  55));
-                            n = 0;
-                        }
-                    },
-                    _ => return Err("Invalid character in hex string".to_string())
-                }
-                left = !left;
-            }
-            return Ok(FillType::Bytes(buffer));
-        },
-        _ => return Err("Invalid first character in fill string (only 'r' and 'x' accepted)".to_string())
+            left = !left;
+        }
+
+        Ok(buffer)
+    } else {
+        Err("Bytes literals must start with character 'x'".to_string())
     }
 }
 
@@ -156,59 +139,48 @@ pub fn parse_filltype(word: Vec<char>) -> Result<FillType, String> {
 pub enum CommandToken {
     Word(Vec<char>),
     Integer(Vec<char>, usize),
+    Register(usize),
     Keyword(CommandKeyword)
+}
+
+pub fn parse_command_token(v: &Vec<char>) -> Option<CommandToken> {
+    if v.len() == 0 {
+        return None;
+    } else if let Ok(n) = v.iter().collect::<String>().parse::<usize>() {
+        return Some(CommandToken::Integer(v.to_vec(), n));
+    } else if v[0] == 'r' {
+        if let Ok(n) = v[1..v.len()].iter().collect::<String>().parse::<usize>() {
+            return Some(CommandToken::Register(n));
+        }
+    }
+
+    if let Some(kwrd) = parse_command_keyword(v) {
+        Some(CommandToken::Keyword(kwrd))
+    } else {
+        Some(CommandToken::Word(v.to_vec()))
+    }
 }
 
 pub fn parse_command(command: &Vec<char>) -> Vec<CommandToken> {
     let mut result = Vec::<CommandToken>::new();
-    let mut current_int: usize = 0;
-    let mut building_int: bool = false;
     let mut current_word = Vec::<char>::new();
-    let mut building_word: bool = false;
-
-    //let mut command_iter = command.iter();
-    //result.push(CommandToken::Start(*command_iter.next().unwrap()));
 
     for c in command {
         match c {
             ' ' => {
-                if building_int {
-                    result.push(CommandToken::Integer(current_word, current_int));
-                    current_int = 0;
-                    building_int = false;
-                } else if building_word {
-                    match parse_command_keyword(current_word.to_vec()) {
-                        Some(kw) => result.push(CommandToken::Keyword(kw)),
-                        None => result.push(CommandToken::Word(current_word))
-                    };
-                    building_word = false;
-                }
-
+                match parse_command_token(&current_word) {
+                    Some(token) => result.push(token),
+                    None => ()
+                };
                 current_word = Vec::<char>::new();
             },
-            '0'..='9' if !building_word => {
-                building_int = true;
-                current_word.push(*c);
-                current_int *= 10;
-                current_int += (*c as usize) - 48;
-            },
-            _ if !building_int => {
-                building_word = true;
-                current_word.push(*c);
-            },
-            _ => {
-                println!("An unexpected error occurred");
-            }
+            _ => current_word.push(*c)
         }
     }
 
-    if building_int {
-        result.push(CommandToken::Integer(current_word, current_int));
-    } else if building_word {
-        match parse_command_keyword(current_word.to_vec()) {
-            Some(kw) => result.push(CommandToken::Keyword(kw)),
-            None => result.push(CommandToken::Word(current_word))
-        };
+    match parse_command_token(&current_word) {
+        Some(token) => result.push(token),
+        None => ()
     }
 
     result
