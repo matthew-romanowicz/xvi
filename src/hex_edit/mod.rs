@@ -423,6 +423,40 @@ impl Action for ShiftRegisterAction {
     }
 }
 
+pub struct AndRegisterAction {
+    register: u8,
+    fill: FillType,
+    original_bytes: Vec<u8>
+}
+
+impl AndRegisterAction {
+    pub fn new(register: u8, fill: FillType, original_bytes: Vec<u8>) -> AndRegisterAction {
+        AndRegisterAction {
+            register,
+            fill,
+            original_bytes
+        }
+    }
+}
+
+impl Action for AndRegisterAction {
+    fn undo(&self, hex_edit: &mut HexEdit) -> ActionResult {
+        hex_edit.set_register(self.register, &self.original_bytes)
+    }
+
+    fn redo(&self, hex_edit: &mut HexEdit) -> ActionResult {
+        let fill = match &self.fill {
+            FillType::Register(n) => FillType::Register(*n),
+            FillType::Bytes(v) => FillType::Bytes(v.to_vec())
+        };
+        hex_edit.and_register(self.register, fill)
+    }
+
+    fn size(&self) -> usize{
+        2 + self.original_bytes.len()
+    }
+}
+
 struct ConcatenateRegisterAction {
     register: u8,
     fill: FillType
@@ -711,6 +745,13 @@ pub fn shift_vector(buffer: &mut Vec<u8>, shift: i8) -> Result<(), String> { // 
     Ok(())
 }
 
+pub fn vector_op<F>(buffer1: &mut Vec<u8>, buffer2: &Vec<u8>, op: F) where F: Fn(u8, u8) -> u8 {
+    let mut buff2_iter = buffer2.iter().cycle();
+    for i in 0..buffer1.len() {
+        buffer1[i] = op(buffer1[i], *buff2_iter.next().unwrap());
+    }
+}
+
 impl<'a> HexEdit<'a> {
 
     pub fn new(file_manager: FileManager, x: usize, y: usize, width: usize, height: usize, line_length: u8, show_hex: bool, show_ascii: bool, invalid_ascii_char: char, separator: String, capitalize_hex: bool) -> HexEdit {
@@ -920,6 +961,27 @@ impl<'a> HexEdit<'a> {
             error: None,
             update: UpdateDescription::NoUpdate,
             action: Some(Rc::new(InvertRegisterAction::new(register)))
+        }
+    }
+
+    pub fn and_register(&mut self, register: u8, fill: FillType) -> ActionResult {
+        if register >= 32 {
+            return ActionResult::error("Register number must be less than 32".to_string())
+        }
+        let original_bytes = self.clipboard_registers[register as usize].to_vec();
+        let op_bytes = match &fill {
+            FillType::Bytes(bytes) => {
+                bytes.to_vec()
+            },
+            FillType::Register(n) => {
+                self.clipboard_registers[*n as usize].to_vec()
+            }
+        };
+        vector_op(&mut self.clipboard_registers[register as usize], &op_bytes, |a,b| a & b);
+        ActionResult {
+            error: None,
+            update: UpdateDescription::NoUpdate,
+            action: Some(Rc::new(AndRegisterAction::new(register, fill, original_bytes)))
         }
     }
 

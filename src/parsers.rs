@@ -6,6 +6,7 @@ pub enum CommandKeyword {
     Hex,
     Ascii,
     LNum,
+    CNum,
     Line,
     Chunk,
     Undo,
@@ -42,6 +43,7 @@ pub enum CommandKeyword {
     SaveAndQuit,
     Open,
     Cat,
+    And,
     Manual
 }
 
@@ -53,6 +55,7 @@ fn parse_command_keyword(word: &Vec<char>) -> Option<CommandKeyword> {
         "hex" => Some(CommandKeyword::Hex),
         "ascii" => Some(CommandKeyword::Ascii),
         "lnum" => Some(CommandKeyword::LNum),
+        "cnum" => Some(CommandKeyword::CNum),
         "line" => Some(CommandKeyword::Line),
         "chunk" => Some(CommandKeyword::Chunk),
         "undo" => Some(CommandKeyword::Undo),
@@ -89,6 +92,7 @@ fn parse_command_keyword(word: &Vec<char>) -> Option<CommandKeyword> {
         "x" | "wq" => Some(CommandKeyword::SaveAndQuit),
         "open" => Some(CommandKeyword::Open),
         "cat" => Some(CommandKeyword::Cat),
+        "and" => Some(CommandKeyword::And),
         "man" => Some(CommandKeyword::Manual),
         _ => None
     }

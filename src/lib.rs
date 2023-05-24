@@ -11,7 +11,7 @@ mod large_text_view;
 use crate::large_text_view::LargeTextView;
 
 mod hex_edit;
-use crate::hex_edit::{FileManager, Action, CompoundAction, ActionStack, UpdateDescription, EditMode, ActionResult, ShowType, FillType, shift_vector, HexEdit};
+use crate::hex_edit::{FileManager, Action, CompoundAction, ActionStack, UpdateDescription, EditMode, ActionResult, ShowType, FillType, shift_vector, vector_op, HexEdit};
 pub use crate::hex_edit::FileManagerType;
 
 mod parsers;
@@ -33,7 +33,7 @@ const MANUAL_TEXT: &str = r"\b\cCOMMANDS
     :set hex [on|off]   =>  Toggle the hex display
     :set ascii [on|off] =>  Toggle the ascii display
     :set lnum [hex|dec|off]  =>  Toggle line number display/base
-    :set cnum [hex|dec|off]  =>  [TODO] Toggle cursor index display/base
+    :set cnum [hex|dec|off]  =>  Toggle cursor index display/base
     :set line #         =>  Set the number of bytes per line to #
     :set fill r#        =>  Set the fill value to the contents of register #
     :set fill x#        =>  Set the fill value to # (in hex)
@@ -54,7 +54,7 @@ const MANUAL_TEXT: &str = r"\b\cCOMMANDS
     :swap r#            =>  Swap the byte order of register #
     :rshft r# ##        =>  Bitshift the contens of register # right ## bits
     :lshft r# ##        =>  Bitshift the contens of register # left ## bits
-    :and r# r##         =>  [TODO] Perform bitwise AND on register # with register ##
+    :and r# r##         =>  Perform bitwise AND on register # with register ##
     :or r# r##          =>  [TODO] Perform bitwise OR on register # with register ##
     :not r#             =>  Perform bitwise NOT on regiser #
 
@@ -135,7 +135,8 @@ struct EditorStack<'a> {
     width: usize,
     height: usize,
     clipboard_registers: [Vec<u8>; 32],
-    endianness: Endianness
+    endianness: Endianness,
+    cnum: ShowType
 }
 
 impl<'a> EditorStack<'a> {
@@ -148,7 +149,8 @@ impl<'a> EditorStack<'a> {
             width,
             height,
             clipboard_registers: Default::default(),
-            endianness: Endianness::Network
+            endianness: Endianness::Network,
+            cnum: ShowType::Hex
         }
     }
 
@@ -321,6 +323,14 @@ fn execute_command(editor_stack: &mut EditorStack, command: Vec<char>) -> (Comma
                                         _ => ShowType::Hex,
                                     })))
                                 },
+                                (CommandToken::Keyword(CommandKeyword::CNum), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::Off | CommandKeyword::Hex | CommandKeyword::Dec) => {
+                                    editor_stack.cnum = match kwrd {
+                                        CommandKeyword::Off => ShowType::Off,
+                                        CommandKeyword::Dec => ShowType::Dec,
+                                        _ => ShowType::Hex,
+                                    };
+                                    (CommandInstruction::NoOp, ActionResult::empty())
+                                },
                                 (CommandToken::Keyword(CommandKeyword::Endian), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::BigEndian | CommandKeyword::LittleEndian | CommandKeyword::NetworkEndian) => {
                                     editor_stack.endianness = match kwrd {
                                         CommandKeyword::BigEndian => Endianness::Big,
@@ -390,6 +400,53 @@ fn execute_command(editor_stack: &mut EditorStack, command: Vec<char>) -> (Comma
                                                 (CommandInstruction::NoOp, editor_stack.editors[editor_stack.current].hex_edit.concatenate_register(*n as u8, FillType::Bytes(v)))
                                             } else if *n < 64 {
                                                 editor_stack.clipboard_registers[*n - 32].extend(v);
+                                                (CommandInstruction::NoOp, ActionResult::empty())
+                                            } else {
+                                                (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
+                                            }
+                                        },
+                                        Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg))
+                                    }
+                                },
+                                _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
+                            }
+                        },
+                        CommandToken::Keyword(CommandKeyword::And) => { // :and [] []
+                            match (&tokens[1], &tokens[2]) {
+                                (CommandToken::Register(n1), CommandToken::Register(n2)) => {
+                                    if *n1 < 32 {
+                                        if *n2 < 32 {
+                                            (CommandInstruction::NoOp, editor_stack.editors[editor_stack.current].hex_edit.and_register(*n1 as u8, FillType::Register(*n2 as u8)))
+                                        } else if *n2 < 64 { 
+                                            let fill = FillType::Bytes(editor_stack.clipboard_registers[*n2 - 32].to_vec());
+                                            (CommandInstruction::NoOp, editor_stack.editors[editor_stack.current].hex_edit.and_register(*n1 as u8, fill))
+                                        } else {
+                                            (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
+                                        }
+                                    } else if *n1 < 64 {
+                                        if *n2 < 32 {
+                                            let fill = editor_stack.editors[editor_stack.current].hex_edit.get_register(*n2 as u8).unwrap().to_vec();
+                                            vector_op(&mut editor_stack.clipboard_registers[*n1 - 32], &fill, |a, b| a & b);
+                                            (CommandInstruction::NoOp, ActionResult::empty())
+                                        } else if *n2 < 64 { 
+                                            let fill = editor_stack.clipboard_registers[*n1 - 32].to_vec();
+                                            vector_op(&mut editor_stack.clipboard_registers[*n1 - 32], &fill, |a, b| a & b);
+                                            (CommandInstruction::NoOp, ActionResult::empty())
+                                        } else {
+                                            (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
+                                        }
+                                    } else {
+                                        (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
+                                    }
+                                    
+                                },
+                                (CommandToken::Register(n), CommandToken::Word(word)) => {
+                                    match parse_bytes(word) {
+                                        Ok(v) => {
+                                            if *n < 32 {
+                                                (CommandInstruction::NoOp, editor_stack.editors[editor_stack.current].hex_edit.and_register(*n as u8, FillType::Bytes(v)))
+                                            } else if *n < 64 {
+                                                vector_op(&mut editor_stack.clipboard_registers[*n - 32], &v, |a, b| a & b);
                                                 (CommandInstruction::NoOp, ActionResult::empty())
                                             } else {
                                                 (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
@@ -909,12 +966,24 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
         let (y, x) = window.get_cur_yx();
 
         // Draw cursor index
-        let mut cursor_index_string: String = format!("{:0width$x}", editors.editors[editors.current].hex_edit.get_cursor_pos(), width=cursor_index_len);
-        if editors.editors[editors.current].hex_edit.get_capitalize_hex() {
-            cursor_index_string = cursor_index_string.to_ascii_uppercase();
-        }
+        let pos = editors.editors[editors.current].hex_edit.get_cursor_pos();
+        let length = editors.editors[editors.current].hex_edit.len();
+        let caps_hex = editors.editors[editors.current].hex_edit.get_capitalize_hex();
+        let cursor_label_len = match editors.cnum {
+            ShowType::Off => 0,
+            ShowType::Dec => format!("{}", length).len(),
+            ShowType::Hex => format!("{:x}", length).len()
+        };
+        let mut cursor_index_string = match editors.cnum {
+            ShowType::Off => "".to_string(),
+            ShowType::Dec => format!("{:0width$}", pos, width=cursor_label_len),
+            ShowType::Hex => match caps_hex {
+                true => format!("{:0width$x}", pos, width=cursor_label_len).to_ascii_uppercase(),
+                false => format!("{:0width$x}", pos, width=cursor_label_len)
+            }
+        };
         window.mvaddstr((window.get_max_y() as usize - 1) as i32,
-        (window.get_max_x() as usize - 1 - cursor_index_len) as i32, 
+        (window.get_max_x() as usize - 1 - cursor_label_len) as i32, 
         cursor_index_string);
 
         window.mv(y, x);
