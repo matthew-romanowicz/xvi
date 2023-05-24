@@ -18,7 +18,23 @@ mod parsers;
 use crate::parsers::{CommandToken, CommandKeyword, parse_command, parse_bytes, KeystrokeToken, parse_keystroke};
 
 mod bin_format;
-use crate::bin_format::{Endianness, UIntFormat, IIntFormat, FloatFormat, BinaryFormat, DataType, to_bytes};
+use crate::bin_format::{Endianness, UIntFormat, IIntFormat, FloatFormat, BinaryFormat, DataType, fmt_length, from_bytes, to_bytes};
+
+fn command_kwrd_to_fmt(kwrd: &CommandKeyword) -> Result<BinaryFormat, String> {
+    match kwrd {
+        CommandKeyword::U8 => Ok(BinaryFormat::UInt(UIntFormat::U8)),
+        CommandKeyword::U16 => Ok(BinaryFormat::UInt(UIntFormat::U16)),
+        CommandKeyword::U32 => Ok(BinaryFormat::UInt(UIntFormat::U32)),
+        CommandKeyword::U64 => Ok(BinaryFormat::UInt(UIntFormat::U64)),
+        CommandKeyword::I8 => Ok(BinaryFormat::IInt(IIntFormat::I8)),
+        CommandKeyword::I16 => Ok(BinaryFormat::IInt(IIntFormat::I16)),
+        CommandKeyword::I32 => Ok(BinaryFormat::IInt(IIntFormat::I32)),
+        CommandKeyword::I64 => Ok(BinaryFormat::IInt(IIntFormat::I64)),
+        CommandKeyword::F32 => Ok(BinaryFormat::Float(FloatFormat::F32)),
+        CommandKeyword::F64 => Ok(BinaryFormat::Float(FloatFormat::F64)),
+        _ => Err("Command not recognized".to_string())
+    }
+}
 
 enum EditState {
     Escaped,
@@ -294,9 +310,37 @@ fn execute_command(editor_stack: &mut EditorStack, command: Vec<char>) -> (Comma
                         (CommandToken::Keyword(CommandKeyword::Open), CommandToken::Word(word)) => {
                             (CommandInstruction::Open(word.iter().collect()), ActionResult::empty())
                         },
+                        (CommandToken::Keyword(CommandKeyword::Print), _) => { // :p []
+                            let mut hm = &mut editor_stack.editors[editor_stack.current];
+
+                            let fmt = match &tokens[1] {
+                                CommandToken::Keyword(fmt_kwrd) => {
+                                    match command_kwrd_to_fmt(fmt_kwrd) {
+                                        Ok(f) => f,
+                                        _ => return (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
+                                    }
+                                },
+                                _ => return (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
+                            };
+
+                            let n_bytes = fmt_length(&fmt);
+
+                            let mut buffer = vec![0; n_bytes];
+
+                            match hm.hex_edit.get_bytes(hm.hex_edit.get_cursor_pos(), &mut buffer) {
+                                Ok(n) if n == n_bytes => {
+                                    match from_bytes(&buffer, DataType {fmt, end: editor_stack.endianness}) {
+                                        Ok(s) => (CommandInstruction::NoOp, ActionResult::error(s)),
+                                        Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg))
+                                    }
+                                },
+                                Ok(_) => (CommandInstruction::NoOp, ActionResult::error("Not enough bytes for datatype".to_string())),
+                                Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
+                            }
+                        },
                         _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
                     }
-                }
+                },
                 3 => {
                     match &tokens[0] {
                         CommandToken::Keyword(CommandKeyword::Set) => { // :set [] []
@@ -467,18 +511,15 @@ fn execute_command(editor_stack: &mut EditorStack, command: Vec<char>) -> (Comma
                             };
 
                             let fmt = match &tokens[1] {
-                                CommandToken::Keyword(CommandKeyword::U8) => BinaryFormat::UInt(UIntFormat::U8),
-                                CommandToken::Keyword(CommandKeyword::U16) => BinaryFormat::UInt(UIntFormat::U16),
-                                CommandToken::Keyword(CommandKeyword::U32) => BinaryFormat::UInt(UIntFormat::U32),
-                                CommandToken::Keyword(CommandKeyword::U64) => BinaryFormat::UInt(UIntFormat::U64),
-                                CommandToken::Keyword(CommandKeyword::I8) => BinaryFormat::IInt(IIntFormat::I8),
-                                CommandToken::Keyword(CommandKeyword::I16) => BinaryFormat::IInt(IIntFormat::I16),
-                                CommandToken::Keyword(CommandKeyword::I32) => BinaryFormat::IInt(IIntFormat::I32),
-                                CommandToken::Keyword(CommandKeyword::I64) => BinaryFormat::IInt(IIntFormat::I64),
-                                CommandToken::Keyword(CommandKeyword::F32) => BinaryFormat::Float(FloatFormat::F32),
-                                CommandToken::Keyword(CommandKeyword::F64) => BinaryFormat::Float(FloatFormat::F64),
+                                CommandToken::Keyword(fmt_kwrd) => {
+                                    match command_kwrd_to_fmt(fmt_kwrd) {
+                                        Ok(f) => f,
+                                        _ => return (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
+                                    }
+                                },
                                 _ => return (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
                             };
+
 
                             match to_bytes(input, DataType {fmt, end: editor_stack.endianness}){
                                 Ok(bytes) => {
@@ -490,8 +531,7 @@ fn execute_command(editor_stack: &mut EditorStack, command: Vec<char>) -> (Comma
                                 },
                                 Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg))
                             }
-                            
-
+                        
                         },
                         CommandToken::Keyword(CommandKeyword::RShift | CommandKeyword::LShift) => { // :rshft | lshft [] []
                             match (&tokens[1], &tokens[2]) {

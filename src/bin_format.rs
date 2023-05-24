@@ -35,6 +35,21 @@ pub struct DataType {
     pub end: Endianness
 }
 
+pub fn fmt_length(fmt: &BinaryFormat) -> usize {
+    match fmt {
+        BinaryFormat::UInt(UIntFormat::U8)  => 1,
+        BinaryFormat::UInt(UIntFormat::U16) => 2,
+        BinaryFormat::UInt(UIntFormat::U32) => 4,
+        BinaryFormat::UInt(UIntFormat::U64) => 8,
+        BinaryFormat::IInt(IIntFormat::I8)  => 1,
+        BinaryFormat::IInt(IIntFormat::I16) => 2,
+        BinaryFormat::IInt(IIntFormat::I32) => 4,
+        BinaryFormat::IInt(IIntFormat::I64) => 8,
+        BinaryFormat::Float(FloatFormat::F32) => 4,
+        BinaryFormat::Float(FloatFormat::F64) => 8
+    }
+}
+
 #[macro_export]
 macro_rules! str_res {
     ( $x:expr ) => {
@@ -96,28 +111,81 @@ pub fn to_bytes(input: &Vec<char>, datatype: DataType) -> Result<Vec<u8>, String
     }
 }
 
-// pub fn to_bytes(input: &Vec<char>, datatype: DataType) -> Result<Vec<u8>, String> {
-//     match input.iter().collect::<String>().parse::<i16>() {
-//         Ok(n) => println!("Number: {}", n),
-//         Err(msg) => println!("Error: {}", msg.to_string())
-//     };
-//     match datatype.fmt {
-//         BinaryFormat::UInt(uint_format) => {
-//             match parse_uint(input, &uint_format) {
-//                 Ok(n) => {
-//                     Ok(uint_to_bytes(n, &datatype.end, &uint_format))
-//                 },
-//                 Err(msg) => Err(msg)
-//             }
-//         },
-//         BinaryFormat::IInt(iint_format) => {
-//             match parse_iint(input, &iint_format) {
-//                 Ok(n) => {
-//                     Ok(iint_to_bytes(n, &datatype.end, &iint_format))
-//                 },
-//                 Err(msg) => Err(msg)
-//             }
-//         },
-//         _ => todo!()
-//     }
-// }
+fn vec_to_1(input: &Vec<u8>) -> Result<[u8; 1], String> {
+    if input.len() >= 1 {
+        Ok([input[0]])
+    } else {
+        Err("Not enough bytes for data type".to_string())
+    }
+}
+
+fn vec_to_2(input: &Vec<u8>) -> Result<[u8; 2], String> {
+    if input.len() >= 2 {
+        Ok([input[0], input[1]])
+    } else {
+        Err("Not enough bytes for data type".to_string())
+    }
+}
+
+fn vec_to_4(input: &Vec<u8>) -> Result<[u8; 4], String> {
+    if input.len() >= 2 {
+        Ok([input[0], input[1], input[2], input[3]])
+    } else {
+        Err("Not enough bytes for data type".to_string())
+    }
+}
+
+fn vec_to_8(input: &Vec<u8>) -> Result<[u8; 8], String> {
+    if input.len() >= 2 {
+        Ok([input[0], input[1], input[2], input[3], input[4], input[5], input[6], input[7]])
+    } else {
+        Err("Not enough bytes for data type".to_string())
+    }
+}
+
+pub fn from_bytes(input: &Vec<u8>, datatype: DataType) -> Result<String, String> {
+    match &datatype.end {
+        Endianness::Big => {
+            match &datatype.fmt {
+                BinaryFormat::UInt(UIntFormat::U8)  => Ok(format!("{}", u8::from_be_bytes(vec_to_1(input)?))),
+                BinaryFormat::UInt(UIntFormat::U16) => Ok(format!("{}", u16::from_be_bytes(vec_to_2(input)?))),
+                BinaryFormat::UInt(UIntFormat::U32) => Ok(format!("{}", u32::from_be_bytes(vec_to_4(input)?))),
+                BinaryFormat::UInt(UIntFormat::U64) => Ok(format!("{}", u64::from_be_bytes(vec_to_8(input)?))),
+                BinaryFormat::IInt(IIntFormat::I8)  => Ok(format!("{}", i8::from_be_bytes(vec_to_1(input)?))),
+                BinaryFormat::IInt(IIntFormat::I16) => Ok(format!("{}", i16::from_be_bytes(vec_to_2(input)?))),
+                BinaryFormat::IInt(IIntFormat::I32) => Ok(format!("{}", i32::from_be_bytes(vec_to_4(input)?))),
+                BinaryFormat::IInt(IIntFormat::I64) => Ok(format!("{}", i64::from_be_bytes(vec_to_8(input)?))),
+                BinaryFormat::Float(FloatFormat::F32) => Ok(format!("{}", f32::from_be_bytes(vec_to_4(input)?))),
+                BinaryFormat::Float(FloatFormat::F64) => Ok(format!("{}", f64::from_be_bytes(vec_to_8(input)?)))
+            }
+        },
+        Endianness::Little => {
+            match &datatype.fmt {
+                BinaryFormat::UInt(UIntFormat::U8)  => Ok(format!("{}", u8::from_le_bytes(vec_to_1(input)?))),
+                BinaryFormat::UInt(UIntFormat::U16) => Ok(format!("{}", u16::from_le_bytes(vec_to_2(input)?))),
+                BinaryFormat::UInt(UIntFormat::U32) => Ok(format!("{}", u32::from_le_bytes(vec_to_4(input)?))),
+                BinaryFormat::UInt(UIntFormat::U64) => Ok(format!("{}", u64::from_le_bytes(vec_to_8(input)?))),
+                BinaryFormat::IInt(IIntFormat::I8)  => Ok(format!("{}", i8::from_le_bytes(vec_to_1(input)?))),
+                BinaryFormat::IInt(IIntFormat::I16) => Ok(format!("{}", i16::from_le_bytes(vec_to_2(input)?))),
+                BinaryFormat::IInt(IIntFormat::I32) => Ok(format!("{}", i32::from_le_bytes(vec_to_4(input)?))),
+                BinaryFormat::IInt(IIntFormat::I64) => Ok(format!("{}", i64::from_le_bytes(vec_to_8(input)?))),
+                BinaryFormat::Float(FloatFormat::F32) => Ok(format!("{}", f32::from_le_bytes(vec_to_4(input)?))),
+                BinaryFormat::Float(FloatFormat::F64) => Ok(format!("{}", f64::from_le_bytes(vec_to_8(input)?)))
+            }
+        },
+        Endianness::Network => {
+            match &datatype.fmt {
+                BinaryFormat::UInt(UIntFormat::U8)  => Ok(format!("{}", u8::from_ne_bytes(vec_to_1(input)?))),
+                BinaryFormat::UInt(UIntFormat::U16) => Ok(format!("{}", u16::from_ne_bytes(vec_to_2(input)?))),
+                BinaryFormat::UInt(UIntFormat::U32) => Ok(format!("{}", u32::from_ne_bytes(vec_to_4(input)?))),
+                BinaryFormat::UInt(UIntFormat::U64) => Ok(format!("{}", u64::from_ne_bytes(vec_to_8(input)?))),
+                BinaryFormat::IInt(IIntFormat::I8)  => Ok(format!("{}", i8::from_ne_bytes(vec_to_1(input)?))),
+                BinaryFormat::IInt(IIntFormat::I16) => Ok(format!("{}", i16::from_ne_bytes(vec_to_2(input)?))),
+                BinaryFormat::IInt(IIntFormat::I32) => Ok(format!("{}", i32::from_ne_bytes(vec_to_4(input)?))),
+                BinaryFormat::IInt(IIntFormat::I64) => Ok(format!("{}", i64::from_ne_bytes(vec_to_8(input)?))),
+                BinaryFormat::Float(FloatFormat::F32) => Ok(format!("{}", f32::from_ne_bytes(vec_to_4(input)?))),
+                BinaryFormat::Float(FloatFormat::F64) => Ok(format!("{}", f64::from_ne_bytes(vec_to_8(input)?)))
+            }
+        },
+    }
+}

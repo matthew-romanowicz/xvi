@@ -217,14 +217,14 @@ impl FileManager<'_> {
                 self.modified = false;
                 Ok(())
             },
-            FileManagerType::SwapFile => { // TODO: Make this work
+            FileManagerType::SwapFile => { 
                 match &mut self.swap_handle {
                     Some(swap_handle) => {
 
                         self.handle.seek(SeekFrom::Start(0))?;
                         swap_handle.seek(SeekFrom::Start(0))?;
                         let mut buffer = vec![0;self.block_size];
-                        if self.extract {
+                        if self.extract {// TODO: Make this work
                             //let b = std::io::BufReader::new(swap_handle);
                             let mut d = GzEncoder::new(swap_handle, Compression::default());
                             let mut num_read = d.read(&mut buffer)?;
