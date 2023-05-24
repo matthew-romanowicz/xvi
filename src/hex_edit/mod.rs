@@ -653,6 +653,7 @@ impl ActionResult {
     }
 }
 
+
 pub struct HexEdit<'a> {
     file_manager: FileManager<'a>,
     x: usize,
@@ -679,6 +680,35 @@ pub struct HexEdit<'a> {
     display_data: Vec::<u8>,
     valid_bytes: usize,
     clipboard_registers: [Vec::<u8>; 32],//Needs to be 32 or less for Default::default() to work
+}
+
+pub fn shift_vector(buffer: &mut Vec<u8>, shift: i8) -> Result<(), String> { // TODO: 8 and -8 cause panic
+    if shift < -8 || shift > 8 {
+        return Err("Shift value must be less than or equal to 8".to_string())
+    }
+    let mut curr;
+    if shift > 0 {
+        let cshift = 8 - shift;
+        let mask = 0xff >> cshift;
+        let mut prev = buffer[buffer.len() - 1];
+        for i in 0..buffer.len() {
+            curr = buffer[i];
+            buffer[i] = (curr >> shift) + ((prev & mask) << cshift);
+            prev = curr;
+        }
+    } else {
+        let shift = -shift;
+        let cshift = 8 - shift;
+        let mask = 0xff << cshift;
+        let mut prev = buffer[0];
+        for i in (0..buffer.len()).rev() {
+            curr = buffer[i];
+            buffer[i] = (curr << shift) + ((prev & mask) >> cshift);
+            prev = curr;
+        }            
+    }
+
+    Ok(())
 }
 
 impl<'a> HexEdit<'a> {
@@ -894,38 +924,16 @@ impl<'a> HexEdit<'a> {
     }
 
     pub fn shift_register(&mut self, register: u8, shift: i8) -> ActionResult { // negative is left
-        if shift < -8 || shift > 8 {
-            return ActionResult::error("Shift value must be less than or equal to 8".to_string())
-        }
         if register >= 32 {
             return ActionResult::error("Register number must be less than 32".to_string())
         }
-        let mut reg = &mut self.clipboard_registers[register as usize];
-        let mut curr;
-        if shift > 0 {
-            let cshift = 8 - shift;
-            let mask = 0xff >> cshift;
-            let mut prev = reg[reg.len() - 1];
-            for i in 0..reg.len() {
-                curr = reg[i];
-                reg[i] = (curr >> shift) + ((prev & mask) << cshift);
-                prev = curr;
-            }
-        } else {
-            let shift = -shift;
-            let cshift = 8 - shift;
-            let mask = 0xff << cshift;
-            let mut prev = reg[0];
-            for i in (0..reg.len()).rev() {
-                curr = reg[i];
-                reg[i] = (curr << shift) + ((prev & mask) >> cshift);
-                prev = curr;
-            }            
-        }
-        ActionResult {
-            error: None,
-            update: UpdateDescription::NoUpdate,
-            action: Some(Rc::new(ShiftRegisterAction::new(register, shift)))
+        match shift_vector(&mut self.clipboard_registers[register as usize], shift) {
+            Ok(_) =>  ActionResult {
+                error: None,
+                update: UpdateDescription::NoUpdate,
+                action: Some(Rc::new(ShiftRegisterAction::new(register, shift)))
+            },
+            Err(msg) => ActionResult::error(msg)
         }
 
     }

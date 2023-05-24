@@ -11,7 +11,7 @@ mod large_text_view;
 use crate::large_text_view::LargeTextView;
 
 mod hex_edit;
-use crate::hex_edit::{FileManager, Action, CompoundAction, ActionStack, UpdateDescription, EditMode, ActionResult, ShowType, FillType, HexEdit};
+use crate::hex_edit::{FileManager, Action, CompoundAction, ActionStack, UpdateDescription, EditMode, ActionResult, ShowType, FillType, shift_vector, HexEdit};
 pub use crate::hex_edit::FileManagerType;
 
 mod parsers;
@@ -437,17 +437,21 @@ fn execute_command(editor_stack: &mut EditorStack, command: Vec<char>) -> (Comma
 
                         },
                         CommandToken::Keyword(CommandKeyword::RShift | CommandKeyword::LShift) => { // :rshft | lshft [] []
-                            let mut hm = &mut editor_stack.editors[editor_stack.current];
                             match (&tokens[1], &tokens[2]) {
                                 (CommandToken::Register(register), CommandToken::Integer(_, n)) => { // TODO: Make this work for registers 32-63
-                                    match &tokens[0] {
-                                        CommandToken::Keyword(CommandKeyword::RShift) => {
-                                            (CommandInstruction::NoOp, hm.hex_edit.shift_register(*register as u8, *n as i8))
-                                        },
-                                        CommandToken::Keyword(CommandKeyword::LShift) => {
-                                            (CommandInstruction::NoOp, hm.hex_edit.shift_register(*register as u8, -(*n as i8)))
-                                        },
-                                        _ => (CommandInstruction::NoOp, ActionResult::error("Impossible state".to_string()))
+                                    let shift = match &tokens[0] {
+                                        CommandToken::Keyword(CommandKeyword::RShift) => *n as i8,
+                                        CommandToken::Keyword(CommandKeyword::LShift) => -(*n as i8),
+                                        _ => return (CommandInstruction::NoOp, ActionResult::error("Impossible state".to_string()))
+                                    };
+
+                                    if *register < 32 {
+                                        (CommandInstruction::NoOp, editor_stack.editors[editor_stack.current].hex_edit.shift_register(*register as u8, shift))
+                                    } else if *register < 64 {
+                                        shift_vector(&mut editor_stack.clipboard_registers[*register - 32], shift);
+                                        (CommandInstruction::NoOp, ActionResult::empty())
+                                    } else {
+                                        (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
                                     }
                                 },
                                 _ => return (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
