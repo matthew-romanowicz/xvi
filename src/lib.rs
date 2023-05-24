@@ -755,7 +755,10 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
     let mut current_keystroke = Vec::<char>::new();
 
     let mut editors = EditorStack::new(0, 0, window.get_max_x() as usize - 1, window.get_max_y()as usize - 1);
-    editors.push(filename, file_manager_type, extract);
+    if let Err(msg) = editors.push(filename, file_manager_type, extract) {
+        eprintln!("{}", msg);
+        std::process::exit(1);
+    };
 
     let mut macro_manager = MacroManager::new();
 

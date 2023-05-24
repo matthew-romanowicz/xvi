@@ -121,8 +121,10 @@ fn overwrite_bytes_from_handle(handle: &mut File, index: usize, buffer: &Vec<u8>
 impl FileManager<'_> {
     pub fn new<'a>(filename: String, file_manager_type: FileManagerType, extract: bool) -> std::io::Result<FileManager<'a>>{
 
-        let mut handle = File::options().read(true).write(true).open(&filename)?;
+        let mut handle = File::options().read(true).write(!matches!(file_manager_type, FileManagerType::ReadOnly)).open(&filename)?;
         let metadata = handle.metadata()?;
+
+        let mut swap_handle = None;
 
         let mut file_buffer = vec![];
         match file_manager_type {
@@ -137,7 +139,32 @@ impl FileManager<'_> {
                 }
             },
             FileManagerType::SwapFile => {
-                todo!()
+                let mut path = std::path::Path::new(&filename);
+
+                let name = format!(".{}.swp", path.file_name().unwrap().to_str().unwrap().trim_matches('"'));
+                let swap_path = path.with_file_name(name).to_str().unwrap().to_string();
+                println!("{}", swap_path);
+                let mut swap = File::options().read(true).write(true).create(true).open(swap_path)?;
+                let mut buffer = vec![0;65535];
+                if extract {
+                    let mut d = GzDecoder::new(&handle);
+                    let mut num_read = d.read(&mut buffer)?;
+                    while num_read == buffer.len() {
+                        swap.write(&buffer);
+                        d.read(&mut buffer)?;
+                    }
+                    unsafe {buffer.set_len(num_read);}
+                    swap.write(&buffer);
+                } else {
+                    let mut num_read = handle.read(&mut buffer)?;
+                    while num_read == buffer.len() {
+                        swap.write(&buffer);
+                        handle.read(&mut buffer)?;
+                    }
+                    unsafe {buffer.set_len(num_read);}
+                    swap.write(&buffer);
+                }
+                swap_handle = Some(swap);
                 
             },
             FileManagerType::LiveEdit | FileManagerType::ReadOnly => {
@@ -153,7 +180,7 @@ impl FileManager<'_> {
             metadata,
             modified: false,
             block_size: 65535,
-            swap_handle: None,
+            swap_handle: swap_handle,
             swap_metadata: None,
             file_buffer
         })
@@ -190,8 +217,39 @@ impl FileManager<'_> {
                 self.modified = false;
                 Ok(())
             },
-            FileManagerType::SwapFile => {
-                todo!()
+            FileManagerType::SwapFile => { // TODO: Make this work
+                match &mut self.swap_handle {
+                    Some(swap_handle) => {
+
+                        self.handle.seek(SeekFrom::Start(0))?;
+                        swap_handle.seek(SeekFrom::Start(0))?;
+                        let mut buffer = vec![0;self.block_size];
+                        if self.extract {
+                            //let b = std::io::BufReader::new(swap_handle);
+                            let mut d = GzEncoder::new(swap_handle, Compression::default());
+                            let mut num_read = d.read(&mut buffer)?;
+                            while num_read == buffer.len() {
+                                self.handle.write(&buffer);
+                                d.read(&mut buffer)?;
+                            }
+                            unsafe {buffer.set_len(num_read);}
+                            self.handle.write(&buffer);
+                            println!("Done writing!");
+                        } else {
+                            let mut num_read = swap_handle.read(&mut buffer)?;
+                            while num_read == buffer.len() {
+                                self.handle.write(&buffer);
+                                swap_handle.read(&mut buffer)?;
+                            }
+                            unsafe {buffer.set_len(num_read);}
+                            self.handle.write(&buffer);
+                        }
+                        let n = self.handle.seek(SeekFrom::Current(0))?;
+                         self.handle.set_len(n)?;
+                        Ok(())
+                    },
+                    None => Err(std::io::Error::new(std::io::ErrorKind::Other, "No swap handle found".to_string()))
+                }
             },
             FileManagerType::LiveEdit | FileManagerType::ReadOnly => {
                 Err(std::io::Error::new(std::io::ErrorKind::Other, "Operation not valid in read-only and live modes".to_string()))

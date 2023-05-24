@@ -1300,7 +1300,6 @@ impl<'a> HexEdit<'a> {
     }
 
     fn get_display_line(&self, line: usize) -> Vec<u8>{
-        //println!("{}, {}, {}", line*(self.line_length as usize), (line + 1)*(self.line_length as usize), self.display_data.len());
         self.display_data[line*(self.line_length as usize)..(line + 1)*(self.line_length as usize)].to_vec()
     }
 
@@ -1628,7 +1627,7 @@ impl<'a> HexEdit<'a> {
     fn addch_ascii_overwrite(&mut self, ch: char) -> ActionResult {
         match ch {
             '\u{08}' => { // Backspace
-                // Does the same thins as Key_Left in overwrite mode
+                // Does the same thing as Key_Left in overwrite mode
                 if self.cursor_pos > 0{
                     self.retreat_cursor()
                 } else {
