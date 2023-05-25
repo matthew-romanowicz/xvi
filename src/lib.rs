@@ -62,6 +62,8 @@ const MANUAL_TEXT: &str = r"\b\cCOMMANDS
 \b  INSERTION/OVERWRITE:
     :ins fmt #          =>  Insert # encoded as fmt at the cusor location
     :ovr fmt #          =>  Overwrite # encoded as fmt at the cusor location
+    :p fmt              =>  Print the next group of bytes as fmt
+    :ps fmt             =>  Print the next group of bytes as fmt and seek to the end of the group
 
 \b  REGISTER OPERATIONS:
     :cat r# r##         =>  Concatenate contents of listed register ## into register #
@@ -310,7 +312,7 @@ fn execute_command(editor_stack: &mut EditorStack, command: Vec<char>) -> (Comma
                         (CommandToken::Keyword(CommandKeyword::Open), CommandToken::Word(word)) => {
                             (CommandInstruction::Open(word.iter().collect()), ActionResult::empty())
                         },
-                        (CommandToken::Keyword(CommandKeyword::Print), _) => { // :p []
+                        (CommandToken::Keyword(kwrd), _) if matches!(kwrd, CommandKeyword::Print | CommandKeyword::PrintSeek) => { // :p []
                             let mut hm = &mut editor_stack.editors[editor_stack.current];
 
                             let fmt = match &tokens[1] {
@@ -330,7 +332,15 @@ fn execute_command(editor_stack: &mut EditorStack, command: Vec<char>) -> (Comma
                             match hm.hex_edit.get_bytes(hm.hex_edit.get_cursor_pos(), &mut buffer) {
                                 Ok(n) if n == n_bytes => {
                                     match from_bytes(&buffer, DataType {fmt, end: editor_stack.endianness}) {
-                                        Ok(s) => (CommandInstruction::NoOp, ActionResult::error(s)),
+                                        Ok(s) => {
+                                            let mut res = match kwrd {
+                                                CommandKeyword::Print => ActionResult::empty(),
+                                                CommandKeyword::PrintSeek => hm.hex_edit.seek(SeekFrom::Current(n_bytes as i64)),
+                                                _ => return (CommandInstruction::NoOp, ActionResult::error("Impossible state".to_string()))
+                                            };
+                                            res.set_error(s);
+                                            (CommandInstruction::NoOp, res)
+                                        },
                                         Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg))
                                     }
                                 },
@@ -812,6 +822,9 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
         hm.hex_edit.draw(&mut window);
     }
 
+    let mut command_history = Vec::<Vec<char>>::new();
+    let mut command_history_index = 0;
+
     let mut line_entry = LineEntry::new(window.get_max_x() as usize - 2 - cursor_index_len, 0, window.get_max_y() as usize - 1);
 
     let mut manual_view = LargeTextView::new(0, 0, window.get_max_x() as usize - 1, window.get_max_y() as usize - 1, MANUAL_TEXT.to_string());
@@ -909,11 +922,28 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                     Some(Input::KeyResize) => {
                         resize_term(0, 0);
                     },
+                    Some(Input::KeyUp) => {
+                        if command_history_index > 0 {
+                            command_history_index -= 1;
+                            line_entry.set_text(command_history[command_history_index].to_vec());
+                            line_entry.draw(&mut window);
+                        }
+                    },
+                    Some(Input::KeyDown) => {
+                        if command_history_index + 1 < command_history.len() {
+                            command_history_index += 1;
+                            line_entry.set_text(command_history[command_history_index].to_vec());
+                            line_entry.draw(&mut window);
+                        }
+                    },
                     Some(Input::Character('\u{1b}')) => {
                         edit_state = EditState::Escaped;
                     },
                     Some(Input::Character('\n')) => {
                         //println!("Newline: {}", String::from_iter(line_entry.get_text()));
+                        command_history.push(line_entry.get_text());
+                        command_history_index = command_history.len();
+
                         let (instr, result) = execute_command(&mut editors, line_entry.get_text());
 
                         let mut hm = &mut editors.editors[editors.current];

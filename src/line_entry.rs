@@ -107,6 +107,17 @@ impl LineEntry {
         self.text.to_vec()
     }
 
+    pub fn set_text(&mut self, text: Vec<char>) {
+        self.text = text;
+        if self.text.len() > self.length {
+            self.offset = self.text.len() - self.length;
+            self.cursor_pos = self.length;
+        } else {
+            self.offset = 0;
+            self.cursor_pos = self.text.len();
+        }
+    }
+
     pub fn clear(&mut self) {
         self.text = Vec::<char>::new();
         self.cursor_pos = 0;
