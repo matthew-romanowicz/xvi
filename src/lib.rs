@@ -11,7 +11,7 @@ mod large_text_view;
 use crate::large_text_view::LargeTextView;
 
 mod hex_edit;
-use crate::hex_edit::{FileManager, Action, CompoundAction, ActionStack, UpdateDescription, EditMode, ActionResult, ShowType, FillType, shift_vector, vector_op, HexEdit};
+use crate::hex_edit::{FileManager, Action, CompoundAction, ActionStack, UpdateDescription, EditMode, ActionResult, ShowType, FillType, shift_vector, vector_op, HexEdit, DataSource};
 pub use crate::hex_edit::FileManagerType;
 
 mod parsers;
@@ -534,8 +534,8 @@ fn execute_command(editor_stack: &mut EditorStack, command: Vec<char>) -> (Comma
                             match to_bytes(input, DataType {fmt, end: editor_stack.endianness}){
                                 Ok(bytes) => {
                                     match kwrd {
-                                        CommandKeyword::Ins => (CommandInstruction::NoOp, hm.hex_edit.insert_bytes(&bytes)),
-                                        CommandKeyword::Ovr => (CommandInstruction::NoOp, hm.hex_edit.overwrite_bytes(&bytes)),
+                                        CommandKeyword::Ins => (CommandInstruction::NoOp, hm.hex_edit.insert(DataSource::Bytes(bytes.to_vec()))),
+                                        CommandKeyword::Ovr => (CommandInstruction::NoOp, hm.hex_edit.overwrite(DataSource::Bytes(bytes.to_vec()))),
                                         _ => (CommandInstruction::NoOp, ActionResult::error("Impossible state".to_string()))
                                     }
                                 },
@@ -668,10 +668,10 @@ fn execute_keystroke(editor_stack: &mut EditorStack, macro_manager: &mut MacroMa
                     hm.action_stack.redo(&mut hm.hex_edit)
                 },
                 KeystrokeToken::Character('p') => {
-                    hm.hex_edit.insert_register(0)
+                    hm.hex_edit.insert(DataSource::Register(0))
                 },
                 KeystrokeToken::Character('P') => {
-                    hm.hex_edit.overwrite_register(0)
+                    hm.hex_edit.overwrite(DataSource::Register(0))
                 },
                 KeystrokeToken::Character('M') => {
                     macro_manager.finish(&hm.action_stack)
@@ -692,10 +692,10 @@ fn execute_keystroke(editor_stack: &mut EditorStack, macro_manager: &mut MacroMa
                     editor_stack.editors[editor_stack.current].hex_edit.seek(SeekFrom::End(n as i64))
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('f')) => {
-                    editor_stack.editors[editor_stack.current].hex_edit.insert_fill(n)
+                    editor_stack.editors[editor_stack.current].hex_edit.insert(DataSource::Fill(n))
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('F')) => {
-                    editor_stack.editors[editor_stack.current].hex_edit.overwrite_fill(n)
+                    editor_stack.editors[editor_stack.current].hex_edit.overwrite(DataSource::Fill(n))
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('d')) => {
                     editor_stack.editors[editor_stack.current].hex_edit.delete_bytes(n)
@@ -708,20 +708,20 @@ fn execute_keystroke(editor_stack: &mut EditorStack, macro_manager: &mut MacroMa
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('p')) => {
                     if n < 32 {
-                        editor_stack.editors[editor_stack.current].hex_edit.insert_register(n as u8)
+                        editor_stack.editors[editor_stack.current].hex_edit.insert(DataSource::Register(n as u8))
                     } else if n < 64 {
                         let v = editor_stack.clipboard_registers[n - 32].to_vec();
-                        editor_stack.editors[editor_stack.current].hex_edit.insert_bytes(&v)
+                        editor_stack.editors[editor_stack.current].hex_edit.insert(DataSource::Bytes(v))
                     } else {
                         ActionResult::error("Register indices must be less than 64".to_string())
                     }
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('P')) => {
                     if n < 32 {
-                        editor_stack.editors[editor_stack.current].hex_edit.overwrite_register(n as u8)
+                        editor_stack.editors[editor_stack.current].hex_edit.overwrite(DataSource::Register(n as u8))
                     } else if n < 64 {
                         let v = editor_stack.clipboard_registers[n - 32].to_vec();
-                        editor_stack.editors[editor_stack.current].hex_edit.overwrite_bytes(&v)
+                        editor_stack.editors[editor_stack.current].hex_edit.overwrite(DataSource::Bytes(v))
                     } else {
                         ActionResult::error("Register indices must be less than 64".to_string())
                     }

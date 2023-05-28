@@ -50,6 +50,10 @@ fn get_bytes_from_handle(handle: &mut File, index: usize, buffer: &mut Vec<u8>) 
     }
 }
 
+fn truncate_from_handle(handle: &mut File, size: usize) -> std::io::Result<()> {
+    todo!()
+}
+
 fn offset_bytes_from_handle(handle: &mut File, index: usize, n_bytes: u64, block_size: usize) -> std::io::Result<()> {
     let file_length = handle.metadata()?.len() as usize;
     let mut buffer: Vec<u8> = vec![0; block_size];
@@ -281,6 +285,31 @@ impl FileManager<'_> {
             },
             FileManagerType::LiveEdit | FileManagerType::ReadOnly => {
                 get_bytes_from_handle(&mut self.handle, index, buffer)
+            }
+        }
+    }
+
+    pub fn truncate(&mut self, size: usize) -> std::io::Result<()> {
+        if size > self.len() {
+            return Err(std::io::Error::new(std::io::ErrorKind::Other, "Cannot truncate to size greater than file length".to_string()));
+        }
+        self.modified = true;
+        match self.file_manager_type {
+            FileManagerType::RamOnly => {
+                unsafe {self.file_buffer.set_len(size);}
+                Ok(())
+            },
+            FileManagerType::SwapFile => {
+                match &mut self.swap_handle {
+                    Some(ref mut handle) => truncate_from_handle(handle, size),
+                    None => Err(std::io::Error::new(std::io::ErrorKind::Other, "No swap handle found".to_string()))
+                }
+            },
+            FileManagerType::LiveEdit => {
+                truncate_from_handle(&mut self.handle, size)
+            },
+            FileManagerType::ReadOnly => {
+                Err(std::io::Error::new(std::io::ErrorKind::Other, "Operation not valid in read-only mode".to_string()))
             }
         }
     }
