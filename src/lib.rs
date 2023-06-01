@@ -30,6 +30,7 @@ fn command_kwrd_to_fmt(kwrd: &CommandKeyword) -> Result<BinaryFormat, String> {
         CommandKeyword::I16 => Ok(BinaryFormat::IInt(IIntFormat::I16)),
         CommandKeyword::I32 => Ok(BinaryFormat::IInt(IIntFormat::I32)),
         CommandKeyword::I64 => Ok(BinaryFormat::IInt(IIntFormat::I64)),
+        CommandKeyword::F16 => Ok(BinaryFormat::Float(FloatFormat::F16)),
         CommandKeyword::F32 => Ok(BinaryFormat::Float(FloatFormat::F32)),
         CommandKeyword::F64 => Ok(BinaryFormat::Float(FloatFormat::F64)),
         _ => Err("Command not recognized".to_string())

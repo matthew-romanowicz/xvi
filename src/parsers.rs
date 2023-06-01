@@ -1,5 +1,3 @@
-use crate::hex_edit::FillType;
-
 pub enum CommandKeyword {
     Set,
     Caps,
@@ -31,6 +29,7 @@ pub enum CommandKeyword {
     I16,
     I32,
     I64,
+    F16,
     F32,
     F64,
     On,
@@ -82,6 +81,7 @@ fn parse_command_keyword(word: &Vec<char>) -> Option<CommandKeyword> {
         "i16" => Some(CommandKeyword::I16),
         "i32" => Some(CommandKeyword::I32),
         "i64" => Some(CommandKeyword::I64),
+        "f16" => Some(CommandKeyword::F16),
         "f32" => Some(CommandKeyword::F32),
         "f64" => Some(CommandKeyword::F64),
         "on" => Some(CommandKeyword::On),

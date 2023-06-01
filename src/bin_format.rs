@@ -1,3 +1,5 @@
+use half::f16;
+
 #[derive(Copy, Clone)]
 pub enum Endianness {
     Big,
@@ -20,6 +22,7 @@ pub enum IIntFormat {
 }
 
 pub enum FloatFormat {
+    F16,
     F32,
     F64
 }
@@ -45,6 +48,7 @@ pub fn fmt_length(fmt: &BinaryFormat) -> usize {
         BinaryFormat::IInt(IIntFormat::I16) => 2,
         BinaryFormat::IInt(IIntFormat::I32) => 4,
         BinaryFormat::IInt(IIntFormat::I64) => 8,
+        BinaryFormat::Float(FloatFormat::F16) => 2,
         BinaryFormat::Float(FloatFormat::F32) => 4,
         BinaryFormat::Float(FloatFormat::F64) => 8
     }
@@ -64,7 +68,7 @@ macro_rules! str_res {
 
 pub fn to_bytes(input: &Vec<char>, datatype: DataType) -> Result<Vec<u8>, String> {
     let s: String = input.iter().collect::<String>();
-    println!("Number: {:?}", str_res!(s.parse::<f32>()));
+    //println!("Number: {:?}", str_res!(s.parse::<f32>()));
     match &datatype.end {
         Endianness::Big => {
             match &datatype.fmt {
@@ -76,6 +80,7 @@ pub fn to_bytes(input: &Vec<char>, datatype: DataType) -> Result<Vec<u8>, String
                 BinaryFormat::IInt(IIntFormat::I16) => Ok((str_res!(s.parse::<i16>())?).to_be_bytes().to_vec()),
                 BinaryFormat::IInt(IIntFormat::I32) => Ok((str_res!(s.parse::<i32>())?).to_be_bytes().to_vec()),
                 BinaryFormat::IInt(IIntFormat::I64) => Ok((str_res!(s.parse::<i64>())?).to_be_bytes().to_vec()),
+                BinaryFormat::Float(FloatFormat::F16) => Ok((str_res!(s.parse::<f16>())?).to_be_bytes().to_vec()),
                 BinaryFormat::Float(FloatFormat::F32) => Ok((str_res!(s.parse::<f32>())?).to_be_bytes().to_vec()),
                 BinaryFormat::Float(FloatFormat::F64) => Ok((str_res!(s.parse::<f64>())?).to_be_bytes().to_vec())
             }
@@ -90,6 +95,7 @@ pub fn to_bytes(input: &Vec<char>, datatype: DataType) -> Result<Vec<u8>, String
                 BinaryFormat::IInt(IIntFormat::I16) => Ok((str_res!(s.parse::<i16>())?).to_le_bytes().to_vec()),
                 BinaryFormat::IInt(IIntFormat::I32) => Ok((str_res!(s.parse::<i32>())?).to_le_bytes().to_vec()),
                 BinaryFormat::IInt(IIntFormat::I64) => Ok((str_res!(s.parse::<i64>())?).to_le_bytes().to_vec()),
+                BinaryFormat::Float(FloatFormat::F16) => Ok((str_res!(s.parse::<f16>())?).to_le_bytes().to_vec()),
                 BinaryFormat::Float(FloatFormat::F32) => Ok((str_res!(s.parse::<f32>())?).to_le_bytes().to_vec()),
                 BinaryFormat::Float(FloatFormat::F64) => Ok((str_res!(s.parse::<f64>())?).to_le_bytes().to_vec())
             }
@@ -104,6 +110,7 @@ pub fn to_bytes(input: &Vec<char>, datatype: DataType) -> Result<Vec<u8>, String
                 BinaryFormat::IInt(IIntFormat::I16) => Ok((str_res!(s.parse::<i16>())?).to_ne_bytes().to_vec()),
                 BinaryFormat::IInt(IIntFormat::I32) => Ok((str_res!(s.parse::<i32>())?).to_ne_bytes().to_vec()),
                 BinaryFormat::IInt(IIntFormat::I64) => Ok((str_res!(s.parse::<i64>())?).to_ne_bytes().to_vec()),
+                BinaryFormat::Float(FloatFormat::F16) => Ok((str_res!(s.parse::<f16>())?).to_ne_bytes().to_vec()),
                 BinaryFormat::Float(FloatFormat::F32) => Ok((str_res!(s.parse::<f32>())?).to_ne_bytes().to_vec()),
                 BinaryFormat::Float(FloatFormat::F64) => Ok((str_res!(s.parse::<f64>())?).to_ne_bytes().to_vec())
             }
@@ -155,6 +162,7 @@ pub fn from_bytes(input: &Vec<u8>, datatype: DataType) -> Result<String, String>
                 BinaryFormat::IInt(IIntFormat::I16) => Ok(format!("{}", i16::from_be_bytes(vec_to_2(input)?))),
                 BinaryFormat::IInt(IIntFormat::I32) => Ok(format!("{}", i32::from_be_bytes(vec_to_4(input)?))),
                 BinaryFormat::IInt(IIntFormat::I64) => Ok(format!("{}", i64::from_be_bytes(vec_to_8(input)?))),
+                BinaryFormat::Float(FloatFormat::F16) => Ok(format!("{}", f16::from_be_bytes(vec_to_2(input)?))),
                 BinaryFormat::Float(FloatFormat::F32) => Ok(format!("{}", f32::from_be_bytes(vec_to_4(input)?))),
                 BinaryFormat::Float(FloatFormat::F64) => Ok(format!("{}", f64::from_be_bytes(vec_to_8(input)?)))
             }
@@ -169,6 +177,7 @@ pub fn from_bytes(input: &Vec<u8>, datatype: DataType) -> Result<String, String>
                 BinaryFormat::IInt(IIntFormat::I16) => Ok(format!("{}", i16::from_le_bytes(vec_to_2(input)?))),
                 BinaryFormat::IInt(IIntFormat::I32) => Ok(format!("{}", i32::from_le_bytes(vec_to_4(input)?))),
                 BinaryFormat::IInt(IIntFormat::I64) => Ok(format!("{}", i64::from_le_bytes(vec_to_8(input)?))),
+                BinaryFormat::Float(FloatFormat::F16) => Ok(format!("{}", f16::from_le_bytes(vec_to_2(input)?))),
                 BinaryFormat::Float(FloatFormat::F32) => Ok(format!("{}", f32::from_le_bytes(vec_to_4(input)?))),
                 BinaryFormat::Float(FloatFormat::F64) => Ok(format!("{}", f64::from_le_bytes(vec_to_8(input)?)))
             }
@@ -183,6 +192,7 @@ pub fn from_bytes(input: &Vec<u8>, datatype: DataType) -> Result<String, String>
                 BinaryFormat::IInt(IIntFormat::I16) => Ok(format!("{}", i16::from_ne_bytes(vec_to_2(input)?))),
                 BinaryFormat::IInt(IIntFormat::I32) => Ok(format!("{}", i32::from_ne_bytes(vec_to_4(input)?))),
                 BinaryFormat::IInt(IIntFormat::I64) => Ok(format!("{}", i64::from_ne_bytes(vec_to_8(input)?))),
+                BinaryFormat::Float(FloatFormat::F16) => Ok(format!("{}", f16::from_ne_bytes(vec_to_2(input)?))),
                 BinaryFormat::Float(FloatFormat::F32) => Ok(format!("{}", f32::from_ne_bytes(vec_to_4(input)?))),
                 BinaryFormat::Float(FloatFormat::F64) => Ok(format!("{}", f64::from_ne_bytes(vec_to_8(input)?)))
             }
