@@ -34,21 +34,18 @@ options:
                     }
                     'l' => {
                         file_manager_type = FileManagerType::LiveEdit;
-                        println!("Live edit");
                     },
                     's' => {
                         file_manager_type = FileManagerType::SwapFile;
-                        println!("Swap file");
                     },
                     'r' => {
                         file_manager_type = FileManagerType::ReadOnly;
-                        println!("Read only");
                     },
                     'x' => {
                         extract = true;
                     },
                     _ => {
-                        println!("Option not recognized: {}. Run 'xvi -h' for help", ch);
+                        eprintln!("Option not recognized: {}. Run 'xvi -h' for help", ch);
                         std::process::exit(1);
                     }
                 }
@@ -58,16 +55,13 @@ options:
         }
     }
 
-    println!("Path: {}", path);
-    println!("Extract: {}", extract);
-
 
     match run("C:\\Users\\Matthew\\Documents\\Git\\xvi\\test_file4.bin.gz".to_string(), file_manager_type, extract) {
         Ok(_) => {
             std::process::exit(0);
         },
         Err(msg) => {
-            eprint!("{}", msg.to_string());
+            eprintln!("{}", msg.to_string());
             std::process::exit(1)
         }
     }

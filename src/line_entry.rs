@@ -52,7 +52,7 @@ fn autocomplete_path(text: &String) -> Vec<String> {
         Some(f) => {
             if !(text.ends_with(r"\") || text.ends_with(r"/")) {
                 fname = f.to_str().unwrap();
-                println!("{}", fname);
+                //println!("{}", fname);
                 match path.parent() {
                     Some(p) => {
                         path = p;
@@ -276,7 +276,7 @@ impl LineEntry {
                                 }
 
                             },
-                            None => println!("Nothing found")
+                            None => ()//println!("Nothing found")
                         }
                     }
                 }
@@ -286,7 +286,7 @@ impl LineEntry {
                 self.text.insert(self.cursor_pos + self.offset, c);
                 self.advance_cursor();
             },
-            input => { println!("Input: {:?}", input); },
+            input => ()//{ println!("Input: {:?}", input); },
         }
     }
 

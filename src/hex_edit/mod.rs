@@ -220,7 +220,6 @@ impl SwapAction {
 
 impl Action for SwapAction {
     fn undo(&self, hex_edit: &mut HexEdit) -> ActionResult {
-        println!("Undoing!");
         hex_edit.swap_bytes(self.n_bytes) 
     }
 
@@ -252,7 +251,6 @@ impl YankAction {
 
 impl Action for YankAction {
     fn undo(&self, hex_edit: &mut HexEdit) -> ActionResult {
-        println!("Undoing seek");
         hex_edit.set_register(self.register, &self.original_bytes)
     }
 
@@ -309,7 +307,6 @@ impl SwapRegisterAction {
 
 impl Action for SwapRegisterAction {
     fn undo(&self, hex_edit: &mut HexEdit) -> ActionResult {
-        println!("Undoing swap regiser");
         hex_edit.swap_register(self.register)
     }
 
@@ -364,7 +361,6 @@ impl ShiftRegisterAction {
 
 impl Action for ShiftRegisterAction {
     fn undo(&self, hex_edit: &mut HexEdit) -> ActionResult {
-        println!("Undoing shift regiser");
         hex_edit.shift_register(self.register, -self.shift)
     }
 
@@ -1127,7 +1123,9 @@ impl<'a> HexEdit<'a> {
         let index = self.cursor_pos;
         if index + n_bytes <= self.file_manager.len() {
             let mut original_bytes: Vec<u8> = vec![0; n_bytes];
-            self.file_manager.get_bytes(index, &mut original_bytes); // TODO take care of this ActionResult
+            if let Err(msg) = self.file_manager.get_bytes(index, &mut original_bytes) {
+                return ActionResult::error(msg.to_string())
+            }
             match self.file_manager.delete_bytes(index, n_bytes) {
                 Ok(_) => ActionResult {
                     error: None,
@@ -1550,7 +1548,8 @@ impl<'a> HexEdit<'a> {
                             return self.delete_byte(self.cursor_pos);
                         },
                         Nibble::Right => {
-                            return self.overwrite_byte(self.cursor_pos, b & 0xf0);
+                            let c = match self.get_byte(self.cursor_pos) {Some(x) => x, None => 0};
+                            return self.overwrite_byte(self.cursor_pos, c & 0xf0);
                         }
                     }
                 } else {
@@ -1652,14 +1651,14 @@ impl<'a> HexEdit<'a> {
                 ()
             },
             UpdateDescription::AttrsOnly => {
-                println!("Refreshing attrs");
+                //println!("Refreshing attrs");
                 self.populate(window, 0, self.height); //TODO: Get rid of this! It's only needed to refresh the attributes.
                 self.refresh_cursor(window);
                 self.refresh_highlights(window);
             },
             UpdateDescription::After(n) =>{
                 let line = clip_to_range(n / (self.line_length as usize), self.start_line, self.start_line + self.height);
-                println!("Refreshing lines {} through {}", line - self.start_line, self.height);
+                //println!("Refreshing lines {} through {}", line - self.start_line, self.height);
                 self.refresh_viewport()?;
                 self.populate(window, line - self.start_line, self.height);
                 self.refresh_cursor(window);
@@ -1669,14 +1668,14 @@ impl<'a> HexEdit<'a> {
                 let line1 = clip_to_range(n1 / (self.line_length as usize), self.start_line, self.start_line + self.height);
                 let line2 = clip_to_range((n2 - 1) / (self.line_length as usize), self.start_line, self.start_line + self.height);
 
-                println!("Refreshing lines {} through {}", line1 - self.start_line, line2 - self.start_line);
+                //println!("Refreshing lines {} through {}", line1 - self.start_line, line2 - self.start_line);
                 self.refresh_viewport()?;
                 self.populate(window, line1 - self.start_line, line2 - self.start_line + 1);
                 self.refresh_cursor(window);
                 self.refresh_highlights(window); 
             },
             UpdateDescription::All => {
-                println!("Refreshing all");
+                //println!("Refreshing all");
                 self.refresh_viewport()?;
                 self.populate(window, 0, self.height);
                 self.refresh_cursor(window);

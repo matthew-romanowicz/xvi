@@ -143,30 +143,30 @@ impl FileManager<'_> {
                 }
             },
             FileManagerType::SwapFile => {
-                let mut path = std::path::Path::new(&filename);
+                let path = std::path::Path::new(&filename);
 
                 let name = format!(".{}.swp", path.file_name().unwrap().to_str().unwrap().trim_matches('"'));
                 let swap_path = path.with_file_name(name).to_str().unwrap().to_string();
-                println!("{}", swap_path);
+                //println!("{}", swap_path);
                 let mut swap = File::options().read(true).write(true).create(true).open(swap_path)?;
                 let mut buffer = vec![0;65535];
                 if extract {
                     let mut d = GzDecoder::new(&handle);
                     let mut num_read = d.read(&mut buffer)?;
                     while num_read == buffer.len() {
-                        swap.write(&buffer);
-                        d.read(&mut buffer)?;
+                        swap.write(&buffer)?;
+                        num_read = d.read(&mut buffer)?;
                     }
                     unsafe {buffer.set_len(num_read);}
-                    swap.write(&buffer);
+                    swap.write(&buffer)?;
                 } else {
                     let mut num_read = handle.read(&mut buffer)?;
                     while num_read == buffer.len() {
-                        swap.write(&buffer);
-                        handle.read(&mut buffer)?;
+                        swap.write(&buffer)?;
+                        num_read = handle.read(&mut buffer)?;
                     }
                     unsafe {buffer.set_len(num_read);}
-                    swap.write(&buffer);
+                    swap.write(&buffer)?;
                 }
                 swap_handle = Some(swap);
                 
@@ -233,20 +233,20 @@ impl FileManager<'_> {
                             let mut d = GzEncoder::new(swap_handle, Compression::default());
                             let mut num_read = d.read(&mut buffer)?;
                             while num_read == buffer.len() {
-                                self.handle.write(&buffer);
+                                self.handle.write(&buffer)?;
                                 d.read(&mut buffer)?;
                             }
                             unsafe {buffer.set_len(num_read);}
-                            self.handle.write(&buffer);
-                            println!("Done writing!");
+                            self.handle.write(&buffer)?;
+                            //println!("Done writing!");
                         } else {
                             let mut num_read = swap_handle.read(&mut buffer)?;
                             while num_read == buffer.len() {
-                                self.handle.write(&buffer);
+                                self.handle.write(&buffer)?;
                                 swap_handle.read(&mut buffer)?;
                             }
                             unsafe {buffer.set_len(num_read);}
-                            self.handle.write(&buffer);
+                            self.handle.write(&buffer)?;
                         }
                         let n = self.handle.seek(SeekFrom::Current(0))?;
                          self.handle.set_len(n)?;

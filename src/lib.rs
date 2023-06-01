@@ -193,7 +193,7 @@ impl<'a> EditorStack<'a> {
     }
 
     fn apply<F>(&mut self, f: F) -> ActionResult where F: Fn(&mut HexEdit) -> ActionResult {
-        for (i, mut hm) in self.editors.iter_mut().enumerate() {
+        for (i, hm) in self.editors.iter_mut().enumerate() {
             if i != self.current {
                 f(&mut hm.hex_edit);
             }
@@ -202,7 +202,7 @@ impl<'a> EditorStack<'a> {
     }
 
     fn set_edit_mode(&mut self, edit_mode: EditMode) -> ActionResult {
-        for (i, mut hm) in self.editors.iter_mut().enumerate() {
+        for (i, hm) in self.editors.iter_mut().enumerate() {
             if i != self.current {
                 hm.hex_edit.set_edit_mode(edit_mode);
             }
@@ -236,7 +236,7 @@ fn execute_command(editor_stack: &mut EditorStack, command: Vec<char>) -> (Comma
             let tokens = parse_command(&command[1..].to_vec());
             match tokens.len() {
                 1 => {
-                    let mut hm = &mut editor_stack.editors[editor_stack.current];
+                    let hm = &mut editor_stack.editors[editor_stack.current];
                     match &tokens[0] {
                         CommandToken::Keyword(CommandKeyword::Save) => {
                             let result = hm.hex_edit.save();
@@ -313,7 +313,7 @@ fn execute_command(editor_stack: &mut EditorStack, command: Vec<char>) -> (Comma
                             (CommandInstruction::Open(word.iter().collect()), ActionResult::empty())
                         },
                         (CommandToken::Keyword(kwrd), _) if matches!(kwrd, CommandKeyword::Print | CommandKeyword::PrintSeek) => { // :p []
-                            let mut hm = &mut editor_stack.editors[editor_stack.current];
+                            let hm = &mut editor_stack.editors[editor_stack.current];
 
                             let fmt = match &tokens[1] {
                                 CommandToken::Keyword(fmt_kwrd) => {
@@ -401,7 +401,7 @@ fn execute_command(editor_stack: &mut EditorStack, command: Vec<char>) -> (Comma
                                     (CommandInstruction::NoOp, editor_stack.apply(|h| h.set_block_size(*n)))
                                 },
                                 (CommandToken::Keyword(CommandKeyword::Undo), CommandToken::Integer(_, n)) => {
-                                    for mut hm in editor_stack.editors.iter_mut() {
+                                    for hm in editor_stack.editors.iter_mut() {
                                         hm.action_stack.set_length(*n);
                                     }
                                     (CommandInstruction::NoOp, ActionResult::empty())
@@ -513,7 +513,7 @@ fn execute_command(editor_stack: &mut EditorStack, command: Vec<char>) -> (Comma
                             }
                         },
                         CommandToken::Keyword(kwrd) if matches!(kwrd, CommandKeyword::Ins | CommandKeyword::Ovr) => { // :ins | ovr [] []
-                            let mut hm = &mut editor_stack.editors[editor_stack.current];
+                            let hm = &mut editor_stack.editors[editor_stack.current];
                             let input = match &tokens[2] {
                                 CommandToken::Integer(word, _) => word,
                                 CommandToken::Word(word) => word,
@@ -555,8 +555,11 @@ fn execute_command(editor_stack: &mut EditorStack, command: Vec<char>) -> (Comma
                                     if *register < 32 {
                                         (CommandInstruction::NoOp, editor_stack.editors[editor_stack.current].hex_edit.shift_register(*register as u8, shift))
                                     } else if *register < 64 {
-                                        shift_vector(&mut editor_stack.clipboard_registers[*register - 32], shift);
-                                        (CommandInstruction::NoOp, ActionResult::empty())
+                                        match shift_vector(&mut editor_stack.clipboard_registers[*register - 32], shift) {
+                                            Ok(()) => (CommandInstruction::NoOp, ActionResult::empty()),
+                                            Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
+                                        }
+                                        
                                     } else {
                                         (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
                                     }
@@ -572,13 +575,13 @@ fn execute_command(editor_stack: &mut EditorStack, command: Vec<char>) -> (Comma
         },
         // FIND IN FILE
         '/' => {
-            let mut hm = &mut editor_stack.editors[editor_stack.current];
+            let hm = &mut editor_stack.editors[editor_stack.current];
             hm.hex_edit.clear_find();
             hm.hex_edit.find(&command[1..].to_vec());
             (CommandInstruction::NoOp, hm.hex_edit.seek_next())
         },
         '?' => {
-            let mut hm = &mut editor_stack.editors[editor_stack.current];
+            let hm = &mut editor_stack.editors[editor_stack.current];
             hm.hex_edit.clear_find();
             hm.hex_edit.find(&command[1..].to_vec());
             (CommandInstruction::NoOp, hm.hex_edit.seek_prev())
@@ -647,7 +650,7 @@ fn execute_keystroke(editor_stack: &mut EditorStack, macro_manager: &mut MacroMa
     match tokens.len() {
 
         1 => {
-            let mut hm = &mut editor_stack.editors[editor_stack.current];
+            let hm = &mut editor_stack.editors[editor_stack.current];
             match tokens[0] {
                 KeystrokeToken::Character('g') => {
                     hm.hex_edit.seek(SeekFrom::Start(0))
@@ -740,7 +743,7 @@ fn execute_keystroke(editor_stack: &mut EditorStack, macro_manager: &mut MacroMa
         },
 
         3 => {
-            let mut hm = &mut editor_stack.editors[editor_stack.current].hex_edit;
+            let hm = &mut editor_stack.editors[editor_stack.current].hex_edit;
             match (tokens[0], tokens[1], tokens[2]) {
                 (KeystrokeToken::Character('+'), KeystrokeToken::Integer(n), KeystrokeToken::Character('g')) => {
                     hm.seek(SeekFrom::Current(n as i64))
@@ -789,7 +792,6 @@ fn execute_keystroke(editor_stack: &mut EditorStack, macro_manager: &mut MacroMa
 }
 
 fn alert(text: String, window: &mut Window, line_entry: &mut LineEntry, hex_edit: &mut HexEdit) {
-    println!("ALERT: {}", text);
     line_entry.alert(text.chars().collect());
     line_entry.draw(window);
     hex_edit.refresh_cursor(window);
@@ -812,10 +814,10 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
 
     let mut macro_manager = MacroManager::new();
 
-    let mut cursor_index_len = 0;
+    let cursor_index_len: usize;
 
     {
-        let mut hm = &mut editors.editors[editors.current];
+        let hm = &mut editors.editors[editors.current];
 
         cursor_index_len = format!("{:x}", hm.hex_edit.len()).len();
         hm.hex_edit.set_viewport_row(0)?;
@@ -883,7 +885,7 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                         current_keystroke.push(c);
                         if matches!(c, 'g' | 'G' | 'f' | 'F' | 'd' | 'y' | 'p' | 'P' | 'u' | 'U' | 'n' | 'N' | 's' | 'm' | 'M') {
                             let result = execute_keystroke(&mut editors, &mut macro_manager, current_keystroke);
-                            let mut hm = &mut editors.editors[editors.current];
+                            let hm = &mut editors.editors[editors.current];
                             if let Some(err) = result.error {
                                 alert(err, &mut window, &mut line_entry, &mut hm.hex_edit);
                             }
@@ -898,7 +900,7 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                         }
                     },
                     Some(ch) if matches!(ch, Input::KeyRight | Input::KeyLeft | Input::KeyUp | Input::KeyDown | Input::KeyNPage | Input::KeyPPage | Input::KeyHome | Input::KeyEnd) => {
-                        let mut hm = &mut editors.editors[editors.current];
+                        let hm = &mut editors.editors[editors.current];
                         let result = hm.hex_edit.addch(ch);
                         if let Some(err) = result.error {
                             alert(err, &mut window, &mut line_entry, &mut hm.hex_edit);
@@ -912,7 +914,7 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                         }
                     },
                     _ => {
-                        println!("Invalid keystroke");
+                        alert("Invalid Keystroke".to_string(), &mut window, &mut line_entry, &mut editors.editors[editors.current].hex_edit)
                     }
                 }
             },
@@ -946,7 +948,7 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
 
                         let (instr, result) = execute_command(&mut editors, line_entry.get_text());
 
-                        let mut hm = &mut editors.editors[editors.current];
+                        let hm = &mut editors.editors[editors.current];
 
                         if let Some(err) = result.error {
                             alert(err, &mut window, &mut line_entry, &mut hm.hex_edit);
@@ -992,7 +994,7 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                 }
             },
             EditState::Edit => {
-                let mut hm = &mut editors.editors[editors.current];
+                let hm = &mut editors.editors[editors.current];
                 match ch_input {
                     Some(Input::KeyResize) => {
                         resize_term(0, 0);
@@ -1017,7 +1019,7 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                 }
             },
             EditState::Manual => {
-                let mut hm = &mut editors.editors[editors.current];
+                let hm = &mut editors.editors[editors.current];
                 match ch_input {
                     Some(Input::KeyResize) => {
                         resize_term(0, 0);
@@ -1031,7 +1033,7 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                         manual_view.addch(ch);
                         manual_view.draw(&mut window);
                     },
-                    _ => println!("Invalid Keystroke"),
+                    _ => alert("Invalid Keystroke".to_string(), &mut window, &mut line_entry, &mut editors.editors[editors.current].hex_edit)
                 }
             }
         }
@@ -1047,7 +1049,7 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
             ShowType::Dec => format!("{}", length).len(),
             ShowType::Hex => format!("{:x}", length).len()
         };
-        let mut cursor_index_string = match editors.cnum {
+        let cursor_index_string = match editors.cnum {
             ShowType::Off => "".to_string(),
             ShowType::Dec => format!("{:0width$}", pos, width=cursor_label_len),
             ShowType::Hex => match caps_hex {
