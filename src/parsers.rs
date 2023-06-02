@@ -45,6 +45,11 @@ pub enum CommandKeyword {
     Open,
     Cat,
     And,
+    Or,
+    Nand,
+    Nor,
+    Xor,
+    Xnor,
     Manual
 }
 
@@ -97,6 +102,11 @@ fn parse_command_keyword(word: &Vec<char>) -> Option<CommandKeyword> {
         "open" => Some(CommandKeyword::Open),
         "cat" => Some(CommandKeyword::Cat),
         "and" => Some(CommandKeyword::And),
+        "or" => Some(CommandKeyword::Or),
+        "nand" => Some(CommandKeyword::Nand),
+        "nor" => Some(CommandKeyword::Nor),
+        "xor" => Some(CommandKeyword::Xor),
+        "xnor" => Some(CommandKeyword::Xnor),
         "man" => Some(CommandKeyword::Manual),
         _ => None
     }

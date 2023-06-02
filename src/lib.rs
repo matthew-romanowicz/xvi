@@ -11,7 +11,7 @@ mod large_text_view;
 use crate::large_text_view::LargeTextView;
 
 mod hex_edit;
-use crate::hex_edit::{FileManager, Action, CompoundAction, ActionStack, UpdateDescription, EditMode, ActionResult, ShowType, FillType, shift_vector, vector_op, HexEdit, DataSource};
+use crate::hex_edit::{FileManager, Action, CompoundAction, ActionStack, UpdateDescription, EditMode, ActionResult, ShowType, ByteOperation, FillType, shift_vector, vector_op, HexEdit, DataSource};
 pub use crate::hex_edit::FileManagerType;
 
 mod parsers;
@@ -73,9 +73,13 @@ const MANUAL_TEXT: &str = r"\b\cCOMMANDS
     :swap r#            =>  Swap the byte order of register #
     :rshft r# ##        =>  Bitshift the contens of register # right ## bits
     :lshft r# ##        =>  Bitshift the contens of register # left ## bits
-    :and r# r##         =>  Perform bitwise AND on register # with register ##
-    :or r# r##          =>  [TODO] Perform bitwise OR on register # with register ##
     :not r#             =>  Perform bitwise NOT on regiser #
+    :and r# r##         =>  Perform bitwise AND on register # with register ##
+    :or r# r##          =>  Perform bitwise OR on register # with register ##
+    :nand r# r##         =>  Perform bitwise NAND on register # with register ##
+    :nor r# r##          =>  Perform bitwise NOR on register # with register ##
+    :xor r# r##         =>  Perform bitwise XOR on register # with register ##
+    :xnor r# r##          =>  Perform bitwise XNOR on register # with register ##
 
 \b  READ/WRITE:
     :w                  =>  Write all changes to file
@@ -466,15 +470,24 @@ fn execute_command(editor_stack: &mut EditorStack, command: Vec<char>) -> (Comma
                                 _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
                             }
                         },
-                        CommandToken::Keyword(CommandKeyword::And) => { // :and [] []
+                        CommandToken::Keyword(kwrd) if matches!(kwrd, CommandKeyword::And | CommandKeyword::Or | CommandKeyword::Nand | CommandKeyword::Nor | CommandKeyword::Xor | CommandKeyword::Xnor) => { // :and [] []
+                            let op = match kwrd {
+                                CommandKeyword::And => ByteOperation::And,
+                                CommandKeyword::Or => ByteOperation::Or,
+                                CommandKeyword::Nand => ByteOperation::Nand,
+                                CommandKeyword::Nor => ByteOperation::Nor,
+                                CommandKeyword::Xor => ByteOperation::Xor,
+                                CommandKeyword::Xnor => ByteOperation::Xnor,
+                                _ => return (CommandInstruction::NoOp, ActionResult::error("Impossible state".to_string()))
+                            };
                             match (&tokens[1], &tokens[2]) {
                                 (CommandToken::Register(n1), CommandToken::Register(n2)) => {
                                     if *n1 < 32 {
                                         if *n2 < 32 {
-                                            (CommandInstruction::NoOp, editor_stack.editors[editor_stack.current].hex_edit.and_register(*n1 as u8, FillType::Register(*n2 as u8)))
+                                            (CommandInstruction::NoOp, editor_stack.editors[editor_stack.current].hex_edit.manipulate_register(*n1 as u8, FillType::Register(*n2 as u8), op))
                                         } else if *n2 < 64 { 
                                             let fill = FillType::Bytes(editor_stack.clipboard_registers[*n2 - 32].to_vec());
-                                            (CommandInstruction::NoOp, editor_stack.editors[editor_stack.current].hex_edit.and_register(*n1 as u8, fill))
+                                            (CommandInstruction::NoOp, editor_stack.editors[editor_stack.current].hex_edit.manipulate_register(*n1 as u8, fill, op))
                                         } else {
                                             (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
                                         }
@@ -499,7 +512,7 @@ fn execute_command(editor_stack: &mut EditorStack, command: Vec<char>) -> (Comma
                                     match parse_bytes(word) {
                                         Ok(v) => {
                                             if *n < 32 {
-                                                (CommandInstruction::NoOp, editor_stack.editors[editor_stack.current].hex_edit.and_register(*n as u8, FillType::Bytes(v)))
+                                                (CommandInstruction::NoOp, editor_stack.editors[editor_stack.current].hex_edit.manipulate_register(*n as u8, FillType::Bytes(v), op))
                                             } else if *n < 64 {
                                                 vector_op(&mut editor_stack.clipboard_registers[*n - 32], &v, |a, b| a & b);
                                                 (CommandInstruction::NoOp, ActionResult::empty())

@@ -36,6 +36,16 @@ pub enum ShowType {
     Hex
 }
 
+#[derive(Copy, Clone)]
+pub enum ByteOperation {
+    And,
+    Or,
+    Nand,
+    Nor,
+    Xor,
+    Xnor
+}
+
 pub struct Highlight {
     pub start: usize,
     pub span: usize
@@ -370,6 +380,42 @@ impl Action for ShiftRegisterAction {
 
     fn size(&self) -> usize{
         2
+    }
+}
+
+pub struct RegisterOpAction {
+    register: u8,
+    fill: FillType,
+    original_bytes: Vec<u8>,
+    op: ByteOperation
+}
+
+impl RegisterOpAction {
+    pub fn new(register: u8, fill: FillType, original_bytes: Vec<u8>, op: ByteOperation) -> RegisterOpAction {
+        RegisterOpAction {
+            register,
+            fill,
+            original_bytes,
+            op
+        }
+    }
+}
+
+impl Action for RegisterOpAction {
+    fn undo(&self, hex_edit: &mut HexEdit) -> ActionResult {
+        hex_edit.set_register(self.register, &self.original_bytes)
+    }
+
+    fn redo(&self, hex_edit: &mut HexEdit) -> ActionResult {
+        let fill = match &self.fill {
+            FillType::Register(n) => FillType::Register(*n),
+            FillType::Bytes(v) => FillType::Bytes(v.to_vec())
+        };
+        hex_edit.manipulate_register(self.register, fill, self.op)
+    }
+
+    fn size(&self) -> usize {
+        0 // TODO: make this accurate
     }
 }
 
@@ -973,6 +1019,35 @@ impl<'a> HexEdit<'a> {
             error: None,
             update: UpdateDescription::NoUpdate,
             action: Some(Rc::new(InvertRegisterAction::new(register)))
+        }
+    }
+
+    pub fn manipulate_register(&mut self, register: u8, fill: FillType, op: ByteOperation) -> ActionResult {
+
+        if register >= 32 {
+            return ActionResult::error("Register number must be less than 32".to_string())
+        }
+        let original_bytes = self.clipboard_registers[register as usize].to_vec();
+        let op_bytes = match &fill {
+            FillType::Bytes(bytes) => {
+                bytes.to_vec()
+            },
+            FillType::Register(n) => {
+                self.clipboard_registers[*n as usize].to_vec()
+            }
+        };
+        match op {
+            ByteOperation::And => vector_op(&mut self.clipboard_registers[register as usize], &op_bytes, |a, b| a & b),
+            ByteOperation::Or => vector_op(&mut self.clipboard_registers[register as usize], &op_bytes, |a, b| a | b),
+            ByteOperation::Nand => vector_op(&mut self.clipboard_registers[register as usize], &op_bytes, |a, b| !(a & b)),
+            ByteOperation::Nor => vector_op(&mut self.clipboard_registers[register as usize], &op_bytes, |a, b| !(a | b)),
+            ByteOperation::Xor => vector_op(&mut self.clipboard_registers[register as usize], &op_bytes, |a, b| a ^ b),
+            ByteOperation::Xnor => vector_op(&mut self.clipboard_registers[register as usize], &op_bytes, |a, b| !(a ^ b))
+        };
+        ActionResult {
+            error: None,
+            update: UpdateDescription::NoUpdate,
+            action: Some(Rc::new(RegisterOpAction::new(register, fill, original_bytes, op)))
         }
     }
 
