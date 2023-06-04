@@ -3,7 +3,7 @@ use pancurses::{Input, Window, chtype, Attributes, start_color, init_pair};
 pub enum Align {
     Left(usize),
     Center,
-    Right
+    Right(usize)
 }
 
 pub struct Tag {
@@ -22,88 +22,129 @@ pub struct TextLine {
 pub struct Paragraph {
     text: String,
     align: Align,
+    bolds: Vec<(usize, usize)>,
+    underlines: Vec<(usize, usize)>
 }
 
 impl Paragraph {
     pub fn new(text: String, align: Align) -> Paragraph {
-        Paragraph {text, align}
-    }
-
-    pub fn get_lines(&self, width: usize) -> Vec<TextLine> {
-        let mut res = Vec::<TextLine>::new();
-        let mut line = String::new();
-        let mut word = String::new();
-        let mut current_tag = String::new();
-        let mut active_tag: Option<String> = None;
+        let mut s = String::new();
+        let mut bold_start: Option<usize> = None;
+        let mut underline_start: Option<usize> = None;
+        let mut bolds: Vec<(usize, usize)> = Vec::new();
+        let mut underlines: Vec<(usize, usize)> = Vec::new();
         let mut in_tag = false;
-        let mut bolds = Vec::<(usize, usize)>::new();
-        let mut line_index = 0;
-        for (i, c) in self.text.chars().enumerate() {
+        let mut current_tag = String::new();
+        let mut index = 0;
+
+        for (i, c) in text.chars().enumerate() {
             if in_tag {
                 match c {
                     '>' => {
                         in_tag = false;
                         match current_tag.as_str() {
-                            "b" => bolds.push((line_index, line_index)),
-                            "/b" => todo!(),
-                            _ => todo!()
-                        }
+                            "b" => bold_start = Some(index),
+                            "u" => underline_start = Some(index),
+                            "/b" => match bold_start {
+                                None => println!("Close tag '{}' does not have matching start tag", current_tag),
+                                Some(n) => bolds.push((n, index))
+                            },
+                            "/u" => match underline_start {
+                                None => println!("Close tag '{}' does not have matching start tag", current_tag),
+                                Some(n) => underlines.push((n, index))
+                            },
+                            _ => println!("Unrecognized tag: {}", current_tag)
+                        };
+                        current_tag = String::new();
                     },
                     _ => current_tag.push(c)
                 }
             } else {
                 match c {
-                    ' ' => {
-                        if line.len() + word.len() + 1 <= width {
-                            line.push(' ');
-                            line += &word.to_string();
-                        } else {
-                            res.push(TextLine {
-                                text: line,
-                                bolds: vec![],
-                                italics: vec![],
-                                underlines: vec![]
-                            });
-                            line = match self.align {
-                                Align::Left(n) => " ".repeat(n) + &word.to_string(),
-                                _ => word.to_string()
-                            };
-                        }
-                        word = String::new();
-                    },
                     '<' => in_tag = true,
                     _ => {
-                        line_index += 1;
-                        word.push(c)
+                        s.push(c);
+                        index += 1;
                     }
                         
                 }
-                line_index += 1;
             }
         }
+        Paragraph {text: s, align, bolds, underlines}
+    }
 
-        if line.len() + word.len() + 1 <= width {
-            line.push(' ');
-            line += &word.to_string();
-        } else {
-            res.push(TextLine {
-                text: line,
-                bolds: vec![],
-                italics: vec![],
-                underlines: vec![]
-            });
-            line = match self.align {
-                Align::Left(n) => " ".repeat(n) + &word.to_string(),
-                _ => word.to_string()
-            };
+    pub fn get_line_ranges(&self, width: usize) -> Vec<(usize, usize)> {
+        let mut res: Vec::<(usize, usize)> = Vec::new(); // [start, end)
+        let mut indent = 0; 
+        let mut line_start: usize = 0;
+        let mut word_start: usize = 0;
+        for (i, c) in self.text.chars().enumerate() {
+            if c == ' ' {
+                if i - line_start + indent > width {
+                    res.push((line_start, word_start));
+                    line_start = word_start + 1; // To account for the space
+                    word_start = line_start;
+                    indent = match self.align {Align::Left(n) | Align::Right(n) => n, _ => 0}; // Doesn't apply to first line
+                } else {
+                    word_start = i;
+                }
+            } 
         }
-        res.push(TextLine {
-            text: line,
-            bolds: vec![],
-            italics: vec![],
-            underlines: vec![]
-        });
+        if self.text.chars().count() - line_start + indent > width {
+            res.push((line_start, word_start));
+            line_start = word_start + 1;
+        }
+        res.push((line_start, self.text.chars().count()));
+        res
+    }
 
+    pub fn get_lines(&self, width: usize) -> Vec<TextLine> {
+        let mut res = Vec::<TextLine>::new();
+        //println!("New paragraph {}", width);
+        let mut indent = 0;
+        for (start, end) in self.get_line_ranges(width) {
+            //println!("{} {}", start, end);
+            let offset = match self.align {
+                Align::Left(_) => indent,
+                Align::Right(_) => width - (end - start + indent),
+                Align::Center => (width - (end - start + indent))/2
+            };
+            let mut bolds: Vec<(usize, usize)> = Vec::new();
+            for (b_start, b_end) in &self.bolds {
+                if *b_start > end {
+                    break;
+                } else if *b_end > start {
+                    bolds.push((std::cmp::max(start, *b_start) - start + offset, std::cmp::min(end, *b_end) - start + offset));
+                }
+            }
+            let mut underlines: Vec<(usize, usize)> = Vec::new();
+            for (u_start, u_end) in &self.underlines {
+                if *u_start > end {
+                    break;
+                } else if *u_end > start {
+                    underlines.push((std::cmp::max(start, *u_start) - start + offset, std::cmp::min(end, *u_end) - start + offset));
+                }
+            }
+            let pad = " ".repeat(width - (end - start + indent));
+            let text = match self.align {
+                Align::Left(_) => {
+                    " ".repeat(indent).to_string() + &self.text.as_str()[start..end].to_string() + &pad
+                },
+                Align::Right(_) => {
+                    pad + &self.text.as_str()[start..end].to_string() + &" ".repeat(indent).to_string()
+                },
+                Align::Center => { // Indent should always be zero for align::center
+                    pad[0..(pad.len()/2)].to_owned() + &self.text.as_str()[start..end].to_string() + &pad[(pad.len()/2)..pad.len()]
+                }
+            };
+            res.push(TextLine {
+                text,
+                bolds,
+                italics: vec![],
+                underlines
+            });
+            indent = match self.align {Align::Left(n) | Align::Right(n) => n, _ => 0}; // Doesn't apply to first line
+        }
         res
     }
 
@@ -114,21 +155,62 @@ pub struct LargeTextView {
     height: usize,
     pos_x: usize,
     pos_y: usize,
-    lines: Vec<String>,
+    paras: Vec<Paragraph>,
+    lines: Vec<TextLine>,
     offset: usize,
 }
 
 impl LargeTextView {
 
     pub fn new(pos_x: usize, pos_y: usize, width: usize, height: usize, text: String) -> LargeTextView {
-        LargeTextView {
+        let mut paras: Vec<Paragraph> = Vec::new();
+        for line in text.split("\n").map(|s| s.to_string()) {
+            let mut escaped: bool = false;
+            let mut line_iter = line.chars().peekable();
+            let mut align = Align::Left(30);
+            loop {
+                match line_iter.peek() {
+                    Some('\\') => {
+                        escaped = !escaped;
+                        line_iter.next();
+                        continue;
+                    },
+                    Some('c') if escaped => {
+                        align = Align::Center;
+                        line_iter.next();
+                    },
+                    _ => break
+
+                }
+                escaped = false;
+            }
+            paras.push(Paragraph::new(line_iter.collect::<String>(), align));
+
+        }
+        let mut res = LargeTextView {
             width,
             height,
             pos_x,
             pos_y,
-            lines: text.split("\n").map(|s| s.to_string()).collect(),
+            paras,
+            lines: Vec::new(),
             offset: 0
+        };
+        res.calculate_lines();
+        res
+    }
+
+    pub fn calculate_lines(&mut self) {
+        self.lines = Vec::new();
+        for para in &self.paras {
+            self.lines.extend(para.get_lines(self.width))
         }
+    }
+
+    pub fn resize(&mut self, width: usize, height: usize) {
+        self.width = width;
+        self.height = height;
+        self.calculate_lines();
     }
 
     pub fn addch(&mut self, ch: Input) {
@@ -147,77 +229,79 @@ impl LargeTextView {
         }
     }
 
-    pub fn draw2(&self, window: &mut Window) {
-        let mut line_num = 0;
-        for line in &self.lines {
-            let para = Paragraph::new(line.to_string(), Align::Left(30));
-            for text_line in para.get_lines(self.width) {
-                if line_num >= self.offset {
-                    if line_num >= self.offset + self.height {
-                        break;
-                    }
-                    let y = line_num - self.offset;
-                    window.mvaddstr((y + self.pos_y) as i32, self.pos_x as i32, text_line.text.to_owned() + &" ".repeat(self.width as usize - text_line.text.len()));
-                }
-                line_num += 1;
-            }
-        }
-    }
-
     pub fn draw(&self, window: &mut Window) {
-
         let mut bold_attr = Attributes::new();
         bold_attr.set_bold(true);
         let bold_attr = chtype::from(bold_attr);
+        let mut underline_attr = Attributes::new();
+        underline_attr.set_underline(true);
+        let underline_attr = chtype::from(underline_attr);
 
-        let mut bold: bool = false;
-        let mut center: bool = false;
-
-        for (y, line) in self.lines[self.offset..(self.offset + self.height)].iter().enumerate() {
-
-            bold = false;
-            center = false;
-
-            let mut line_iter = line.chars().peekable();
-
-            let mut escaped: bool = false;
-            loop {
-                match line_iter.peek() {
-                    Some('\\') => {
-                        escaped = !escaped;
-                        line_iter.next();
-                        continue;
-                    },
-                    Some('b') if escaped => {
-                        bold = true;
-                        line_iter.next();
-                    },
-                    Some('c') if escaped => {
-                        center = true;
-                        line_iter.next();
-                    },
-                    _ => break
-
-                }
-                escaped = false;
+        for (y, line) in self.lines[self.offset..self.offset + self.height].iter().enumerate() {
+            window.mvaddstr((y + self.pos_y) as i32, self.pos_x as i32, line.text.to_owned() + &" ".repeat(self.width as usize - line.text.len()));
+            for (start, end) in &line.bolds {
+                window.mvchgat((y + self.pos_y) as i32, *start as i32, (end - start) as i32, bold_attr, 0);
             }
-
-            let s: String = line_iter.collect();
-
-            if line.len() > self.width {
-                window.mvaddstr((y + self.pos_y) as i32, self.pos_x as i32, &s[0..self.width]);
-            } else if center {
-                let pad = " ".repeat(self.width as usize - line.len());
-
-                window.mvaddstr((y + self.pos_y) as i32, self.pos_x as i32, pad[0..(pad.len()/2)].to_owned() + &s + &pad[(pad.len()/2)..pad.len()]);
-            } else {
-                window.mvaddstr((y + self.pos_y) as i32, self.pos_x as i32, s.to_owned() + &" ".repeat(self.width as usize - line.len()));
+            for (start, end) in &line.underlines {
+                window.mvchgat((y + self.pos_y) as i32, *start as i32, (end - start) as i32, underline_attr, 0);
             }
-
-            if bold {
-                window.mvchgat((y + self.pos_y) as i32, self.pos_x as i32, self.width as i32, bold_attr, 0);
-            }
-
         }
     }
+
+    // pub fn draw2(&self, window: &mut Window) {
+
+    //     let mut bold_attr = Attributes::new();
+    //     bold_attr.set_bold(true);
+    //     let bold_attr = chtype::from(bold_attr);
+
+    //     let mut bold: bool = false;
+    //     let mut center: bool = false;
+
+    //     for (y, line) in self.lines[self.offset..(self.offset + self.height)].iter().enumerate() {
+
+    //         bold = false;
+    //         center = false;
+
+    //         let mut line_iter = line.chars().peekable();
+
+    //         let mut escaped: bool = false;
+    //         loop {
+    //             match line_iter.peek() {
+    //                 Some('\\') => {
+    //                     escaped = !escaped;
+    //                     line_iter.next();
+    //                     continue;
+    //                 },
+    //                 Some('b') if escaped => {
+    //                     bold = true;
+    //                     line_iter.next();
+    //                 },
+    //                 Some('c') if escaped => {
+    //                     center = true;
+    //                     line_iter.next();
+    //                 },
+    //                 _ => break
+
+    //             }
+    //             escaped = false;
+    //         }
+
+    //         let s: String = line_iter.collect();
+
+    //         if line.len() > self.width {
+    //             window.mvaddstr((y + self.pos_y) as i32, self.pos_x as i32, &s[0..self.width]);
+    //         } else if center {
+    //             let pad = " ".repeat(self.width as usize - line.len());
+
+    //             window.mvaddstr((y + self.pos_y) as i32, self.pos_x as i32, pad[0..(pad.len()/2)].to_owned() + &s + &pad[(pad.len()/2)..pad.len()]);
+    //         } else {
+    //             window.mvaddstr((y + self.pos_y) as i32, self.pos_x as i32, s.to_owned() + &" ".repeat(self.width as usize - line.len()));
+    //         }
+
+    //         if bold {
+    //             window.mvchgat((y + self.pos_y) as i32, self.pos_x as i32, self.width as i32, bold_attr, 0);
+    //         }
+
+    //     }
+    // }
 }

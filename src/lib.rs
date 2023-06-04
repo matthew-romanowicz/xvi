@@ -44,44 +44,48 @@ enum EditState {
     Manual
 }
 
-const MANUAL_TEXT: &str = r"\b\cCOMMANDS
-\b  SETTINGS:
+const MANUAL_TEXT: &str = r"\c<b>COMMANDS</b>
+  <b>SETTINGS:</b>
     :set caps [on|off]  =>  Toggle the case of display hexadecimal values
-    :set hex [on|off]   =>  Toggle the hex display
-    :set ascii [on|off] =>  Toggle the ascii display
-    :set lnum [hex|dec|off]  =>  Toggle line number display/base
+    :set hex [on|off]   =>  Toggle the <u>hex</u> display
+    :set ascii [on|off] =>  Toggle the <u>ascii</u> display
+    :set lnum [hex|dec|off]  =>  Toggle <u>l</u>ine <u>num</u>ber display/base
     :set cnum [hex|dec|off]  =>  Toggle cursor index display/base
-    :set line #         =>  Set the number of bytes per line to #
-    :set fill r#        =>  Set the fill value to the contents of register #
-    :set fill x#        =>  Set the fill value to # (in hex)
-    :set icase [on|off] =>  Set ignore case for find function
-    :set regex [on|off] =>  Enable/disable regular expressions for find function
-    :set undo #         =>  Set the maximum length of the undo/redo stack to #
-    :set endian [be|le|ne] =>  Set the endianness that will be used in the 'ins' and 'ovr' commands
-    :set chunk #        =>  Set the chunk size used to insert bytes in swap and live mode
+    :set line #         =>  Set the number of bytes per <u>l</u>ine to #
+    :set fill r#        =>  Set the <u>fill</u> value to the contents of <u>r</u>egister #
+    :set fill x#        =>  Set the <u>fill</u> value to # (in he<u>x</u>)
+    :set icase [on|off] =>  Set <u>i</u>gnore <u>case</u> for find function
+    :set regex [on|off] =>  Enable/disable <u>reg</u>ular <u>ex</u>pressions for find function
+    :set undo #         =>  Set the maximum length of the <u>undo</u>/redo stack to #
+    :set endian [be|le|ne] =>  Set the <u>endian</u>ness that will be used in the 'ins' and 'ovr' commands
+    :set chunk #        =>  Set the <u>chunk</u> size used to insert bytes in swap and live mode
+    :set clevel [lo|med|hi] =>  [TODO] Set the <u>c</u>ompression <u>level</u> used for DEFLATE operations
 
-\b  INSERTION/OVERWRITE:
-    :ins fmt #          =>  Insert # encoded as fmt at the cusor location
-    :ovr fmt #          =>  Overwrite # encoded as fmt at the cusor location
-    :p fmt              =>  Print the next group of bytes as fmt
-    :ps fmt             =>  Print the next group of bytes as fmt and seek to the end of the group
+  <b>INSERTION/OVERWRITE:</b>
+    :ins fmt #          =>  <u>Ins</u>ert # encoded as fmt at the cusor location
+    :ovr fmt #          =>  <u>Ov</u>e<u>r</u>write # encoded as fmt at the cusor location
+    :p fmt              =>  <u>P</u>rint the next group of bytes as fmt
+    :ps fmt             =>  <u>P</u>rint the next group of bytes as fmt and <u>s</u>eek to the end of the group
 
-\b  REGISTER OPERATIONS:
-    :cat r# r##         =>  Concatenate contents of listed register ## into register #
-    :cat r# x##         =>  Concatenate ## (in hex) into register #
+  <b>REGISTER OPERATIONS:</b>
+    :slice r# ## ###    =>  [TODO] <u>Slice</u> the contents of register # to [## ###)
+    :cat r# r##         =>  Con<u>cat</u>enate contents of register ## into register #
+    :cat r# x##         =>  Con<u>cat</u>enate ## (in hex) into register #
     :clear r#           =>  Delete the contents of register #
-    :swap r#            =>  Swap the byte order of register #
-    :rshft r# ##        =>  Bitshift the contens of register # right ## bits
-    :lshft r# ##        =>  Bitshift the contens of register # left ## bits
+    :swap r#            =>  <u>Swap</u> the byte order of register #
+    :rshft r# ##        =>  Bit<u>shift</u> the contens of register # <u>r</u>ight ## bits
+    :lshft r# ##        =>  Bit<u>shift</u> the contens of register # <u>l</u>eft ## bits
     :not r#             =>  Perform bitwise NOT on regiser #
     :and r# r##         =>  Perform bitwise AND on register # with register ##
     :or r# r##          =>  Perform bitwise OR on register # with register ##
-    :nand r# r##         =>  Perform bitwise NAND on register # with register ##
-    :nor r# r##          =>  Perform bitwise NOR on register # with register ##
+    :nand r# r##        =>  Perform bitwise NAND on register # with register ##
+    :nor r# r##         =>  Perform bitwise NOR on register # with register ##
     :xor r# r##         =>  Perform bitwise XOR on register # with register ##
-    :xnor r# r##          =>  Perform bitwise XNOR on register # with register ##
+    :xnor r# r##        =>  Perform bitwise XNOR on register # with register ##
+    :deflate r#         =>  Compress the contents of register # using DEFLATE
+    :inflate r#         =>  Uncompress the contents of register # using DEFLATE
 
-\b  READ/WRITE:
+  <b>READ/WRITE:</b>
     :w                  =>  Write all changes to file
     :x                  =>  Write all changes to file and exit
     :wq                 =>  Write all changes to file and exit
@@ -89,44 +93,44 @@ const MANUAL_TEXT: &str = r"\b\cCOMMANDS
     :q!                 =>  Exit
     :open file          =>  Opens 'file' in another tab
 
-\b  FIND:
+  <b>FIND:</b>
     /expr               =>  Find ASCII 'expr' in file
     ?expr               =>  Backwards find ASCII 'expr' in file
     \expr               =>  [TODO] Find hex 'expr' in file
     |expr               =>  [TODO] Backwards find hex 'expr' in file
 
-\b  MISC:
+  <b>MISC:</b>
     :clear undo         =>  Clear the contents of the undo/redo stack
     :show hist          =>  [TODO] Show command history
     :show m#            =>  [TODO] Show details about macro number #
-    :man                =>  Show application manual (this text)
+    :man                =>  Show application <u>man</u>ual (this text)
 
 
-\b\cKEYSTROKE COMMANDS
+\c<b>KEYSTROKE COMMANDS</b>
 
     ESC     =>  Clear the current keystroke buffer
 
-    i       =>  Change to hex insert mode
-    I       =>  Change to ASCII insert mode
-    o       =>  Change to hex overwrite mode
-    O       =>  Change to ASCII overwrite mode
+    i       =>  Change to hex <u>i</u>nsert mode
+    I       =>  Change to ASCII <u>i</u>nsert mode
+    o       =>  Change to hex <u>o</u>verwrite mode
+    O       =>  Change to ASCII <u>o</u>verwrite mode
 
-    g       =>  Move cursor to start of file
-    G       =>  Move cursor to end of file
-    #g      =>  Move cursor to #th byte from the start of the file
-    #G      =>  Move cursor to #th byte from the end of the file
-    +#g     =>  Move cursor # bytes forward
-    -#g     =>  Move cursor # bytes backward
-    n       =>  Seek to next find result
+    g       =>  Move cursor (<u>g</u>o) to start of file
+    G       =>  Move cursor (<u>g</u>o) to end of file
+    #g      =>  Move cursor (<u>g</u>o) to #th byte from the start of the file
+    #G      =>  Move cursor (<u>g</u>o) to #th byte from the end of the file
+    +#g     =>  Move cursor (<u>g</u>o) # bytes forward
+    -#g     =>  Move cursor (<u>g</u>o) # bytes backward
+    n       =>  Seek to <u>n</u>ext find result
     N       =>  Seek to previous find result
 
-    #f      =>  Insert next # bytes from the cursor location
-    #F      =>  Overwrite next # bytes from the cursor location
-    #d      =>  Delete next # bytes from the cursor location
-    #s      =>  Swap endinanness of next # bytes from the cursor location
+    #f      =>  Insert # <u>f</u>ill bytes from the cursor location
+    #F      =>  Overwrite # <u>f</u>ill bytes from the cursor location
+    #d      =>  <u>D</u>elete next # bytes from the cursor location
+    #s      =>  <u>S</u>wap endinanness of next # bytes from the cursor location
 
-    #y      =>  Yank (copy) next # bytes from the cursor location to register 0
-    #r##y   =>  Yank (copy) next ## bytes from the cursor location to register #
+    #y      =>  <u>Y</u>ank (copy) next # bytes from the cursor location to register 0
+    #r##y   =>  <u>Y</u>ank (copy) next ## bytes from the cursor location to <u>r</u>egister #
     p       =>  Insert contents of register # at cursor location
     P       =>  Overwrite bytes with contents of register # at cursor location
     #p      =>  Insert contents of register # at cursor location
@@ -135,11 +139,11 @@ const MANUAL_TEXT: &str = r"\b\cCOMMANDS
     t       =>  Change to next open file
     T       =>  [TODO] Change to previous open file
 
-    u       =>  Undo last action
+    u       =>  <u>U</u>ndo last action
     U       =>  Redo last action
-    #M      =>  Start recording #th macro
-    M       =>  Stop recording macro
-    #m      =>  Run #th macro";
+    #M      =>  Start recording #th <u>m</u>acro
+    M       =>  Stop recording <u>m</u>acro
+    #m      =>  Run #th <u>m</u>acro";
 
 const BUGS: &str = "Inputting numbers greater than usize maximum in commands/keystrokes causes panic
 Setting line length to value greater than width of terminal causes panic
@@ -989,6 +993,7 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                             },
                             CommandInstruction::ChangeState(EditState::Manual) => {
                                 edit_state = EditState::Manual;
+                                manual_view.resize(window.get_max_x() as usize - 1, window.get_max_y() as usize - 1);
                                 manual_view.draw(&mut window);
                             },
                             CommandInstruction::Open(filename) => {
@@ -1037,8 +1042,10 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                 match ch_input {
                     Some(Input::KeyResize) => {
                         resize_term(0, 0);
+                        manual_view.resize(window.get_max_x() as usize - 1, window.get_max_y() as usize - 1);
+                        manual_view.draw(&mut window);
                     },
-                    Some(Input::Character('\u{1b}')) => {
+                    Some(Input::Character('\u{1b}')) => { // escape
                         edit_state = EditState::Escaped;
                         hm.hex_edit.draw(&mut window);
                         line_entry.draw(&mut window);
