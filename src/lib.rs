@@ -50,7 +50,7 @@ const MANUAL_TEXT: &str = r"\c<b>COMMANDS</b>
     :set hex [on|off]   =>  Toggle the <u>hex</u> display
     :set ascii [on|off] =>  Toggle the <u>ascii</u> display
     :set lnum [hex|dec|off]  =>  Toggle <u>l</u>ine <u>num</u>ber display/base
-    :set cnum [hex|dec|off]  =>  Toggle cursor index display/base
+    :set cnum [hex|dec|off]  =>  Toggle <u>c</u>ursor index display/base
     :set line #         =>  Set the number of bytes per <u>l</u>ine to #
     :set fill r#        =>  Set the <u>fill</u> value to the contents of <u>r</u>egister #
     :set fill x#        =>  Set the <u>fill</u> value to # (in he<u>x</u>)
@@ -59,7 +59,7 @@ const MANUAL_TEXT: &str = r"\c<b>COMMANDS</b>
     :set undo #         =>  Set the maximum length of the <u>undo</u>/redo stack to #
     :set endian [be|le|ne] =>  Set the <u>endian</u>ness that will be used in the 'ins' and 'ovr' commands
     :set chunk #        =>  Set the <u>chunk</u> size used to insert bytes in swap and live mode
-    :set clevel [lo|med|hi] =>  [TODO] Set the <u>c</u>ompression <u>level</u> used for DEFLATE operations
+    :set clevel [lo|med|hi] =>  <b>[TODO]</b> Set the <u>c</u>ompression <u>level</u> used for DEFLATE operations
 
   <b>INSERTION/OVERWRITE:</b>
     :ins fmt #          =>  <u>Ins</u>ert # encoded as fmt at the cusor location
@@ -68,41 +68,40 @@ const MANUAL_TEXT: &str = r"\c<b>COMMANDS</b>
     :ps fmt             =>  <u>P</u>rint the next group of bytes as fmt and <u>s</u>eek to the end of the group
 
   <b>REGISTER OPERATIONS:</b>
-    :slice r# ## ###    =>  [TODO] <u>Slice</u> the contents of register # to [## ###)
-    :cat r# r##         =>  Con<u>cat</u>enate contents of register ## into register #
-    :cat r# x##         =>  Con<u>cat</u>enate ## (in hex) into register #
-    :clear r#           =>  Delete the contents of register #
-    :swap r#            =>  <u>Swap</u> the byte order of register #
-    :rshft r# ##        =>  Bit<u>shift</u> the contens of register # <u>r</u>ight ## bits
-    :lshft r# ##        =>  Bit<u>shift</u> the contens of register # <u>l</u>eft ## bits
-    :not r#             =>  Perform bitwise NOT on regiser #
-    :and r# r##         =>  Perform bitwise AND on register # with register ##
-    :or r# r##          =>  Perform bitwise OR on register # with register ##
-    :nand r# r##        =>  Perform bitwise NAND on register # with register ##
-    :nor r# r##         =>  Perform bitwise NOR on register # with register ##
-    :xor r# r##         =>  Perform bitwise XOR on register # with register ##
-    :xnor r# r##        =>  Perform bitwise XNOR on register # with register ##
-    :deflate r#         =>  Compress the contents of register # using DEFLATE
-    :inflate r#         =>  Uncompress the contents of register # using DEFLATE
+    :slice r# ## ###    =>  <b>[TODO]</b> <u>Slice</u> the contents of register # to [## ###)
+    :cat r# [r##|x##]   =>  Con<u>cat</u>enate contents of <u>r</u>egister ## into <u>r</u>egister #
+    :clear r#           =>  Delete the contents of <u>r</u>egister #
+    :swap r#            =>  <u>Swap</u> the byte order of <u>r</u>egister #
+    :rshft r# ##        =>  Bit<u>shift</u> the contens of <u>r</u>egister # <u>r</u>ight ## bits
+    :lshft r# ##        =>  Bit<u>shift</u> the contens of <u>r</u>egister # <u>l</u>eft ## bits
+    :not r#             =>  Perform bitwise NOT on <u>r</u>egiser #
+    :and r# [r##|x##]   =>  Perform bitwise AND on <u>r</u>egister # with <u>r</u>egister ##
+    :or r# [r##|x##]    =>  Perform bitwise OR on <u>r</u>egister # with <u>r</u>egister ##
+    :nand r# [r##|x##]  =>  Perform bitwise NAND on <u>r</u>egister # with <u>r</u>egister ##
+    :nor r# [r##|x##]   =>  Perform bitwise NOR on <u>r</u>egister # with <u>r</u>egister ##
+    :xor r# [r##|x##]   =>  Perform bitwise XOR on <u>r</u>egister # with <u>r</u>egister ##
+    :xnor r# [r##|x##]  =>  Perform bitwise XNOR on <u>r</u>egister # with <u>r</u>egister ##
+    :deflate r#         =>  <b>[TODO]</b> Compress the contents of <u>r</u>egister # using DEFLATE
+    :inflate r#         =>  <b>[TODO]</b> Uncompress the contents of <u>r</u>egister # using DEFLATE
 
   <b>READ/WRITE:</b>
-    :w                  =>  Write all changes to file
-    :x                  =>  Write all changes to file and exit
+    :w                  =>  <u>W</u>rite all changes to file
+    :x                  =>  Write all changes to file and e<u>x</u>it
     :wq                 =>  Write all changes to file and exit
     :q                  =>  Exit if there are no unsaved changes
     :q!                 =>  Exit
-    :open file          =>  Opens 'file' in another tab
+    :open file          =>  <u>Open</u> 'file' in another tab
 
   <b>FIND:</b>
     /expr               =>  Find ASCII 'expr' in file
     ?expr               =>  Backwards find ASCII 'expr' in file
-    \expr               =>  [TODO] Find hex 'expr' in file
-    |expr               =>  [TODO] Backwards find hex 'expr' in file
+    \expr               =>  <b>[TODO]</b> Find hex 'expr' in file
+    |expr               =>  <b>[TODO]</b> Backwards find hex 'expr' in file
 
   <b>MISC:</b>
-    :clear undo         =>  Clear the contents of the undo/redo stack
-    :show hist          =>  [TODO] Show command history
-    :show m#            =>  [TODO] Show details about macro number #
+    :clear undo         =>  <u>Clear</u> the contents of the <u>undo</u>/redo stack
+    :show hist          =>  <b>[TODO]</b> <u>Show</u> command <u>hist</u>ory
+    :show m#            =>  <b>[TODO]</b> <u>Show</u> details about <u>m</u>acro number #
     :man                =>  Show application <u>man</u>ual (this text)
 
 
@@ -131,13 +130,13 @@ const MANUAL_TEXT: &str = r"\c<b>COMMANDS</b>
 
     #y      =>  <u>Y</u>ank (copy) next # bytes from the cursor location to register 0
     #r##y   =>  <u>Y</u>ank (copy) next ## bytes from the cursor location to <u>r</u>egister #
-    p       =>  Insert contents of register # at cursor location
-    P       =>  Overwrite bytes with contents of register # at cursor location
-    #p      =>  Insert contents of register # at cursor location
-    #P      =>  Overwrite bytes with contents of register # at cursor location
+    p       =>  <u>P</u>aste contents of register 0 at cursor location
+    P       =>  <u>P</u>aste contents of register 0 at cursor location, overwriting current bytes
+    #p      =>  <u>P</u>aste contents of register # at cursor location
+    #P      =>  <u>P</u>aste contents of register # at cursor location, overwriting current bytes
 
     t       =>  Change to next open file
-    T       =>  [TODO] Change to previous open file
+    T       =>  <b>[TODO]</b> Change to previous open file
 
     u       =>  <u>U</u>ndo last action
     U       =>  Redo last action
@@ -1050,7 +1049,7 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                         hm.hex_edit.draw(&mut window);
                         line_entry.draw(&mut window);
                     },
-                    Some(ch) if matches!(ch, Input::KeyUp | Input::KeyDown) => {
+                    Some(ch) if matches!(ch, Input::KeyUp | Input::KeyDown | Input::KeyHome | Input::KeyEnd | Input::KeyPPage | Input::KeyNPage) => {
                         manual_view.addch(ch);
                         manual_view.draw(&mut window);
                     },

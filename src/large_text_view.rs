@@ -73,7 +73,7 @@ impl Paragraph {
         Paragraph {text: s, align, bolds, underlines}
     }
 
-    pub fn get_line_ranges(&self, width: usize) -> Vec<(usize, usize)> {
+    fn get_line_ranges(&self, width: usize) -> Vec<(usize, usize)> {
         let mut res: Vec::<(usize, usize)> = Vec::new(); // [start, end)
         let mut indent = 0; 
         let mut line_start: usize = 0;
@@ -96,6 +96,19 @@ impl Paragraph {
         }
         res.push((line_start, self.text.chars().count()));
         res
+    }
+
+    fn index_from_line(&self, line: usize, width: usize) -> usize {
+        self.get_line_ranges(width)[line].0
+    }
+
+    fn line_from_index(&self, index: usize, width: usize) -> usize {
+        for (i, (start, end)) in self.get_line_ranges(width).iter().enumerate() {
+            if *start < index {
+                return i
+            }
+        }
+        return 0
     }
 
     pub fn get_lines(&self, width: usize) -> Vec<TextLine> {
@@ -207,13 +220,37 @@ impl LargeTextView {
         }
     }
 
-    pub fn resize(&mut self, width: usize, height: usize) {
+    pub fn resize(&mut self, width: usize, height: usize) { // TODO: Make this more efficient
+        let mut line = 0;
+        let mut index = 0;
+        let mut p_index = 0;
+        for (i, p) in self.paras.iter().enumerate() {
+            let num_lines = p.get_line_ranges(self.width).len();
+            if line + num_lines > self.offset {
+                index = p.index_from_line(self.offset - line, width);
+                p_index = i;
+                break
+            }
+            line += num_lines;
+        }
         self.width = width;
         self.height = height;
         self.calculate_lines();
+
+        let mut offset = 0;
+        for (i, p) in self.paras.iter().enumerate() {
+            if i == p_index {
+                offset += p.line_from_index(index, self.width);
+                break
+            } else {
+                offset += p.get_line_ranges(self.width).len();
+            }
+        }
+
+        self.offset = std::cmp::min(offset, self.lines.len() - self.height);
     }
 
-    pub fn addch(&mut self, ch: Input) {
+    pub fn addch(&mut self, ch: Input) { // TODO: Make this work if the height is larger than the number of lines
         match ch {
             Input::KeyUp => {
                 if self.offset > 0 {
@@ -225,11 +262,21 @@ impl LargeTextView {
                     self.offset += 1
                 }
             },
+            Input::KeyHome => self.offset = 0,
+            Input::KeyEnd => self.offset = self.lines.len() - self.height,
+            Input::KeyPPage => {
+                if self.offset > self.height {
+                    self.offset -= self.height;
+                } else {
+                    self.offset = 0;
+                }
+            },
+            Input::KeyNPage => self.offset = std::cmp::min(self.offset + self.height, self.lines.len() - self.height),
             _ => println!("Invalid input")
         }
     }
 
-    pub fn draw(&self, window: &mut Window) {
+    pub fn draw(&self, window: &mut Window) { // TODO: Make this work if the height is larger than the number of lines
         let mut bold_attr = Attributes::new();
         bold_attr.set_bold(true);
         let bold_attr = chtype::from(bold_attr);
@@ -247,61 +294,4 @@ impl LargeTextView {
             }
         }
     }
-
-    // pub fn draw2(&self, window: &mut Window) {
-
-    //     let mut bold_attr = Attributes::new();
-    //     bold_attr.set_bold(true);
-    //     let bold_attr = chtype::from(bold_attr);
-
-    //     let mut bold: bool = false;
-    //     let mut center: bool = false;
-
-    //     for (y, line) in self.lines[self.offset..(self.offset + self.height)].iter().enumerate() {
-
-    //         bold = false;
-    //         center = false;
-
-    //         let mut line_iter = line.chars().peekable();
-
-    //         let mut escaped: bool = false;
-    //         loop {
-    //             match line_iter.peek() {
-    //                 Some('\\') => {
-    //                     escaped = !escaped;
-    //                     line_iter.next();
-    //                     continue;
-    //                 },
-    //                 Some('b') if escaped => {
-    //                     bold = true;
-    //                     line_iter.next();
-    //                 },
-    //                 Some('c') if escaped => {
-    //                     center = true;
-    //                     line_iter.next();
-    //                 },
-    //                 _ => break
-
-    //             }
-    //             escaped = false;
-    //         }
-
-    //         let s: String = line_iter.collect();
-
-    //         if line.len() > self.width {
-    //             window.mvaddstr((y + self.pos_y) as i32, self.pos_x as i32, &s[0..self.width]);
-    //         } else if center {
-    //             let pad = " ".repeat(self.width as usize - line.len());
-
-    //             window.mvaddstr((y + self.pos_y) as i32, self.pos_x as i32, pad[0..(pad.len()/2)].to_owned() + &s + &pad[(pad.len()/2)..pad.len()]);
-    //         } else {
-    //             window.mvaddstr((y + self.pos_y) as i32, self.pos_x as i32, s.to_owned() + &" ".repeat(self.width as usize - line.len()));
-    //         }
-
-    //         if bold {
-    //             window.mvchgat((y + self.pos_y) as i32, self.pos_x as i32, self.width as i32, bold_attr, 0);
-    //         }
-
-    //     }
-    // }
 }
