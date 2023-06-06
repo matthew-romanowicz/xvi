@@ -59,7 +59,7 @@ const MANUAL_TEXT: &str = r"\c<b>COMMANDS</b>
     :set undo #         =>  Set the maximum length of the <u>undo</u>/redo stack to #
     :set endian [be|le|ne] =>  Set the <u>endian</u>ness that will be used in the 'ins' and 'ovr' commands
     :set chunk #        =>  Set the <u>chunk</u> size used to insert bytes in swap and live mode
-    :set clevel [lo|med|hi] =>  <b>[TODO]</b> Set the <u>c</u>ompression <u>level</u> used for DEFLATE operations
+    :set clevel [lo|med|hi] =>  Set the <u>c</u>ompression <u>level</u> used for DEFLATE operations
 
   <b>INSERTION/OVERWRITE:</b>
     :ins fmt #          =>  <u>Ins</u>ert # encoded as fmt at the cusor location
@@ -81,8 +81,8 @@ const MANUAL_TEXT: &str = r"\c<b>COMMANDS</b>
     :nor r# [r##|x##]   =>  Perform bitwise NOR on <u>r</u>egister # with <u>r</u>egister ##
     :xor r# [r##|x##]   =>  Perform bitwise XOR on <u>r</u>egister # with <u>r</u>egister ##
     :xnor r# [r##|x##]  =>  Perform bitwise XNOR on <u>r</u>egister # with <u>r</u>egister ##
-    :deflate r#         =>  <b>[TODO]</b> Compress the contents of <u>r</u>egister # using DEFLATE
-    :inflate r#         =>  <b>[TODO]</b> Uncompress the contents of <u>r</u>egister # using DEFLATE
+    :deflate r#         =>  Compress the contents of <u>r</u>egister # using DEFLATE
+    :inflate r#         =>  Uncompress the contents of <u>r</u>egister # using DEFLATE
 
   <b>READ/WRITE:</b>
     :w                  =>  <u>W</u>rite all changes to file
@@ -162,7 +162,8 @@ struct EditorStack<'a> {
     height: usize,
     clipboard_registers: [Vec<u8>; 32],
     endianness: Endianness,
-    cnum: ShowType
+    cnum: ShowType,
+    clevel: u8
 }
 
 impl<'a> EditorStack<'a> {
@@ -176,7 +177,8 @@ impl<'a> EditorStack<'a> {
             height,
             clipboard_registers: Default::default(),
             endianness: Endianness::Network,
-            cnum: ShowType::Hex
+            cnum: ShowType::Hex,
+            clevel: 9
         }
     }
 
@@ -303,6 +305,24 @@ fn execute_command(editor_stack: &mut EditorStack, command: Vec<char>) -> (Comma
                             }
                             
                         },
+                        (CommandToken::Keyword(CommandKeyword::Deflate), CommandToken::Register(n)) => {
+                            if *n < 32 {
+                                (CommandInstruction::NoOp, editor_stack.editors[editor_stack.current].hex_edit.deflate_register(*n as u8, editor_stack.clevel))
+                            } else if *n < 64 {
+                                todo!()
+                            } else {
+                                (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
+                            }
+                        },
+                        (CommandToken::Keyword(CommandKeyword::Inflate), CommandToken::Register(n)) => {
+                            if *n < 32 {
+                                (CommandInstruction::NoOp, editor_stack.editors[editor_stack.current].hex_edit.inflate_register(*n as u8)) // TODO: Make level variable
+                            } else if *n < 64 {
+                                todo!()
+                            } else {
+                                (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
+                            }
+                        }
                         (CommandToken::Keyword(CommandKeyword::Clear), CommandToken::Register(n)) => {
                             if *n < 32 {
                                 (CommandInstruction::NoOp, editor_stack.editors[editor_stack.current].hex_edit.set_register(*n as u8, &Vec::<u8>::new()))
@@ -407,6 +427,14 @@ fn execute_command(editor_stack: &mut EditorStack, command: Vec<char>) -> (Comma
                                 },
                                 (CommandToken::Keyword(CommandKeyword::Chunk), CommandToken::Integer(_, n)) => {
                                     (CommandInstruction::NoOp, editor_stack.apply(|h| h.set_block_size(*n)))
+                                },
+                                (CommandToken::Keyword(CommandKeyword::CLevel), CommandToken::Integer(_, n)) => { // TODO: Need this to work for saving gz files as well
+                                    if *n >= 10 {
+                                        (CommandInstruction::NoOp, ActionResult::error("Compression level must be 0-9".to_string()))
+                                    } else {
+                                        editor_stack.clevel = *n as u8;
+                                        (CommandInstruction::NoOp, ActionResult::empty())
+                                    }
                                 },
                                 (CommandToken::Keyword(CommandKeyword::Undo), CommandToken::Integer(_, n)) => {
                                     for hm in editor_stack.editors.iter_mut() {

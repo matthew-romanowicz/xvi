@@ -1,5 +1,10 @@
 use std::rc::Rc;
 use std::io::SeekFrom;
+use std::io::Write;
+
+use flate2::write::DeflateEncoder;
+use flate2::write::DeflateDecoder;
+use flate2::Compression;
 
 mod file_manager;
 pub use crate::hex_edit::file_manager::{FileManagerType, FileManager};
@@ -376,6 +381,34 @@ impl Action for ShiftRegisterAction {
 
     fn redo(&self, hex_edit: &mut HexEdit) -> ActionResult {
         hex_edit.shift_register(self.register, self.shift)
+    }
+
+    fn size(&self) -> usize{
+        2
+    }
+}
+
+pub struct DeflateRegisterAction {
+    register: u8,
+    level: u8
+}
+
+impl DeflateRegisterAction {
+    pub fn new(register: u8, level: u8) -> DeflateRegisterAction {
+        DeflateRegisterAction {
+            register,
+            level
+        }
+    }
+}
+
+impl Action for DeflateRegisterAction {
+    fn undo(&self, hex_edit: &mut HexEdit) -> ActionResult {
+        hex_edit.inflate_register(self.register)
+    }
+
+    fn redo(&self, hex_edit: &mut HexEdit) -> ActionResult {
+        hex_edit.deflate_register(self.register, self.level as u8)
     }
 
     fn size(&self) -> usize{
@@ -985,6 +1018,46 @@ impl<'a> HexEdit<'a> {
             error: None,
             update: UpdateDescription::NoUpdate,
             action: Some(Rc::new(InvertRegisterAction::new(register)))
+        }
+    }
+
+    pub fn deflate_register(&mut self, register: u8, level: u8) -> ActionResult {
+        if register >= 32 {
+            return ActionResult::error("Register number must be less than 32".to_string())
+        }
+
+        let mut e = DeflateEncoder::new(Vec::new(), Compression::new(level as u32));
+        if let Err(msg) = e.write_all(&self.clipboard_registers[register as usize]) {
+            return ActionResult::error(msg.to_string())
+        }
+        match e.finish() {
+            Ok(w) => {
+                self.clipboard_registers[register as usize] = w;
+                ActionResult {
+                    error: None,
+                    update: UpdateDescription::NoUpdate,
+                    action: Some(Rc::new(DeflateRegisterAction::new(register, level)))
+                }
+            },
+            Err(err) => return ActionResult::error(err.to_string())
+        }
+    }
+
+    pub fn inflate_register(&mut self, register: u8) -> ActionResult {
+        if register >= 32 {
+            return ActionResult::error("Register number must be less than 32".to_string())
+        }
+
+        let mut e = DeflateDecoder::new(Vec::new());
+        if let Err(msg) = e.write_all(&self.clipboard_registers[register as usize]) {
+            return ActionResult::error(msg.to_string())
+        }
+        match e.finish() {
+            Ok(w) => {
+                self.clipboard_registers[register as usize] = w;
+                ActionResult::empty() // TODO: Add action to this... It's tough to undo since it doesn't tell you the compression level
+            },
+            Err(err) => return ActionResult::error(err.to_string())
         }
     }
 
