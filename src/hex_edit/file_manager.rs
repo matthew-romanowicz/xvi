@@ -562,4 +562,27 @@ impl FileManager<'_> {
         
         result
     }
+
+    pub fn find_bytes(&self, bytes: &Vec<u8>) -> Vec<FindResult> {
+        let mut result = Vec::<FindResult>::new();
+        match self.file_manager_type {
+            FileManagerType::RamOnly => {
+                let slice = bytes.as_slice();
+                for (i, w) in self.file_buffer.windows(bytes.len()).enumerate() {
+                    if w == slice {
+                        result.push(FindResult {start: i, span: bytes.len()});
+                    }
+                }
+
+            }
+            FileManagerType::SwapFile => {
+                todo!()
+            },
+            FileManagerType::LiveEdit | FileManagerType::ReadOnly => {
+                todo!()
+            }
+        } 
+        
+        result
+    }
 }

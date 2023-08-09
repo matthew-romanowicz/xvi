@@ -495,6 +495,46 @@ impl Action for ConcatenateRegisterAction {
     }
 }
 
+struct SliceRegisterAction {
+    register: u8,
+    left: Vec<u8>,
+    right: Vec<u8>
+}
+
+impl SliceRegisterAction {
+    fn new(register: u8, left: Vec<u8>, right: Vec<u8>) -> SliceRegisterAction {
+        SliceRegisterAction {
+            register,
+            left,
+            right
+        }
+    }
+}
+
+impl Action for SliceRegisterAction {
+    fn undo(&self, hex_edit: &mut HexEdit) -> ActionResult {
+        let mut new = self.left.to_vec();
+        match hex_edit.get_register(self.register) {
+            Ok(mid) => {
+                new.extend(mid);
+                new.extend(&self.right);
+                hex_edit.set_register(self.register, &new)
+            },
+            Err(msg) => ActionResult::error(msg)
+        }
+    } 
+
+    fn redo(&self, hex_edit: &mut HexEdit) -> ActionResult {
+        let n1 = self.left.len();
+        let n2 = hex_edit.register_len(self.register) - self.right.len();
+        hex_edit.slice_register(self.register, n1, n2)
+    }
+
+    fn size(&self) -> usize{
+        16 // TODO this is wrong
+    }
+}
+
 
 pub struct SeekAction {
     original_index: usize,
@@ -906,6 +946,13 @@ impl<'a> HexEdit<'a> {
         ActionResult::no_error(UpdateDescription::AttrsOnly)
     }
 
+    pub fn find_bytes(&mut self, bytes: &Vec<u8>) -> ActionResult {
+        for res in self.file_manager.find_bytes(&bytes) {
+            self.highlights.push(Highlight {start: res.start, span: res.span})
+        }
+        ActionResult::no_error(UpdateDescription::AttrsOnly)
+    }
+
     pub fn seek_next(&mut self) -> ActionResult {
         for h in self.highlights.iter() {
             if h.start > self.cursor_pos {
@@ -1028,18 +1075,19 @@ impl<'a> HexEdit<'a> {
 
         let mut e = DeflateEncoder::new(Vec::new(), Compression::new(level as u32));
         if let Err(msg) = e.write_all(&self.clipboard_registers[register as usize]) {
-            return ActionResult::error(msg.to_string())
-        }
-        match e.finish() {
-            Ok(w) => {
-                self.clipboard_registers[register as usize] = w;
-                ActionResult {
-                    error: None,
-                    update: UpdateDescription::NoUpdate,
-                    action: Some(Rc::new(DeflateRegisterAction::new(register, level)))
-                }
-            },
-            Err(err) => return ActionResult::error(err.to_string())
+            ActionResult::error(msg.to_string())
+        } else {
+            match e.finish() {
+                Ok(w) => {
+                    self.clipboard_registers[register as usize] = w;
+                    ActionResult {
+                        error: None,
+                        update: UpdateDescription::NoUpdate,
+                        action: Some(Rc::new(DeflateRegisterAction::new(register, level)))
+                    }
+                },
+                Err(msg) => ActionResult::error(msg.to_string())
+            }
         }
     }
 
@@ -1050,14 +1098,15 @@ impl<'a> HexEdit<'a> {
 
         let mut e = DeflateDecoder::new(Vec::new());
         if let Err(msg) = e.write_all(&self.clipboard_registers[register as usize]) {
-            return ActionResult::error(msg.to_string())
-        }
-        match e.finish() {
-            Ok(w) => {
-                self.clipboard_registers[register as usize] = w;
-                ActionResult::empty() // TODO: Add action to this... It's tough to undo since it doesn't tell you the compression level
-            },
-            Err(err) => return ActionResult::error(err.to_string())
+            ActionResult::error(msg.to_string())
+        } else {
+            match e.finish() {
+                Ok(w) => {
+                    self.clipboard_registers[register as usize] = w;
+                    ActionResult::empty() // TODO: Add action to this... It's tough to undo since it doesn't tell you the compression level
+                },
+                Err(msg) => ActionResult::error(msg.to_string())
+            }
         }
     }
 
@@ -1103,6 +1152,28 @@ impl<'a> HexEdit<'a> {
             Err(msg) => ActionResult::error(msg)
         }
 
+    }
+
+    pub fn slice_register(&mut self, register: u8, n1: usize, n2: usize) -> ActionResult {
+        if register >= 32 {
+            return ActionResult::error("Register number must be less than 32".to_string())
+        }
+
+        if n2 >= self.clipboard_registers[register as usize].len() {
+            ActionResult::error("Slice index outside of register contents bounds".to_string())
+        } else if n1 > n2 {
+            ActionResult::error("Slice start index greater than slice end index".to_string())
+        } else {
+            let temp = &self.clipboard_registers[register as usize][n1..n2];
+            let left = self.clipboard_registers[register as usize][..n1].to_vec();
+            let right = self.clipboard_registers[register as usize][n2..].to_vec();
+            self.clipboard_registers[register as usize] = temp.to_vec();
+            ActionResult {
+                error: None,
+                update: UpdateDescription::NoUpdate,
+                action: Some(Rc::new(SliceRegisterAction::new(register, left, right)))
+            }
+        }
     }
 
     pub fn insert(&mut self, data: DataSource) -> ActionResult {

@@ -1,5 +1,10 @@
 use std::rc::Rc;
 use std::io::SeekFrom;
+use std::io::Write;
+
+use flate2::write::DeflateEncoder;
+use flate2::write::DeflateDecoder;
+use flate2::Compression;
 
 extern crate pancurses;
 use pancurses::{initscr, endwin, Input, noecho, Window, resize_term};
@@ -68,7 +73,7 @@ const MANUAL_TEXT: &str = r"\c<b>COMMANDS</b>
     :ps fmt             =>  <u>P</u>rint the next group of bytes as fmt and <u>s</u>eek to the end of the group
 
   <b>REGISTER OPERATIONS:</b>
-    :slice r# ## ###    =>  <b>[TODO]</b> <u>Slice</u> the contents of register # to [## ###)
+    :slice r# ## ###    =>  <u>Slice</u> the contents of register # to [## ###)
     :cat r# [r##|x##]   =>  Con<u>cat</u>enate contents of <u>r</u>egister ## into <u>r</u>egister #
     :clear r#           =>  Delete the contents of <u>r</u>egister #
     :swap r#            =>  <u>Swap</u> the byte order of <u>r</u>egister #
@@ -309,7 +314,18 @@ fn execute_command(editor_stack: &mut EditorStack, command: Vec<char>) -> (Comma
                             if *n < 32 {
                                 (CommandInstruction::NoOp, editor_stack.editors[editor_stack.current].hex_edit.deflate_register(*n as u8, editor_stack.clevel))
                             } else if *n < 64 {
-                                todo!()
+                                let mut e = DeflateEncoder::new(Vec::new(), Compression::new(editor_stack.clevel as u32));
+                                if let Err(msg) = e.write_all(&editor_stack.clipboard_registers[*n - 32]) {
+                                    (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
+                                } else {
+                                    match e.finish() {
+                                        Ok(w) => {
+                                            editor_stack.clipboard_registers[*n - 32] = w;
+                                            (CommandInstruction::NoOp, ActionResult::empty())
+                                        },
+                                        Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
+                                    }
+                                }
                             } else {
                                 (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
                             }
@@ -318,7 +334,18 @@ fn execute_command(editor_stack: &mut EditorStack, command: Vec<char>) -> (Comma
                             if *n < 32 {
                                 (CommandInstruction::NoOp, editor_stack.editors[editor_stack.current].hex_edit.inflate_register(*n as u8)) // TODO: Make level variable
                             } else if *n < 64 {
-                                todo!()
+                                let mut e = DeflateDecoder::new(Vec::new());
+                                if let Err(msg) = e.write_all(&editor_stack.clipboard_registers[*n - 32]) {
+                                    (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
+                                } else {
+                                    match e.finish() {
+                                        Ok(w) => {
+                                            editor_stack.clipboard_registers[*n - 32] = w;
+                                            (CommandInstruction::NoOp, ActionResult::empty())
+                                        },
+                                        Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
+                                    }
+                                }
                             } else {
                                 (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
                             }
@@ -590,7 +617,7 @@ fn execute_command(editor_stack: &mut EditorStack, command: Vec<char>) -> (Comma
                         },
                         CommandToken::Keyword(CommandKeyword::RShift | CommandKeyword::LShift) => { // :rshft | lshft [] []
                             match (&tokens[1], &tokens[2]) {
-                                (CommandToken::Register(register), CommandToken::Integer(_, n)) => { // TODO: Make this work for registers 32-63
+                                (CommandToken::Register(register), CommandToken::Integer(_, n)) => {
                                     let shift = match &tokens[0] {
                                         CommandToken::Keyword(CommandKeyword::RShift) => *n as i8,
                                         CommandToken::Keyword(CommandKeyword::LShift) => -(*n as i8),
@@ -615,6 +642,28 @@ fn execute_command(editor_stack: &mut EditorStack, command: Vec<char>) -> (Comma
                         _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
                     }
                 },
+                4 => {
+                    match (&tokens[0], &tokens[1], &tokens[2], &tokens[3]) {
+                        (CommandToken::Keyword(CommandKeyword::Slice), CommandToken::Register(register), CommandToken::Integer(_, n1), CommandToken::Integer(_, n2)) => {
+                            if *register < 32 {
+                                (CommandInstruction::NoOp, editor_stack.editors[editor_stack.current].hex_edit.slice_register(*register as u8, *n1, *n2))
+                            } else if *register < 64 {
+                                if *n2 >= editor_stack.clipboard_registers[*register - 32].len() {
+                                    (CommandInstruction::NoOp, ActionResult::error("Slice index outside of register contents bounds".to_string()))
+                                } else if *n1 > *n2 {
+                                    (CommandInstruction::NoOp, ActionResult::error("Slice start index greater than slice end index".to_string()))
+                                } else {
+                                    let temp = &editor_stack.clipboard_registers[*register - 32][*n1..*n2];
+                                    editor_stack.clipboard_registers[*register - 32] = temp.to_vec();
+                                    (CommandInstruction::NoOp, ActionResult::empty())
+                                }
+                            } else {
+                                (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
+                            }
+                        },
+                        _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
+                    }
+                }
                 _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
             }
         },
@@ -630,6 +679,19 @@ fn execute_command(editor_stack: &mut EditorStack, command: Vec<char>) -> (Comma
             hm.hex_edit.clear_find();
             hm.hex_edit.find(&command[1..].to_vec());
             (CommandInstruction::NoOp, hm.hex_edit.seek_prev())
+        },
+        '\\' => {
+            let mut word = command[1..].to_vec();
+            word.insert(0, 'x');
+            match parse_bytes(&word) {
+                Ok(v) => {
+                    let hm = &mut editor_stack.editors[editor_stack.current];
+                    hm.hex_edit.clear_find();
+                    hm.hex_edit.find_bytes(&v);
+                    (CommandInstruction::NoOp, hm.hex_edit.seek_next())
+                },
+                Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg))
+            }
         }
         _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
     }
@@ -917,7 +979,7 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                         editors.set_edit_mode(EditMode::AsciiInsert);
                         editors.editors[editors.current].hex_edit.refresh_cursor(&mut window)
                     },
-                    Some(Input::Character(':')) | Some(Input::Character('/')) => {
+                    Some(Input::Character(':')) | Some(Input::Character('/')) | Some(Input::Character('\\')) => {
                         edit_state = EditState::Command;
                         line_entry.addch(ch_input.unwrap()); 
                         line_entry.draw(&mut window);

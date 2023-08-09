@@ -298,7 +298,7 @@ impl LineEntry {
 
         if self.alert_active {
             let mut bold_attr = Attributes::new();
-            //bold_attr.set_bold(true);
+            bold_attr.set_bold(true);
             bold_attr.set_color_pair(pancurses::ColorPair(2));
             let bold_attr = chtype::from(bold_attr);
 

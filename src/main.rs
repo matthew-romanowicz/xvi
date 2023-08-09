@@ -56,7 +56,7 @@ options:
     }
 
 
-    match run("C:\\Users\\Matthew\\Documents\\Git\\xvi\\test_file4.bin.gz".to_string(), file_manager_type, extract) {
+    match run(r"C:\Users\Matthew\Documents\Python\Examples\7997_75m.dem".to_string(), file_manager_type, extract) {
         Ok(_) => {
             std::process::exit(0);
         },
