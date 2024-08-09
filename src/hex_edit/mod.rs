@@ -10,7 +10,7 @@ mod file_manager;
 pub use crate::hex_edit::file_manager::{FileManagerType, FileManager};
 
 extern crate pancurses;
-use pancurses::{Input, Window, Attributes, chtype};
+use pancurses::{Input, Window, Attributes, chtype, start_color, init_pair};
 
 fn clip_to_range(n: usize, min: usize, max: usize) -> usize {
     if n < min {
@@ -764,6 +764,16 @@ impl ActionResult {
 
 }
 
+enum CharacterFormat {
+    EndOfFile,
+    InvalidAscii
+}
+
+struct FormatSummary {
+    start: usize,
+    span: usize,
+    format: CharacterFormat
+}
 
 pub struct HexEdit<'a> {
     file_manager: FileManager<'a>,
@@ -772,6 +782,7 @@ pub struct HexEdit<'a> {
     width: usize,
     height: usize,
     line_length: u8,
+    show_filename: bool,
     show_hex: bool,
     show_ascii: bool,
     show_lnum: ShowType,
@@ -831,7 +842,9 @@ pub fn vector_op<F>(buffer1: &mut Vec<u8>, buffer2: &Vec<u8>, op: F) where F: Fn
 
 impl<'a> HexEdit<'a> {
 
-    pub fn new(file_manager: FileManager, x: usize, y: usize, width: usize, height: usize, line_length: u8, show_hex: bool, show_ascii: bool, invalid_ascii_char: char, separator: String, capitalize_hex: bool) -> HexEdit {
+    pub fn new(file_manager: FileManager, x: usize, y: usize, width: usize, height: usize, line_length: u8, show_filename: bool, 
+                show_hex: bool, show_ascii: bool, invalid_ascii_char: char, separator: String, capitalize_hex: bool) -> HexEdit {
+
         HexEdit {
             file_manager,
             x,
@@ -839,6 +852,7 @@ impl<'a> HexEdit<'a> {
             width,
             height,
             line_length,
+            show_filename,
             show_hex,
             show_ascii,
             show_lnum: ShowType::Hex,
@@ -1219,7 +1233,7 @@ impl<'a> HexEdit<'a> {
         }
         let mut original_bytes: Vec<u8> = vec![0; bytes.len()];
         if let Err(msg) = self.file_manager.get_bytes(self.cursor_pos, &mut original_bytes) {
-            return ActionResult::error(msg.to_string()) // TODO: This doesn't accound for the changes to the file made earlier
+            return ActionResult::error(msg.to_string()) // TODO: This doesn't account for the changes to the file made earlier
         }
         match self.file_manager.overwrite_bytes(self.cursor_pos, &bytes) {
             Ok(_) => {
@@ -1342,37 +1356,81 @@ impl<'a> HexEdit<'a> {
         //self.refresh_viewport()
     }
 
-    fn bytes_to_hex_line(buffer: &Vec<u8>, eof_char: char, n_valid: usize) -> String {
-        buffer.iter().enumerate()
-        .map(|(i, b)| 
+    pub fn content_height(&self) -> usize {
+        if self.show_filename {
+            self.height - 1
+        } else {
+            self.height
+        }
+    }
+
+    pub fn top_margin(&self) -> usize {
+        if self.show_filename {
+            1
+        } else {
+            0
+        }
+    }
+
+    fn bytes_to_hex_line(buffer: &Vec<u8>, eof_char: char, n_valid: usize, format_summary: &mut Vec<FormatSummary>) -> String {
+        let mut bytes = Vec::<String>::new();
+        for (i, b) in buffer.iter().enumerate() {
             if i < n_valid {
-                format!("{:02x}", b).to_string()
+                bytes.push(format!("{:02x}", b).to_string());
             } else {
-                eof_char.to_string().repeat(2)
-            })
-        .collect::<Vec<String>>()
-        .join(" ")
+                bytes.push(eof_char.to_string().repeat(2));
+                format_summary.push(FormatSummary{start: i*3, span: 2, format: CharacterFormat::EndOfFile});
+            }
+        }
+
+        bytes.join(" ")
+        // buffer.iter().enumerate()
+        // .map(|(i, b)| 
+        //     if i < n_valid {
+        //         format!("{:02x}", b).to_string()
+        //     } else {
+        //         eof_char.to_string().repeat(2)
+        //     })
+        // .collect::<Vec<String>>()
+        // .join(" ")
     }
     
-    fn bytes_to_ascii_line(buffer: &Vec<u8>, invalid_char: char, eof_char: char, n_valid: usize) -> String {
-        buffer.iter().enumerate()
-        .map(|(i, b)| 
+    fn bytes_to_ascii_line(buffer: &Vec<u8>, invalid_char: char, eof_char: char, n_valid: usize, offset: usize, format_summary: &mut Vec<FormatSummary>) -> String {
+        let mut bytes = Vec::<String>::new();
+        for (i, b) in buffer.iter().enumerate() {
             if i < n_valid {
-                format!("{}", match b {32..=126 => *b as char, _ => invalid_char}).to_string()
+                bytes.push(match b {
+                    32..=126 => (*b as char).to_string(),
+                    _ => {
+                        format_summary.push(FormatSummary{start: i + offset, span: 1, format: CharacterFormat::InvalidAscii});
+                        invalid_char.to_string()
+                    }
+                });
             } else {
-                eof_char.to_string()
-            })
-        .collect::<Vec<String>>()
-        .join("")
+                bytes.push(eof_char.to_string());
+                format_summary.push(FormatSummary{start: i + offset, span: 1, format: CharacterFormat::EndOfFile});
+            }
+        }
+
+        bytes.join("")
+        // buffer.iter().enumerate()
+        // .map(|(i, b)| 
+        //     if i < n_valid {
+        //         format!("{}", match b {32..=126 => *b as char, _ => invalid_char}).to_string()
+        //     } else {
+        //         eof_char.to_string()
+        //     })
+        // .collect::<Vec<String>>()
+        // .join("")
     }
     
-    fn read_to_composite_line(&self, buffer: &Vec<u8>, n_valid: usize) -> String {
+    fn read_to_composite_line(&self, buffer: &Vec<u8>, n_valid: usize, format_summary: &mut Vec<FormatSummary>) -> String {
         let mut s: String = "".to_string();
         if self.show_hex {
             if self.capitalize_hex {
-                s += &HexEdit::bytes_to_hex_line(&buffer, self.eof_hex_char, n_valid).to_uppercase();
+                s += &HexEdit::bytes_to_hex_line(&buffer, self.eof_hex_char, n_valid, format_summary).to_uppercase();
             } else {
-                s += &HexEdit::bytes_to_hex_line(&buffer, self.eof_hex_char, n_valid).to_lowercase();
+                s += &HexEdit::bytes_to_hex_line(&buffer, self.eof_hex_char, n_valid, format_summary).to_lowercase();
             }
             if self.show_ascii {
                 s += &self.separator;
@@ -1380,7 +1438,8 @@ impl<'a> HexEdit<'a> {
         } 
 
         if self.show_ascii {
-            s += &HexEdit::bytes_to_ascii_line(&buffer, self.invalid_ascii_char, self.eof_ascii_char, n_valid)
+            let offset = s.len();
+            s += &HexEdit::bytes_to_ascii_line(&buffer, self.invalid_ascii_char, self.eof_ascii_char, n_valid, offset, format_summary)
         }
 
         s
@@ -1393,7 +1452,7 @@ impl<'a> HexEdit<'a> {
 
     fn refresh_viewport(&mut self) -> std::io::Result<()> {
         // TODO: Make this actually update a given range of data
-        self.display_data = vec![0; (self.line_length as usize) * (self.height)];
+        self.display_data = vec![0; (self.line_length as usize) * (self.content_height())];
         match self.file_manager.get_bytes(self.start_line * (self.line_length as usize), &mut self.display_data) {
             Ok(n) => {
                 self.valid_bytes = n;
@@ -1484,15 +1543,15 @@ impl<'a> HexEdit<'a> {
         let line = index / (self.line_length as usize);
         self.cursor_pos = index;
 
-
+        //println!("line={} start_line={} content_height={} height={}", line, self.start_line, self.content_height(), self.height);
         if line < self.start_line {
             match self.set_viewport_row(line){
                 Ok(_) => ActionResult::no_error(UpdateDescription::All), // TODO: add action here
                 Err(msg) => ActionResult::error(msg.to_string())
             }
-        } else if line >= self.start_line as usize + self.height {
-            //println!("Going down: {} {}", self.start_line, line - self.height + 1);
-            match self.set_viewport_row(line - self.height + 1) {
+        } else if line >= self.start_line as usize + self.content_height() {
+            //println!("Going down: {} {}", self.start_line, line - self.content_height() + 1);
+            match self.set_viewport_row(line - self.content_height() + 1) {
                 Ok(_) => ActionResult::no_error(UpdateDescription::All), // TODO: add action here
                 Err(msg) => ActionResult::error(msg.to_string())
             }
@@ -1560,13 +1619,18 @@ impl<'a> HexEdit<'a> {
     }
 
     fn cursor_y(&self) -> i32 {
-        (self.y + self.cursor_pos / (self.line_length as usize) - self.start_line) as i32
+        (self.top_margin() + self.y + self.cursor_pos / (self.line_length as usize) - self.start_line) as i32
     }
 
     pub fn refresh_cursor(&self, window: &Window) {
+        //println!("Refreshing Cursor!");
+
+        // start_color();
+        // init_pair(4, pancurses::COLOR_BLACK, pancurses::COLOR_WHITE);
 
         let mut underline_attr = Attributes::new();
-        underline_attr.set_underline(true);
+        //underline_attr.set_underline(true);
+        underline_attr.set_color_pair(pancurses::ColorPair(4));
         let underline_attr = chtype::from(underline_attr);
 
         match self.edit_mode {
@@ -1604,8 +1668,8 @@ impl<'a> HexEdit<'a> {
             },
             Input::KeyNPage => { // TODO: Return action for this
                 let row = self.start_line;
-                self.set_cursor_pos(self.cursor_pos + self.height*(self.line_length as usize));
-                match self.set_viewport_row(row + self.height) {
+                self.set_cursor_pos(self.cursor_pos + self.content_height()*(self.line_length as usize));
+                match self.set_viewport_row(row + self.content_height()) {
                     Ok(_) => ActionResult::no_error(UpdateDescription::All),
                     Err(msg) => ActionResult::error(msg.to_string())
                 }
@@ -1613,9 +1677,9 @@ impl<'a> HexEdit<'a> {
             },
             Input::KeyPPage => { // TODO: Return action for this
                 let row = self.start_line;
-                if self.cursor_pos >= self.height*(self.line_length as usize) && self.start_line >= self.height {
-                    self.set_cursor_pos(self.cursor_pos - self.height*(self.line_length as usize));
-                    if let Err(msg) = self.set_viewport_row(row - self.height) {
+                if self.cursor_pos >= self.content_height()*(self.line_length as usize) && self.start_line >= self.content_height() {
+                    self.set_cursor_pos(self.cursor_pos - self.content_height()*(self.line_length as usize));
+                    if let Err(msg) = self.set_viewport_row(row - self.content_height()) {
                         return ActionResult::error(msg.to_string());
                     }
                 } else {
@@ -1774,25 +1838,42 @@ impl<'a> HexEdit<'a> {
         }
     }
 
+    fn refresh_filename(&self, window: &mut Window) {
+        if self.show_filename {
+            window.mvaddstr(0, 0, &self.file_manager.filename);
+        }
+    }
+
     fn refresh_highlights(&self, window: &mut Window) {
+        // println!("Refreshing Highlights: {}", self.highlights.len());
+
+        // start_color();
+        
+
         // TODO: clean this up!!!
         let mut rv_attr = Attributes::new();
-        rv_attr.set_reverse(true);
+        //rv_attr.set_reverse(true);
+        rv_attr.set_color_pair(pancurses::ColorPair(3));
         let rv_attr = chtype::from(rv_attr);
 
         let start: usize = self.start_line * (self.line_length as usize);
-        let end: usize = start + self.height * (self.line_length as usize);
+        let end: usize = start + self.content_height() * (self.line_length as usize);
 
         let hex_offset = self.line_label_len() + self.separator.len();
         let ascii_offset = self.line_label_len() + self.separator.len() * 2 + (self.line_length as usize) * 3 - 1;
+
+        let top_margin = self.top_margin() as i32;
 
         for h in self.highlights.iter() {
             //println!("{}, {}", h.start, h.span);
             if h.start + h.span > start && h.start < end { // If the highlight is in the viewport
                 let first_line = (h.start / (self.line_length as usize)) as isize - (self.start_line as isize);
                 let last_line = ((h.start + h.span) / (self.line_length as usize)) as isize - (self.start_line as isize);
+                // if (h.start + h.span) % (self.line_length as usize) == 0 {
+                //     last_line -= 1;
+                // }
                 //println!("In view: {}, {}", first_line, last_line);
-                for y in std::cmp::max(first_line, 0)..std::cmp::min(last_line, self.height as isize - 1) + 1 {
+                for y in std::cmp::max(first_line, 0)..std::cmp::min(last_line, self.content_height() as isize - 1) + 1 {
                     let mut x1 = 0;
                     let mut x2 = self.line_length as usize;
                     if y == first_line {
@@ -1801,49 +1882,55 @@ impl<'a> HexEdit<'a> {
                     if y == last_line {
                         x2 = (h.start + h.span) % (self.line_length as usize);
                     }
-                    //println!("y={}", y);
-                    window.mvchgat(y as i32, (x1*3 + hex_offset) as i32, ((x2 - x1)*3 - 1) as i32, rv_attr, 0);
-                    window.mvchgat(y as i32, (x1 + ascii_offset) as i32, (x2 - x1) as i32, rv_attr, 0);
+                    // println!("y={}, x1={}, x2={}, h.start={}, h.span={}, line_length={}", y, x1, x2, h.start, h.span, self.line_length);
+                    if x1 != x2 {
+                        window.mvchgat(top_margin + y as i32, (x1*3 + hex_offset) as i32, ((x2 - x1)*3 - 1) as i32, rv_attr, 0);
+                        window.mvchgat(top_margin + y as i32, (x1 + ascii_offset) as i32, (x2 - x1) as i32, rv_attr, 0);
+                    }
                 }
             }
         }
     }
 
     pub fn update(&mut self, window: &mut Window, update: UpdateDescription) -> std::io::Result<()> {
+        // start_color();
+        // init_pair(3, pancurses::COLOR_BLACK, pancurses::COLOR_YELLOW);
+        // init_pair(4, pancurses::COLOR_BLACK, pancurses::COLOR_WHITE);
         match update {
             UpdateDescription::NoUpdate => {
                 ()
             },
             UpdateDescription::AttrsOnly => {
-                //println!("Refreshing attrs");
-                self.populate(window, 0, self.height); //TODO: Get rid of this! It's only needed to refresh the attributes.
-                self.refresh_cursor(window);
+                // println!("Refreshing attrs");
+                self.populate(window, 0, self.content_height()); //TODO: Get rid of this! It's only needed to refresh the attributes.
                 self.refresh_highlights(window);
+                self.refresh_cursor(window);
             },
             UpdateDescription::After(n) =>{
-                let line = clip_to_range(n / (self.line_length as usize), self.start_line, self.start_line + self.height);
-                //println!("Refreshing lines {} through {}", line - self.start_line, self.height);
+                let line = clip_to_range(n / (self.line_length as usize), self.start_line, self.start_line + self.content_height());
+                //println!("Refreshing lines {} through {}", line - self.start_line, self.content_height());
                 self.refresh_viewport()?;
-                self.populate(window, line - self.start_line, self.height);
+                self.populate(window, line - self.start_line, self.content_height());
+                self.refresh_highlights(window);
                 self.refresh_cursor(window);
-                self.refresh_highlights(window); 
             },
             UpdateDescription::Range(n1, n2) => {
-                let line1 = clip_to_range(n1 / (self.line_length as usize), self.start_line, self.start_line + self.height);
-                let line2 = clip_to_range((n2 - 1) / (self.line_length as usize), self.start_line, self.start_line + self.height);
+                let line1 = clip_to_range(n1 / (self.line_length as usize), self.start_line, self.start_line + self.content_height());
+                let line2 = clip_to_range((n2 - 1) / (self.line_length as usize), self.start_line, self.start_line + self.content_height());
 
                 //println!("Refreshing lines {} through {}", line1 - self.start_line, line2 - self.start_line);
                 self.refresh_viewport()?;
                 self.populate(window, line1 - self.start_line, line2 - self.start_line + 1);
+                self.refresh_highlights(window);
                 self.refresh_cursor(window);
-                self.refresh_highlights(window); 
             },
             UpdateDescription::All => {
-                //println!("Refreshing all");
+                // println!("Refreshing all");
                 self.refresh_viewport()?;
-                self.populate(window, 0, self.height);
-                self.refresh_cursor(window);
-                self.refresh_highlights(window);                
+                self.populate(window, 0, self.content_height());
+                self.refresh_filename(window);
+                self.refresh_highlights(window);
+                self.refresh_cursor(window);               
             }
 
         }
@@ -1872,29 +1959,62 @@ impl<'a> HexEdit<'a> {
 
     fn populate(&self, window: &mut Window, start: usize, end: usize) {
 
+        let mut eof_attr = Attributes::new();
+        //rv_attr.set_reverse(true);
+        eof_attr.set_color_pair(pancurses::ColorPair(5));
+        let eof_attr = chtype::from(eof_attr);
+
+        let mut invalid_ascii_attr = Attributes::new();
+        //rv_attr.set_reverse(true);
+        invalid_ascii_attr.set_color_pair(pancurses::ColorPair(6));
+        let invalid_ascii_attr = chtype::from(invalid_ascii_attr);
+
         let start = 0; //TODO: GET RID OF THIS!!!
-        let end = self.height;
+        let end = self.content_height();
+
+        let mut format_summaries = Vec::<Vec<FormatSummary>>::new();
 
         let mut s = String::new();
         for i in start..end {
             //println!("{}", i);
+            let mut format_summary = Vec::<FormatSummary>::new();
             s += &self.format_line_label((self.start_line + i) * (self.line_length as usize));
             s += &self.separator;
             if self.valid_bytes > i * (self.line_length as usize) {
-                s += &self.read_to_composite_line(&self.get_display_line(i), self.valid_bytes - i * (self.line_length as usize));
+                s += &self.read_to_composite_line(&self.get_display_line(i), self.valid_bytes - i * (self.line_length as usize), &mut format_summary);
             } else {
-                s += &self.read_to_composite_line(&self.get_display_line(i), 0);
+                s += &self.read_to_composite_line(&self.get_display_line(i), 0, &mut format_summary);
             }
+
+            format_summaries.push(format_summary);
             
             s += &"\n".to_string();
         }
 
-        window.mvaddstr((self.y + start) as i32, self.x as i32, s);
+        let top_margin = self.top_margin();
+        window.mvaddstr((self.y + top_margin) as i32, self.x as i32, s);
+
+        let x_offset = self.line_label_len() + self.separator.len();
+
+        for (i, format_summary) in format_summaries.iter().enumerate() {
+            for f in format_summary {
+                match f.format {
+                    CharacterFormat::EndOfFile => {
+                        window.mvchgat((top_margin + i) as i32, (x_offset + f.start) as i32, f.span as i32, eof_attr, 0);
+                    },
+                    CharacterFormat::InvalidAscii => {
+                        window.mvchgat((top_margin + i) as i32, (x_offset + f.start) as i32, f.span as i32, invalid_ascii_attr, 0);
+                    }
+                }
+                
+            }
+        }
     }
 
     pub fn draw(&self, window: &mut Window) {
 
-        self.populate(window, 0, self.height);
+        self.populate(window, 0, self.content_height());
+        self.refresh_filename(window);
         self.refresh_highlights(window);
         self.refresh_cursor(window);
     }

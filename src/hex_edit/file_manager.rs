@@ -20,7 +20,7 @@ pub enum FileManagerType {
 }
 
 pub struct FileManager<'a> {
-    filename: String,
+    pub filename: String,
     file_manager_type: FileManagerType,
     extract: bool,
     handle: File,

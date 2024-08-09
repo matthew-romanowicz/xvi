@@ -7,7 +7,7 @@ use flate2::write::DeflateDecoder;
 use flate2::Compression;
 
 extern crate pancurses;
-use pancurses::{initscr, endwin, Input, noecho, Window, resize_term};
+use pancurses::{initscr, endwin, Input, noecho, Window, resize_term, start_color, init_pair};
 
 mod line_entry;
 use crate::line_entry::LineEntry;
@@ -191,7 +191,7 @@ impl<'a> EditorStack<'a> {
         let fm = FileManager::new(filename, file_manager_type, extract)?;
         self.editors.push(HexEditManager {
             hex_edit: HexEdit::new(fm, self.x, self.y, self.width, self.height,
-                16, true, true, // Line Length, Show Hex, Show ASCII
+                16, true, true, true, // Line Length, Show filename, Show Hex, Show ASCII
                 '.', "  ".to_string(), true), // Invalid ASCII, Separator, Capitalize Hex
             action_stack: ActionStack::new(256)
         });
@@ -905,11 +905,20 @@ fn alert(text: String, window: &mut Window, line_entry: &mut LineEntry, hex_edit
 }
 
 pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) -> std::io::Result<()> {
+
     let mut edit_state = EditState::Escaped;
     let mut window = initscr();
     window.refresh();
     window.keypad(true);
     noecho();
+
+    start_color();
+    init_pair(2, pancurses::COLOR_RED, pancurses::COLOR_BLACK);
+    init_pair(3, pancurses::COLOR_BLACK, pancurses::COLOR_YELLOW);
+    init_pair(4, pancurses::COLOR_BLACK, pancurses::COLOR_WHITE);
+    init_pair(5, pancurses::COLOR_YELLOW, pancurses::COLOR_BLACK);
+    init_pair(6, pancurses::COLOR_RED, pancurses::COLOR_BLACK);
+
 
     let mut current_keystroke = Vec::<char>::new();
 
@@ -986,7 +995,7 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                     }, 
                     Some(Input::Character('t')) => {
                         editors.tab();
-                        editors.editors[editors.current].hex_edit.update(&mut window, UpdateDescription::All); // TODO: Handle this result
+                        editors.editors[editors.current].hex_edit.draw(&mut window);//.update(&mut window, UpdateDescription::All); // TODO: Handle this result
                     }
                     Some(Input::Character(c)) => {
                         current_keystroke.push(c);
@@ -1089,6 +1098,7 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                                 if let Ok(i) = editors.push(filename, FileManagerType::ReadOnly, extract) {
                                     editors.current = i;
                                     editors.editors[editors.current].hex_edit.update(&mut window, UpdateDescription::All);
+                                    edit_state = EditState::Escaped;
                                 }
                             }
                             _ => () // This should never be hit

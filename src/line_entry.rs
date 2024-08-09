@@ -293,12 +293,12 @@ impl LineEntry {
     pub fn draw(&self, window: &mut Window) {
 
 
-        start_color();
-        init_pair(2, pancurses::COLOR_RED, pancurses::COLOR_BLACK);
+        // start_color();
+        // init_pair(2, pancurses::COLOR_RED, pancurses::COLOR_BLACK);
 
         if self.alert_active {
             let mut bold_attr = Attributes::new();
-            bold_attr.set_bold(true);
+            //bold_attr.set_bold(true);
             bold_attr.set_color_pair(pancurses::ColorPair(2));
             let bold_attr = chtype::from(bold_attr);
 
