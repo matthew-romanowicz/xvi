@@ -7,10 +7,10 @@ use flate2::write::DeflateDecoder;
 use flate2::Compression;
 
 extern crate pancurses;
-use pancurses::{initscr, endwin, Input, noecho, Window, resize_term, start_color, init_pair};
+use pancurses::{initscr, endwin, Input, noecho, Window, resize_term, start_color, init_color, init_pair, COLORS, COLOR_PAIRS};
 
 mod line_entry;
-use crate::line_entry::LineEntry;
+use crate::line_entry::{AlertType, LineEntry};
 
 mod large_text_view;
 use crate::large_text_view::LargeTextView;
@@ -24,6 +24,9 @@ use crate::parsers::{CommandToken, CommandKeyword, parse_command, parse_bytes, K
 
 mod bin_format;
 use crate::bin_format::{Endianness, UIntFormat, IIntFormat, FloatFormat, BinaryFormat, DataType, fmt_length, from_bytes, to_bytes};
+
+mod globals;
+use crate::globals::*;
 
 fn command_kwrd_to_fmt(kwrd: &CommandKeyword) -> Result<BinaryFormat, String> {
     match kwrd {
@@ -54,6 +57,7 @@ const MANUAL_TEXT: &str = r"\c<b>COMMANDS</b>
     :set caps [on|off]  =>  Toggle the case of display hexadecimal values
     :set hex [on|off]   =>  Toggle the <u>hex</u> display
     :set ascii [on|off] =>  Toggle the <u>ascii</u> display
+    :set fname [on|off] =>  Toggle the <u>f</u>ile<u>name</u> display
     :set lnum [hex|dec|off]  =>  Toggle <u>l</u>ine <u>num</u>ber display/base
     :set cnum [hex|dec|off]  =>  Toggle <u>c</u>ursor index display/base
     :set line #         =>  Set the number of bytes per <u>l</u>ine to #
@@ -168,6 +172,10 @@ struct EditorStack<'a> {
     clipboard_registers: [Vec<u8>; 32],
     endianness: Endianness,
     cnum: ShowType,
+    show_hex: bool,
+    show_ascii: bool,
+    show_filename: bool,
+    caps: bool,
     clevel: u8
 }
 
@@ -183,6 +191,10 @@ impl<'a> EditorStack<'a> {
             clipboard_registers: Default::default(),
             endianness: Endianness::Network,
             cnum: ShowType::Hex,
+            show_hex: true,
+            show_ascii: true,
+            show_filename: false,
+            caps: true,
             clevel: 9
         }
     }
@@ -191,8 +203,8 @@ impl<'a> EditorStack<'a> {
         let fm = FileManager::new(filename, file_manager_type, extract)?;
         self.editors.push(HexEditManager {
             hex_edit: HexEdit::new(fm, self.x, self.y, self.width, self.height,
-                16, true, true, true, // Line Length, Show filename, Show Hex, Show ASCII
-                '.', "  ".to_string(), true), // Invalid ASCII, Separator, Capitalize Hex
+                16, self.show_filename, self.show_hex, self.show_ascii, // Line Length, Show filename, Show Hex, Show ASCII
+                '.', "  ".to_string(), self.caps), // Invalid ASCII, Separator, Capitalize Hex
             action_stack: ActionStack::new(256)
         });
 
@@ -255,7 +267,7 @@ fn execute_command(editor_stack: &mut EditorStack, command: Vec<char>) -> (Comma
                     match &tokens[0] {
                         CommandToken::Keyword(CommandKeyword::Save) => {
                             let result = hm.hex_edit.save();
-                            if let Some(err) = result.error {
+                            if let Some(err) = result.alert {
                                 (CommandInstruction::NoOp, ActionResult::error(err.to_string()))
                             } else {
                                 (CommandInstruction::NoOp, ActionResult::empty())
@@ -263,7 +275,7 @@ fn execute_command(editor_stack: &mut EditorStack, command: Vec<char>) -> (Comma
                         },
                         CommandToken::Keyword(CommandKeyword::SaveAndQuit) => {
                             let result = hm.hex_edit.save();
-                            if let Some(err) = result.error {
+                            if let Some(err) = result.alert {
                                 (CommandInstruction::NoOp, ActionResult::error(err.to_string()))
                             } else {
                                 (CommandInstruction::Exit, ActionResult::empty())
@@ -393,7 +405,7 @@ fn execute_command(editor_stack: &mut EditorStack, command: Vec<char>) -> (Comma
                                                 CommandKeyword::PrintSeek => hm.hex_edit.seek(SeekFrom::Current(n_bytes as i64)),
                                                 _ => return (CommandInstruction::NoOp, ActionResult::error("Impossible state".to_string()))
                                             };
-                                            res.set_error(s);
+                                            res.set_info(s);
                                             (CommandInstruction::NoOp, res)
                                         },
                                         Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg))
@@ -411,13 +423,20 @@ fn execute_command(editor_stack: &mut EditorStack, command: Vec<char>) -> (Comma
                         CommandToken::Keyword(CommandKeyword::Set) => { // :set [] []
                             match (&tokens[1], &tokens[2]) {
                                 (CommandToken::Keyword(CommandKeyword::Caps), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::On | CommandKeyword::Off) => {
+                                    editor_stack.caps = matches!(kwrd, CommandKeyword::On);
                                     (CommandInstruction::NoOp, editor_stack.apply(|h| h.set_capitalize_hex(matches!(kwrd, CommandKeyword::On))))
                                 },
                                 (CommandToken::Keyword(CommandKeyword::Hex), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::On | CommandKeyword::Off) => {
+                                    editor_stack.show_hex = matches!(kwrd, CommandKeyword::On);
                                     (CommandInstruction::NoOp, editor_stack.apply(|h| h.set_show_hex(matches!(kwrd, CommandKeyword::On))))
                                 },
                                 (CommandToken::Keyword(CommandKeyword::Ascii), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::On | CommandKeyword::Off) => {
+                                    editor_stack.show_ascii = matches!(kwrd, CommandKeyword::On);
                                     (CommandInstruction::NoOp, editor_stack.apply(|h| h.set_show_ascii(matches!(kwrd, CommandKeyword::On))))
+                                },
+                                (CommandToken::Keyword(CommandKeyword::Filename), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::On | CommandKeyword::Off) => {
+                                    editor_stack.show_filename = matches!(kwrd, CommandKeyword::On);
+                                    (CommandInstruction::NoOp, editor_stack.apply(|h| h.set_show_filename(matches!(kwrd, CommandKeyword::On))))
                                 },
                                 (CommandToken::Keyword(CommandKeyword::Icase), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::On | CommandKeyword::Off) => {
                                     (CommandInstruction::NoOp, editor_stack.apply(|h| h.set_ignore_case(matches!(kwrd, CommandKeyword::On))))
@@ -898,8 +917,8 @@ fn execute_keystroke(editor_stack: &mut EditorStack, macro_manager: &mut MacroMa
     }
 }
 
-fn alert(text: String, window: &mut Window, line_entry: &mut LineEntry, hex_edit: &mut HexEdit) {
-    line_entry.alert(text.chars().collect());
+fn alert(text: String, alert_type: AlertType, window: &mut Window, line_entry: &mut LineEntry, hex_edit: &mut HexEdit) {
+    line_entry.alert(text.chars().collect(), alert_type);
     line_entry.draw(window);
     hex_edit.refresh_cursor(window);
 }
@@ -913,11 +932,17 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
     noecho();
 
     start_color();
-    init_pair(2, pancurses::COLOR_RED, pancurses::COLOR_BLACK);
-    init_pair(3, pancurses::COLOR_BLACK, pancurses::COLOR_YELLOW);
-    init_pair(4, pancurses::COLOR_BLACK, pancurses::COLOR_WHITE);
-    init_pair(5, pancurses::COLOR_YELLOW, pancurses::COLOR_BLACK);
-    init_pair(6, pancurses::COLOR_RED, pancurses::COLOR_BLACK);
+    println!("Colors: {} Color Pairs: {}", COLORS(), COLOR_PAIRS());
+    // init_color(globals::LIGHT_RED, 500, 0, 0);
+    // init_color(globals::LIGHT_YELLOW, 500, 500, 0);
+    // init_color(globals::GRAY, 500, 500, 500);
+    init_pair(globals::ERROR_COLOR as i16, pancurses::COLOR_RED, pancurses::COLOR_BLACK);
+    init_pair(globals::HIGHLIGHT_COLOR as i16, pancurses::COLOR_BLACK, pancurses::COLOR_YELLOW);
+    init_pair(globals::CURSOR_COLOR as i16, pancurses::COLOR_BLACK, pancurses::COLOR_WHITE);
+    init_pair(globals::WARNING_COLOR as i16, pancurses::COLOR_YELLOW, pancurses::COLOR_BLACK);
+    init_pair(globals::BAD_ASCII_COLOR as i16, globals::BRIGHT_RED, pancurses::COLOR_BLACK);
+    init_pair(globals::EOF_COLOR as i16, globals::BRIGHT_BLACK, pancurses::COLOR_BLACK);
+    init_pair(globals::INFO_COLOR as i16, pancurses::COLOR_CYAN, pancurses::COLOR_BLACK);
 
 
     let mut current_keystroke = Vec::<char>::new();
@@ -995,22 +1020,24 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                     }, 
                     Some(Input::Character('t')) => {
                         editors.tab();
-                        editors.editors[editors.current].hex_edit.draw(&mut window);//.update(&mut window, UpdateDescription::All); // TODO: Handle this result
+                        editors.editors[editors.current].hex_edit.update(&mut window, UpdateDescription::All); // TODO: Handle this result
+                        let fname = editors.editors[editors.current].hex_edit.filename();
+                        alert(fname, AlertType::Info, &mut window, &mut line_entry, &mut editors.editors[editors.current].hex_edit);
                     }
                     Some(Input::Character(c)) => {
                         current_keystroke.push(c);
                         if matches!(c, 'g' | 'G' | 'f' | 'F' | 'd' | 'y' | 'p' | 'P' | 'u' | 'U' | 'n' | 'N' | 's' | 'm' | 'M') {
                             let result = execute_keystroke(&mut editors, &mut macro_manager, current_keystroke);
                             let hm = &mut editors.editors[editors.current];
-                            if let Some(err) = result.error {
-                                alert(err, &mut window, &mut line_entry, &mut hm.hex_edit);
+                            if let Some(err) = result.alert {
+                                alert(err, result.alert_type.clone(), &mut window, &mut line_entry, &mut hm.hex_edit);
                             }
                             if let Some(action) = result.action {
                                 hm.action_stack.add(action);
                             }
                             let result = hm.hex_edit.update(&mut window, result.update);
                             if let Err(err) = result {
-                                alert(err.to_string(), &mut window, &mut line_entry, &mut hm.hex_edit);
+                                alert(err.to_string(), AlertType::Error, &mut window, &mut line_entry, &mut hm.hex_edit);
                             }
                             current_keystroke = Vec::<char>::new();
                         }
@@ -1018,19 +1045,19 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                     Some(ch) if matches!(ch, Input::KeyRight | Input::KeyLeft | Input::KeyUp | Input::KeyDown | Input::KeyNPage | Input::KeyPPage | Input::KeyHome | Input::KeyEnd) => {
                         let hm = &mut editors.editors[editors.current];
                         let result = hm.hex_edit.addch(ch);
-                        if let Some(err) = result.error {
-                            alert(err, &mut window, &mut line_entry, &mut hm.hex_edit);
+                        if let Some(err) = result.alert {
+                            alert(err, result.alert_type.clone(), &mut window, &mut line_entry, &mut hm.hex_edit);
                         }
                         if let Some(action) = result.action {
                             hm.action_stack.add(action);
                         }
                         let result = hm.hex_edit.update(&mut window, result.update);
                         if let Err(err) = result {
-                            alert(err.to_string(), &mut window, &mut line_entry, &mut hm.hex_edit);
+                            alert(err.to_string(), AlertType::Error, &mut window, &mut line_entry, &mut hm.hex_edit);
                         }
                     },
                     _ => {
-                        alert("Invalid Keystroke".to_string(), &mut window, &mut line_entry, &mut editors.editors[editors.current].hex_edit)
+                        alert("Invalid Keystroke".to_string(), AlertType::Error, &mut window, &mut line_entry, &mut editors.editors[editors.current].hex_edit)
                     }
                 }
             },
@@ -1066,15 +1093,15 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
 
                         let hm = &mut editors.editors[editors.current];
 
-                        if let Some(err) = result.error {
-                            alert(err, &mut window, &mut line_entry, &mut hm.hex_edit);
+                        if let Some(err) = result.alert {
+                            alert(err, result.alert_type.clone(), &mut window, &mut line_entry, &mut hm.hex_edit);
                         }
                         if let Some(action) = result.action {
                             hm.action_stack.add(action);
                         }
                         let result = hm.hex_edit.update(&mut window, result.update);
                         if let Err(err) = result {
-                            alert(err.to_string(), &mut window, &mut line_entry, &mut hm.hex_edit);
+                            alert(err.to_string(), AlertType::Error, &mut window, &mut line_entry, &mut hm.hex_edit);
                         }
 
                         line_entry.clear();
@@ -1086,6 +1113,7 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                                 hm.hex_edit.refresh_cursor(&mut window);
                             },
                             CommandInstruction::Exit => {
+                                start_color();
                                 endwin();
                                 std::process::exit(0);
                             },
@@ -1097,7 +1125,8 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                             CommandInstruction::Open(filename) => {
                                 if let Ok(i) = editors.push(filename, FileManagerType::ReadOnly, extract) {
                                     editors.current = i;
-                                    editors.editors[editors.current].hex_edit.update(&mut window, UpdateDescription::All);
+                                    editors.editors[editors.current].hex_edit.set_viewport_row(0);
+                                    editors.editors[editors.current].hex_edit.draw(&mut window);//.update(&mut window, UpdateDescription::All);
                                     edit_state = EditState::Escaped;
                                 }
                             }
@@ -1122,15 +1151,15 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                     },
                     Some(ch) => { 
                         let result = hm.hex_edit.addch(ch);
-                        if let Some(err) = result.error {
-                            alert(err, &mut window, &mut line_entry, &mut hm.hex_edit);
+                        if let Some(err) = result.alert {
+                            alert(err, result.alert_type.clone(), &mut window, &mut line_entry, &mut hm.hex_edit);
                         }
                         if let Some(action) = result.action {
                             hm.action_stack.add(action);
                         }
                         let result = hm.hex_edit.update(&mut window, result.update);
                         if let Err(err) = result {
-                            alert(err.to_string(), &mut window, &mut line_entry, &mut hm.hex_edit);
+                            alert(err.to_string(), AlertType::Error, &mut window, &mut line_entry, &mut hm.hex_edit);
                         }
                     },
                     None => ()
@@ -1153,7 +1182,7 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                         manual_view.addch(ch);
                         manual_view.draw(&mut window);
                     },
-                    _ => alert("Invalid Keystroke".to_string(), &mut window, &mut line_entry, &mut editors.editors[editors.current].hex_edit)
+                    _ => alert("Invalid Keystroke".to_string(), AlertType::Error, &mut window, &mut line_entry, &mut editors.editors[editors.current].hex_edit)
                 }
             }
         }

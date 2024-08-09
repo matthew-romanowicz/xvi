@@ -1,5 +1,40 @@
 use pancurses::{Input, Window, chtype, Attributes, start_color, init_pair};
 
+use crate::globals;
+
+#[derive(Clone, PartialEq)]
+pub enum AlertType {
+    None,
+    Info,
+    Warn,
+    Error
+}
+
+impl std::cmp::PartialOrd<AlertType> for AlertType {
+    fn partial_cmp(&self, other: &AlertType) -> Option<std::cmp::Ordering> {
+        Some(match self {
+            AlertType::None => match other {
+                AlertType::None => std::cmp::Ordering::Equal,
+                _ => std::cmp::Ordering::Less
+            },
+            AlertType::Info => match other {
+                AlertType::None => std::cmp::Ordering::Greater,
+                AlertType::Info => std::cmp::Ordering::Equal,
+                _ => std::cmp::Ordering::Less
+            },
+            AlertType::Warn => match other {
+                AlertType::Error => std::cmp::Ordering::Less,
+                AlertType::Warn => std::cmp::Ordering::Equal,
+                _ => std::cmp::Ordering::Greater
+            },
+            AlertType::Error => match other {
+                AlertType::Error => std::cmp::Ordering::Equal,
+                _ => std::cmp::Ordering::Greater
+            },
+        })
+    }
+}
+
 pub struct LineEntry {
     length: usize,
     pos_x: usize,
@@ -13,7 +48,8 @@ pub struct LineEntry {
     autocomplete_range: (usize, usize),
     original_text: Vec<char>,
     alert_text: Vec<char>,
-    alert_active: bool
+    alert_active: bool,
+    alert_type: AlertType
 }
 
 fn get_word_range(text: &Vec<char>, index: usize) -> Option<(usize, usize)> {
@@ -99,7 +135,8 @@ impl LineEntry {
             autocomplete_range: (0, 0),
             original_text: Vec::<char>::new(),
             alert_text: Vec::<char>::new(),
-            alert_active: false
+            alert_active: false,
+            alert_type: AlertType::None
         }
     }
 
@@ -124,9 +161,10 @@ impl LineEntry {
         self.offset = 0;
     }
 
-    pub fn alert(&mut self, text: Vec<char>) {
+    pub fn alert(&mut self, text: Vec<char>, alert_type: AlertType) {
         self.alert_text = text;
         self.alert_active = true;
+        self.alert_type = alert_type;
     }
 
     pub fn unalert(&mut self) {
@@ -299,7 +337,13 @@ impl LineEntry {
         if self.alert_active {
             let mut bold_attr = Attributes::new();
             //bold_attr.set_bold(true);
-            bold_attr.set_color_pair(pancurses::ColorPair(2));
+            let color_pair = match self.alert_type {
+                AlertType::Info => pancurses::ColorPair(globals::INFO_COLOR),
+                AlertType::Warn => pancurses::ColorPair(globals::WARNING_COLOR),
+                AlertType::Error => pancurses::ColorPair(globals::ERROR_COLOR),
+                _ => todo!()
+            };
+            bold_attr.set_color_pair(color_pair);
             let bold_attr = chtype::from(bold_attr);
 
             window.mvaddstr(self.pos_y as i32, self.pos_x as i32, &self.alert_text.iter().collect::<String>());

@@ -6,6 +6,10 @@ use flate2::write::DeflateEncoder;
 use flate2::write::DeflateDecoder;
 use flate2::Compression;
 
+use crate::globals;
+
+use crate::AlertType;
+
 mod file_manager;
 pub use crate::hex_edit::file_manager::{FileManagerType, FileManager};
 
@@ -584,7 +588,8 @@ impl Action for CompoundAction {
             }
         }
         ActionResult {
-            error: None,
+            alert: None,
+            alert_type: AlertType::None,
             update: UpdateDescription::All, // TODO make this more specific
             action: Some(Rc::new(CompoundAction{actions: res}))
         }
@@ -709,7 +714,8 @@ fn combine_update(u1: &UpdateDescription, u2: &UpdateDescription) -> UpdateDescr
 }
 
 pub struct ActionResult {
-    pub error: Option<String>,
+    pub alert: Option<String>,
+    pub alert_type: AlertType,
     pub update: UpdateDescription,
     pub action: Option<Rc<dyn Action>>
 }
@@ -718,7 +724,8 @@ impl ActionResult {
 
     pub fn empty() -> ActionResult {
         ActionResult {
-            error: None,
+            alert: None,
+            alert_type: AlertType::None,
             update: UpdateDescription::NoUpdate,
             action: None
         }
@@ -726,7 +733,26 @@ impl ActionResult {
 
     pub fn error(s: String) -> ActionResult {
         ActionResult {
-            error: Some(s),
+            alert: Some(s),
+            alert_type: AlertType::Error,
+            update: UpdateDescription::NoUpdate,
+            action: None
+        }
+    }
+
+    pub fn warn(s: String) -> ActionResult {
+        ActionResult {
+            alert: Some(s),
+            alert_type: AlertType::Warn,
+            update: UpdateDescription::NoUpdate,
+            action: None
+        }
+    }
+
+    pub fn info(s: String) -> ActionResult {
+        ActionResult {
+            alert: Some(s),
+            alert_type: AlertType::Info,
             update: UpdateDescription::NoUpdate,
             action: None
         }
@@ -734,14 +760,23 @@ impl ActionResult {
 
     pub fn no_error(update: UpdateDescription) -> ActionResult {
         ActionResult {
-            error: None,
+            alert: None,
+            alert_type: AlertType::None,
             update,
             action: None
         }
     }
 
     pub fn set_error(&mut self, s: String) {
-        self.error = Some(s);
+        self.alert = Some(s);
+        self.alert_type = AlertType::Error;
+    }
+
+    pub fn set_info(&mut self, s: String) {
+        if self.alert_type < AlertType::Info {
+            self.alert_type = AlertType::Info;
+            self.alert = Some(s);
+        }
     }
 
     pub fn set_action(&mut self, action: Option<Rc<dyn Action>>) {
@@ -755,8 +790,21 @@ impl ActionResult {
             (None, Some(a)) => Some(Rc::clone(&a)),
             (Some(a), Some(b)) => Some(Rc::new(CompoundAction { actions: vec![Rc::clone(&a), Rc::clone(&b)]}))
         };
+        let (alert, alert_type): (Option<String>, AlertType) = if self.alert_type > other.alert_type {
+            (self.alert.clone(), self.alert_type.clone())
+        } else {
+            (other.alert.clone(), other.alert_type.clone())
+        };
         ActionResult {
-            error: match &self.error {None => match &other.error {None => None, Some(msg) => Some(msg.to_string())}, Some(msg) => Some(msg.to_string())},
+            // alert: match &self.alert {
+            //     None => match &other.alert {
+            //         None => None, 
+            //         Some(msg) => Some(msg.to_string())
+            //     }, 
+            //     Some(msg) => Some(msg.to_string())
+            // },
+            alert,
+            alert_type,
             update: combine_update(&self.update, &other.update),
             action: match action {None => None, Some(a) => Some(a)}
         }
@@ -879,6 +927,10 @@ impl<'a> HexEdit<'a> {
         self.file_manager.is_modified()
     }
 
+    pub fn filename(&self) -> String {
+        self.file_manager.filename.clone()
+    }
+
     pub fn save(&mut self) -> ActionResult {
         match self.file_manager.save() {
             Ok(()) => ActionResult::empty(),
@@ -920,6 +972,11 @@ impl<'a> HexEdit<'a> {
 
     pub fn set_show_lnum(&mut self, show_lnum: ShowType) -> ActionResult {
         self.show_lnum = show_lnum;
+        ActionResult::no_error(UpdateDescription::All)
+    }
+
+    pub fn set_show_filename(&mut self, show_filename: bool) -> ActionResult {
+        self.show_filename = show_filename;
         ActionResult::no_error(UpdateDescription::All)
     }
 
@@ -968,32 +1025,40 @@ impl<'a> HexEdit<'a> {
     }
 
     pub fn seek_next(&mut self) -> ActionResult {
-        for h in self.highlights.iter() {
+        let num_highlights = self.highlights.len();
+
+        for (i, h) in self.highlights.iter().enumerate() {
             if h.start > self.cursor_pos {
-                return self.set_cursor_pos(h.start); // TODO add action to this
+                let info_result = ActionResult::info(format!("Result {} of {}", i + 1, num_highlights));
+                let res = self.set_cursor_pos(h.start); // TODO add action to this
+                return info_result.combine(res)
             }
         }
 
-        if self.highlights.len() > 0{
-            let mut res = self.set_cursor_pos(self.highlights[0].start);
-            res.set_error("Wrapped around to SOF".to_string()); // TODO add action to this
-            res
+        if num_highlights > 0 {
+            let warn_result = ActionResult::warn(format!("Wrapped to result {} of {}", 1, num_highlights));
+            let mut res = self.set_cursor_pos(self.highlights[0].start); // TODO add action to this
+            warn_result.combine(res)
         } else {
             ActionResult::error("No results".to_string())
         }
     }
 
     pub fn seek_prev(&mut self) -> ActionResult {
-        for h in self.highlights.iter().rev() {
+        let num_highlights = self.highlights.len();
+
+        for (i, h) in self.highlights.iter().enumerate().rev() {
             if h.start < self.cursor_pos {
-                return self.set_cursor_pos(h.start); // TODO add action to this
+                let info_result = ActionResult::info(format!("Result {} of {}", i + 1, num_highlights));
+                let res = self.set_cursor_pos(h.start); // TODO add action to this
+                return info_result.combine(res)
             }
         }
 
-        if self.highlights.len() > 0{
+        if num_highlights > 0 {
+            let warn_result = ActionResult::warn(format!("Wrapped to result {} of {}", num_highlights, num_highlights));
             let mut res = self.set_cursor_pos(self.highlights[self.highlights.len() - 1].start); // TODO add action to this
-            res.set_error("Wrapped around to EOF".to_string());
-            res
+            warn_result.combine(res)
         } else {
             ActionResult::error("No results".to_string())
         }
@@ -1012,7 +1077,8 @@ impl<'a> HexEdit<'a> {
         
             match self.file_manager.truncate(size) {
                 Ok(_) => ActionResult {
-                    error: None,
+                    alert: None,
+                    alert_type: AlertType::None,
                     update: UpdateDescription::After(size),
                     action: Some(Rc::new(TruncateAction::new(size, buffer)))
                 },
@@ -1051,7 +1117,8 @@ impl<'a> HexEdit<'a> {
             }
         }
         ActionResult {
-            error: None,
+            alert: None,
+            alert_type: AlertType::None,
             update: UpdateDescription::NoUpdate,
             action: Some(Rc::new(ConcatenateRegisterAction::new(register, fill)))
         }
@@ -1063,7 +1130,8 @@ impl<'a> HexEdit<'a> {
         }
         self.clipboard_registers[register as usize].reverse();
         ActionResult {
-            error: None,
+            alert: None,
+            alert_type: AlertType::None,
             update: UpdateDescription::NoUpdate,
             action: Some(Rc::new(SwapRegisterAction::new(register)))
         }
@@ -1076,7 +1144,8 @@ impl<'a> HexEdit<'a> {
         let new = self.clipboard_registers[register as usize].iter().map(|x| !x).collect();
         self.clipboard_registers[register as usize] = new;
         ActionResult {
-            error: None,
+            alert: None,
+            alert_type: AlertType::None,
             update: UpdateDescription::NoUpdate,
             action: Some(Rc::new(InvertRegisterAction::new(register)))
         }
@@ -1095,7 +1164,8 @@ impl<'a> HexEdit<'a> {
                 Ok(w) => {
                     self.clipboard_registers[register as usize] = w;
                     ActionResult {
-                        error: None,
+                        alert: None,
+                        alert_type: AlertType::None,
                         update: UpdateDescription::NoUpdate,
                         action: Some(Rc::new(DeflateRegisterAction::new(register, level)))
                     }
@@ -1147,7 +1217,8 @@ impl<'a> HexEdit<'a> {
             ByteOperation::Xnor => vector_op(&mut self.clipboard_registers[register as usize], &op_bytes, |a, b| !(a ^ b))
         };
         ActionResult {
-            error: None,
+            alert: None,
+            alert_type: AlertType::None,
             update: UpdateDescription::NoUpdate,
             action: Some(Rc::new(RegisterOpAction::new(register, fill, original_bytes, op)))
         }
@@ -1159,7 +1230,8 @@ impl<'a> HexEdit<'a> {
         }
         match shift_vector(&mut self.clipboard_registers[register as usize], shift) {
             Ok(_) =>  ActionResult {
-                error: None,
+                alert: None,
+                alert_type: AlertType::None,
                 update: UpdateDescription::NoUpdate,
                 action: Some(Rc::new(ShiftRegisterAction::new(register, shift)))
             },
@@ -1183,7 +1255,8 @@ impl<'a> HexEdit<'a> {
             let right = self.clipboard_registers[register as usize][n2..].to_vec();
             self.clipboard_registers[register as usize] = temp.to_vec();
             ActionResult {
-                error: None,
+                alert: None,
+                alert_type: AlertType::None,
                 update: UpdateDescription::NoUpdate,
                 action: Some(Rc::new(SliceRegisterAction::new(register, left, right)))
             }
@@ -1208,7 +1281,8 @@ impl<'a> HexEdit<'a> {
             Ok(_) => {
                 let seek_res = self.seek(SeekFrom::Current(bytes.len() as i64));
                 ActionResult {
-                    error: None,
+                    alert: None,
+                    alert_type: AlertType::None,
                     update: combine_update(&UpdateDescription::After(start_byte), &seek_res.update),
                     action: Some(Rc::new(InsertAction::new(data, file_end)))
                 }
@@ -1239,7 +1313,8 @@ impl<'a> HexEdit<'a> {
             Ok(_) => {
                 let seek_res = self.seek(SeekFrom::Current(bytes.len() as i64));
                 ActionResult {
-                    error: None,
+                    alert: None,
+                    alert_type: AlertType::None,
                     update: combine_update(&UpdateDescription::Range(start_byte, self.cursor_pos + bytes.len()), &seek_res.update),
                     action: Some(Rc::new(OverwriteAction::new(data, original_bytes, file_end)))
                 }
@@ -1261,7 +1336,8 @@ impl<'a> HexEdit<'a> {
             let original_bytes = self.clipboard_registers[register as usize].to_vec();
             self.clipboard_registers[register as usize] = bytes.to_vec();
             ActionResult {
-                error: None,
+                alert: None,
+                alert_type: AlertType::None,
                 update: UpdateDescription::NoUpdate,
                 action: Some(Rc::new(SetRegisterAction::new(register, bytes.to_vec(), original_bytes)))
             }
@@ -1280,7 +1356,8 @@ impl<'a> HexEdit<'a> {
                         let original_bytes = self.clipboard_registers[register as usize].to_vec();
                         self.clipboard_registers[register as usize] = buffer;
                         ActionResult {
-                            error: None,
+                            alert: None,
+                            alert_type: AlertType::None,
                             update: UpdateDescription::NoUpdate,
                             action: Some(Rc::new(YankAction::new(register, n_bytes, original_bytes)))
                         }
@@ -1306,7 +1383,8 @@ impl<'a> HexEdit<'a> {
             }
             match self.file_manager.delete_bytes(index, n_bytes) {
                 Ok(_) => ActionResult {
-                    error: None,
+                    alert: None,
+                    alert_type: AlertType::None,
                     update: UpdateDescription::After(index),
                     action: Some(Rc::new(DeleteAction::new(original_bytes)))
                 },
@@ -1326,7 +1404,8 @@ impl<'a> HexEdit<'a> {
                     data.reverse();
                     match self.file_manager.overwrite_bytes(index, &data) {
                         Ok(_) => ActionResult {
-                            error: None,
+                            alert: None,
+                            alert_type: AlertType::None,
                             update: UpdateDescription::Range(index, index + n_bytes), // TODO: add action here
                             action: Some(Rc::new(SwapAction::new(n_bytes)))
                         },
@@ -1630,7 +1709,7 @@ impl<'a> HexEdit<'a> {
 
         let mut underline_attr = Attributes::new();
         //underline_attr.set_underline(true);
-        underline_attr.set_color_pair(pancurses::ColorPair(4));
+        underline_attr.set_color_pair(pancurses::ColorPair(globals::CURSOR_COLOR));
         let underline_attr = chtype::from(underline_attr);
 
         match self.edit_mode {
@@ -1840,7 +1919,10 @@ impl<'a> HexEdit<'a> {
 
     fn refresh_filename(&self, window: &mut Window) {
         if self.show_filename {
-            window.mvaddstr(0, 0, &self.file_manager.filename);
+            let fname_len = self.file_manager.filename.len();
+            //let filename = self.file_manager.filename.clone().push_str(" ".repeat(self.width - fname_len));
+            let filename = format!("{:0width$}", self.file_manager.filename, width=self.width);
+            window.mvaddstr(0, 0, &filename);
         }
     }
 
@@ -1853,7 +1935,7 @@ impl<'a> HexEdit<'a> {
         // TODO: clean this up!!!
         let mut rv_attr = Attributes::new();
         //rv_attr.set_reverse(true);
-        rv_attr.set_color_pair(pancurses::ColorPair(3));
+        rv_attr.set_color_pair(pancurses::ColorPair(globals::HIGHLIGHT_COLOR));
         let rv_attr = chtype::from(rv_attr);
 
         let start: usize = self.start_line * (self.line_length as usize);
@@ -1961,12 +2043,12 @@ impl<'a> HexEdit<'a> {
 
         let mut eof_attr = Attributes::new();
         //rv_attr.set_reverse(true);
-        eof_attr.set_color_pair(pancurses::ColorPair(5));
+        eof_attr.set_color_pair(pancurses::ColorPair(globals::EOF_COLOR));
         let eof_attr = chtype::from(eof_attr);
 
         let mut invalid_ascii_attr = Attributes::new();
         //rv_attr.set_reverse(true);
-        invalid_ascii_attr.set_color_pair(pancurses::ColorPair(6));
+        invalid_ascii_attr.set_color_pair(pancurses::ColorPair(globals::BAD_ASCII_COLOR));
         let invalid_ascii_attr = chtype::from(invalid_ascii_attr);
 
         let start = 0; //TODO: GET RID OF THIS!!!
