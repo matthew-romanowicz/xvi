@@ -17,7 +17,7 @@ options:
 -x      Extract file as gzip for editing (cannot be used with -l)", VERSION);
 
     let mut extract: bool = false;
-    let mut file_manager_type: FileManagerType = FileManagerType::RamOnly;
+    let mut file_manager_type: FileManagerType = FileManagerType::LiveEdit;
     let mut path = "".to_string();
 
     let mut args = env::args();
@@ -56,7 +56,7 @@ options:
     }
 
 
-    match run(r"C:\Users\Matthew\Documents\Python\Examples\7997_75m.dem".to_string(), file_manager_type, extract) {
+    match run(r"C:\Users\Matthew\Documents\Rust\xvi\test_file.bin".to_string(), file_manager_type, extract) {
         Ok(_) => {
             std::process::exit(0);
         },

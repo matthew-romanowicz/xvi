@@ -253,7 +253,8 @@ enum CommandInstruction {
     NoOp,
     Exit,
     ChangeState(EditState),
-    Open(String)
+    Open(String),
+    Refresh
 }
 
 fn execute_command(editor_stack: &mut EditorStack, command: Vec<char>) -> (CommandInstruction, ActionResult) {
@@ -294,6 +295,9 @@ fn execute_command(editor_stack: &mut EditorStack, command: Vec<char>) -> (Comma
                         CommandToken::Keyword(CommandKeyword::Manual) => {
                             (CommandInstruction::ChangeState(EditState::Manual), ActionResult::empty())
                         },
+                        CommandToken::Keyword(CommandKeyword::Refresh) => {
+                            (CommandInstruction::Refresh, ActionResult::empty())
+                        }
                         _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
                     }
                 }
@@ -923,14 +927,7 @@ fn alert(text: String, alert_type: AlertType, window: &mut Window, line_entry: &
     hex_edit.refresh_cursor(window);
 }
 
-pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) -> std::io::Result<()> {
-
-    let mut edit_state = EditState::Escaped;
-    let mut window = initscr();
-    window.refresh();
-    window.keypad(true);
-    noecho();
-
+pub fn init_colors() {
     start_color();
     println!("Colors: {} Color Pairs: {}", COLORS(), COLOR_PAIRS());
     // init_color(globals::LIGHT_RED, 500, 0, 0);
@@ -943,6 +940,17 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
     init_pair(globals::BAD_ASCII_COLOR as i16, globals::BRIGHT_RED, pancurses::COLOR_BLACK);
     init_pair(globals::EOF_COLOR as i16, globals::BRIGHT_BLACK, pancurses::COLOR_BLACK);
     init_pair(globals::INFO_COLOR as i16, pancurses::COLOR_CYAN, pancurses::COLOR_BLACK);
+}
+
+pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) -> std::io::Result<()> {
+
+    let mut edit_state = EditState::Escaped;
+    let mut window = initscr();
+    window.refresh();
+    window.keypad(true);
+    noecho();
+
+    init_colors();
 
 
     let mut current_keystroke = Vec::<char>::new();
@@ -1113,7 +1121,6 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                                 hm.hex_edit.refresh_cursor(&mut window);
                             },
                             CommandInstruction::Exit => {
-                                start_color();
                                 endwin();
                                 std::process::exit(0);
                             },
@@ -1129,6 +1136,21 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                                     editors.editors[editors.current].hex_edit.draw(&mut window);//.update(&mut window, UpdateDescription::All);
                                     edit_state = EditState::Escaped;
                                 }
+                            },
+                            CommandInstruction::Refresh => {
+                                ///resize_term(0, 0);
+                                endwin();
+                                window = initscr();
+                                window.refresh();
+                                window.keypad(true);
+                                noecho();
+                                init_colors();
+                                //window.refresh();
+                                editors.resize(window.get_max_x() as usize - 1, window.get_max_y()as usize - 1);
+                                //panic!("{} {}", window.get_max_x(), window.get_max_y());
+                                line_entry.reset_geometry(window.get_max_x() as usize - 2 - cursor_index_len, 0, window.get_max_y() as usize - 1);
+                                line_entry.draw(&mut window);
+                                editors.editors[editors.current].hex_edit.update(&mut window, UpdateDescription::All); // TODO: Handle this result
                             }
                             _ => () // This should never be hit
                         }

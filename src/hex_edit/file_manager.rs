@@ -27,6 +27,7 @@ pub struct FileManager<'a> {
     metadata: std::fs::Metadata,
     modified: bool,
     block_size: usize, // Not used for FileManagerType::RamOnly
+    max_match_length: usize, // Not used for FileManagerType::RamOnly
     swap_handle: Option<File>, // Only used for FileManagerType::SwapFile
     swap_metadata: Option<&'a std::fs::Metadata>, // Only used for FileManagerType::SwapFile
     file_buffer: Vec<u8>, // Only used for FileManagerType::RamOnly
@@ -40,6 +41,8 @@ fn get_bytes_from_handle(handle: &mut File, index: usize, buffer: &mut Vec<u8>) 
             Ok(_) => Ok(buffer.len()),
             Err(msg) => Err(msg)
         }
+    } else if file_length <= index {
+        Ok(0)
     } else {
         let mut mini_buffer: Vec<u8> = vec![0; file_length - index];
         handle.read_exact(&mut mini_buffer)?;
@@ -51,7 +54,7 @@ fn get_bytes_from_handle(handle: &mut File, index: usize, buffer: &mut Vec<u8>) 
 }
 
 fn truncate_from_handle(handle: &mut File, size: usize) -> std::io::Result<()> {
-    todo!()
+    handle.set_len(size as u64)
 }
 
 fn offset_bytes_from_handle(handle: &mut File, index: usize, n_bytes: u64, block_size: usize) -> std::io::Result<()> {
@@ -184,6 +187,7 @@ impl FileManager<'_> {
             metadata,
             modified: false,
             block_size: 65535,
+            max_match_length: 65535,
             swap_handle: swap_handle,
             swap_metadata: None,
             file_buffer
@@ -524,7 +528,7 @@ impl FileManager<'_> {
         }        
     }
 
-    pub fn find(&self, expr: &Vec<u8>, ignore_case: bool, use_regex: bool) -> Vec<FindResult>{
+    pub fn find(&mut self, expr: &Vec<u8>, ignore_case: bool, use_regex: bool) -> Vec<FindResult>{
         let mut result = Vec::<FindResult>::new();
         match self.file_manager_type {
             FileManagerType::RamOnly => {
@@ -551,12 +555,79 @@ impl FileManager<'_> {
                         }
                     }
                 }
-            }
-            FileManagerType::SwapFile => {
-                todo!()
             },
-            FileManagerType::LiveEdit | FileManagerType::ReadOnly => {
-                todo!()
+            FileManagerType::SwapFile | FileManagerType::LiveEdit | FileManagerType::ReadOnly => {
+                // This works by iterating through blocks twize the size of the maximum match size with an interval
+                // of the maximum match size. This means that each byte appears in two blocks and that every group of
+                // n contiguous bytes appears contiguously in at least one block, where n is the maximum match size.
+                // If the last match in one block extends into the start of the would-be next block, the next block will
+                // start at the end of that match instead to save some efficiency and ensure matches aren't duplicated.
+                //
+                // For non-regex matches, the max match size used is just the length of the expression, since every match
+                // will be that length.
+                if use_regex {
+                    let re = RegexBuilder::new(std::str::from_utf8(expr).unwrap()).case_insensitive(ignore_case).build().unwrap();
+                    let mut block_buffer = vec![0; self.max_match_length * 2];
+                    let mut index = 0;
+                    let mut last_block = false;
+                    while !last_block {
+                        
+                        let n = self.get_bytes(index, &mut block_buffer).unwrap();
+                        if n < block_buffer.len() {
+                            block_buffer.truncate(n);
+                            last_block = true;
+                        } 
+
+                        let mut next_index = index + self.max_match_length;
+
+                        for cap in re.captures_iter(&block_buffer) {
+                            if let Some(m) = cap.get(0) {
+                                result.push(FindResult {start: index + m.start(), span: m.len()});
+                                if index + m.end() > next_index {
+                                    next_index = index + m.end();
+                                }
+                            }
+                        }
+
+                        index = next_index;
+                        
+                    }
+                } else {
+                    let slice = match ignore_case {
+                        true => expr.as_slice().to_ascii_lowercase(),
+                        false => expr.to_vec()
+                    };
+
+                    let mut block_buffer = vec![0; slice.len() * 2];
+                    let mut index = 0;
+                    let mut last_block = false;
+                    while !last_block {
+                        
+                        let n = self.get_bytes(index, &mut block_buffer).unwrap();
+                        if n < block_buffer.len() {
+                            block_buffer.truncate(n);
+                            last_block = true;
+                        } 
+
+                        let mut next_index = index + self.max_match_length;
+
+                        if ignore_case {
+                            block_buffer = block_buffer.to_ascii_lowercase();
+                        }
+
+                        for (i, w) in block_buffer.windows(expr.len()).enumerate() {
+                            if w == slice {
+                                result.push(FindResult {start: index + i, span: expr.len()});
+                                if index + i + expr.len() > next_index {
+                                    next_index = index + i + expr.len();
+                                }
+                            }
+                        }
+
+                        index = next_index;
+                        
+                    }
+                }
             }
         } 
         

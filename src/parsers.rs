@@ -55,7 +55,8 @@ pub enum CommandKeyword {
     Nor,
     Xor,
     Xnor,
-    Manual
+    Manual,
+    Refresh
 }
 
 fn parse_command_keyword(word: &Vec<char>) -> Option<CommandKeyword> {
@@ -118,6 +119,7 @@ fn parse_command_keyword(word: &Vec<char>) -> Option<CommandKeyword> {
         "xor" => Some(CommandKeyword::Xor),
         "xnor" => Some(CommandKeyword::Xnor),
         "man" => Some(CommandKeyword::Manual),
+        "refresh" => Some(CommandKeyword::Refresh),
         _ => None
     }
 }
