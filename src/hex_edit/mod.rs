@@ -13,6 +13,9 @@ use crate::AlertType;
 mod file_manager;
 pub use crate::hex_edit::file_manager::{FileManagerType, FileManager};
 
+mod file_specs;
+use crate::hex_edit::file_specs::{FileSpec, BinaryField, PngFileSpec};
+
 extern crate pancurses;
 use pancurses::{Input, Window, Attributes, chtype, start_color, init_pair};
 
@@ -849,7 +852,9 @@ pub struct HexEdit<'a> {
     highlights: Vec::<Highlight>,
     display_data: Vec::<u8>,
     valid_bytes: usize,
-    clipboard_registers: [Vec::<u8>; 32],//Needs to be 32 or less for Default::default() to work
+    clipboard_registers: [Vec::<u8>; 32], //Needs to be 32 or less for Default::default() to work
+    file_spec: Option<Box<dyn FileSpec>>,
+    current_field: Option<BinaryField>
 }
 
 pub fn shift_vector(buffer: &mut Vec<u8>, shift: i8) -> Result<(), String> { // TODO: 8 and -8 cause panic
@@ -890,8 +895,10 @@ pub fn vector_op<F>(buffer1: &mut Vec<u8>, buffer2: &Vec<u8>, op: F) where F: Fn
 
 impl<'a> HexEdit<'a> {
 
-    pub fn new(file_manager: FileManager, x: usize, y: usize, width: usize, height: usize, line_length: u8, show_filename: bool, 
+    pub fn new(mut file_manager: FileManager, x: usize, y: usize, width: usize, height: usize, line_length: u8, show_filename: bool, 
                 show_hex: bool, show_ascii: bool, invalid_ascii_char: char, separator: String, capitalize_hex: bool) -> HexEdit {
+
+        let fs = PngFileSpec::new(&mut file_manager);
 
         HexEdit {
             file_manager,
@@ -919,7 +926,9 @@ impl<'a> HexEdit<'a> {
             highlights: vec![],
             display_data: Vec::<u8>::new(),
             valid_bytes: 0,
-            clipboard_registers: Default::default()
+            clipboard_registers: Default::default(),
+            file_spec: Some(Box::new(fs)),
+            current_field: None
         }
     }
 
@@ -1030,14 +1039,14 @@ impl<'a> HexEdit<'a> {
         for (i, h) in self.highlights.iter().enumerate() {
             if h.start > self.cursor_pos {
                 let info_result = ActionResult::info(format!("Result {} of {}", i + 1, num_highlights));
-                let res = self.set_cursor_pos(h.start); // TODO add action to this
+                let res = self.set_cursor_pos(h.start); // TODO make this action actually perform a find when redone
                 return info_result.combine(res)
             }
         }
 
         if num_highlights > 0 {
             let warn_result = ActionResult::warn(format!("Wrapped to result {} of {}", 1, num_highlights));
-            let mut res = self.set_cursor_pos(self.highlights[0].start); // TODO add action to this
+            let mut res = self.set_cursor_pos(self.highlights[0].start); // TODO make this action actually perform a find when redone
             warn_result.combine(res)
         } else {
             ActionResult::error("No results".to_string())
@@ -1050,14 +1059,14 @@ impl<'a> HexEdit<'a> {
         for (i, h) in self.highlights.iter().enumerate().rev() {
             if h.start < self.cursor_pos {
                 let info_result = ActionResult::info(format!("Result {} of {}", i + 1, num_highlights));
-                let res = self.set_cursor_pos(h.start); // TODO add action to this
+                let res = self.set_cursor_pos(h.start); // TODO make this action actually perform a find when redone
                 return info_result.combine(res)
             }
         }
 
         if num_highlights > 0 {
             let warn_result = ActionResult::warn(format!("Wrapped to result {} of {}", num_highlights, num_highlights));
-            let mut res = self.set_cursor_pos(self.highlights[self.highlights.len() - 1].start); // TODO add action to this
+            let mut res = self.set_cursor_pos(self.highlights[self.highlights.len() - 1].start); // TODO make this action actually perform a find when redone
             warn_result.combine(res)
         } else {
             ActionResult::error("No results".to_string())
@@ -1620,10 +1629,11 @@ impl<'a> HexEdit<'a> {
 
     pub fn set_cursor_pos(&mut self, index: usize) -> ActionResult {
         let line = index / (self.line_length as usize);
+        let action = SeekAction::new(self.cursor_pos, SeekFrom::Start(index as u64));
         self.cursor_pos = index;
 
         //println!("line={} start_line={} content_height={} height={}", line, self.start_line, self.content_height(), self.height);
-        if line < self.start_line {
+        let mut res = if line < self.start_line {
             match self.set_viewport_row(line){
                 Ok(_) => ActionResult::no_error(UpdateDescription::All), // TODO: add action here
                 Err(msg) => ActionResult::error(msg.to_string())
@@ -1631,12 +1641,31 @@ impl<'a> HexEdit<'a> {
         } else if line >= self.start_line as usize + self.content_height() {
             //println!("Going down: {} {}", self.start_line, line - self.content_height() + 1);
             match self.set_viewport_row(line - self.content_height() + 1) {
-                Ok(_) => ActionResult::no_error(UpdateDescription::All), // TODO: add action here
+                Ok(_) => ActionResult::no_error(UpdateDescription::All),
                 Err(msg) => ActionResult::error(msg.to_string())
             }
         } else {
             ActionResult::no_error(UpdateDescription::AttrsOnly)
+        };
+
+        res.set_action(Some(Rc::new(action)));
+
+        if let Some(ref mut fs) = &mut self.file_spec {
+            self.current_field = fs.field_at(self.cursor_pos, &mut self.file_manager);
+            match &self.current_field {
+                Some(field) => {
+                    let field_info = match &field.value {
+                        Some(s) => format!("{}: {}", field.name, s).to_string(),
+                        None => field.name.clone()
+                    };
+                    res.set_info(field_info)
+                },
+                _ => {}
+            }
         }
+        
+
+        res
     }
 
     fn advance_cursor(&mut self) -> ActionResult {
@@ -1938,6 +1967,8 @@ impl<'a> HexEdit<'a> {
         rv_attr.set_color_pair(pancurses::ColorPair(globals::HIGHLIGHT_COLOR));
         let rv_attr = chtype::from(rv_attr);
 
+        
+
         let start: usize = self.start_line * (self.line_length as usize);
         let end: usize = start + self.content_height() * (self.line_length as usize);
 
@@ -1945,6 +1976,41 @@ impl<'a> HexEdit<'a> {
         let ascii_offset = self.line_label_len() + self.separator.len() * 2 + (self.line_length as usize) * 3 - 1;
 
         let top_margin = self.top_margin() as i32;
+
+        // TODO: Merge this processing with the below processing
+
+        let mut field_attr = Attributes::new();
+        //rv_attr.set_reverse(true);
+        field_attr.set_color_pair(pancurses::ColorPair(globals::CURRENT_FIELD_COLOR));
+        let field_attr = chtype::from(field_attr);
+
+        if let Some(h) = &self.current_field {
+            if h.start + h.span > start && h.start < end { // If the highlight is in the viewport
+                let first_line = (h.start / (self.line_length as usize)) as isize - (self.start_line as isize);
+                let last_line = ((h.start + h.span) / (self.line_length as usize)) as isize - (self.start_line as isize);
+                // if (h.start + h.span) % (self.line_length as usize) == 0 {
+                //     last_line -= 1;
+                // }
+                //println!("In view: {}, {}", first_line, last_line);
+                for y in std::cmp::max(first_line, 0)..std::cmp::min(last_line, self.content_height() as isize - 1) + 1 {
+                    let mut x1 = 0;
+                    let mut x2 = self.line_length as usize;
+                    if y == first_line {
+                        x1 = h.start % (self.line_length as usize);
+                    }
+                    if y == last_line {
+                        x2 = (h.start + h.span) % (self.line_length as usize);
+                    }
+                    // println!("y={}, x1={}, x2={}, h.start={}, h.span={}, line_length={}", y, x1, x2, h.start, h.span, self.line_length);
+                    if x1 != x2 {
+                        window.mvchgat(top_margin + y as i32, (x1*3 + hex_offset) as i32, ((x2 - x1)*3 - 1) as i32, field_attr, 0);
+                        //window.mvchgat(top_margin + y as i32, (x1 + ascii_offset) as i32, (x2 - x1) as i32, field_attr, 0);
+                    }
+                }
+            }
+        }
+
+        // This is the below processing
 
         for h in self.highlights.iter() {
             //println!("{}, {}", h.start, h.span);
