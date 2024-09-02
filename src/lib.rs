@@ -940,7 +940,7 @@ pub fn init_colors() {
     init_pair(globals::BAD_ASCII_COLOR as i16, globals::BRIGHT_RED, pancurses::COLOR_BLACK);
     init_pair(globals::EOF_COLOR as i16, globals::BRIGHT_BLACK, pancurses::COLOR_BLACK);
     init_pair(globals::INFO_COLOR as i16, pancurses::COLOR_CYAN, pancurses::COLOR_BLACK);
-    init_pair(globals::CURRENT_FIELD_COLOR as i16, pancurses::COLOR_CYAN, pancurses::COLOR_BLACK);
+    init_pair(globals::CURRENT_FIELD_COLOR as i16, pancurses::COLOR_BLACK, pancurses::COLOR_CYAN);
 }
 
 pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) -> std::io::Result<()> {

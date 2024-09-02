@@ -7,4 +7,9 @@ edition = "2021"
 
 [dependencies]
 flate2 = "1.0.17"
-pancurses = "0.17"
+half = "2.2.1"
+regex = "1.8.1"
+lazy_static = "1.5.0"
+bisection = "0.1.0"
+xmlparser = "0.13.1"
+pancurses = {version="0.17", features = ["win32"]}
