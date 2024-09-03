@@ -1,4 +1,5 @@
 use std::str::FromStr;
+use std::str::CharIndices;
 
 pub struct BinaryField {
     pub name: String,
@@ -241,6 +242,31 @@ impl std::ops::Neg for Sign {
     }
 }
 
+#[derive(Clone, Debug)]
+struct ParseBitPositionError {
+    details: String
+}
+
+impl ParseBitPositionError {
+    fn new(details: String) -> ParseBitPositionError {
+        ParseBitPositionError {details}
+    }
+}
+
+impl std::fmt::Display for ParseBitPositionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.details)
+    }    
+}
+
+impl From<std::num::ParseIntError> for ParseBitPositionError {
+    fn from(err: std::num::ParseIntError) -> Self {
+        ParseBitPositionError {
+            details: format!("Error parsing integer: {}", err).to_string()
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct BitPosition {
     sign: Sign,
@@ -285,6 +311,48 @@ impl BitPosition {
             BitPosition::new((total_bits / 8) as u64, (total_bits % 8) as u8)
         }
 
+    }
+}
+
+
+
+impl FromStr for BitPosition {
+    type Err = ParseBitPositionError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let bp_re = regex::Regex::new(r"^(?<sign>[\+\-])?((?<byte>[0-9]+)B)?((?<bit>[0-9]+)b)?$").unwrap();
+        if let Some(caps) = bp_re.captures(s) {
+            let mut valid = false;
+            let mut byte = match caps.name("byte") {
+                Some(m) => {
+                    valid = true;
+                    u64::from_str(m.as_str())?
+                },
+                None => 0
+            };
+            let bit = match caps.name("bit") {
+                Some(m) => {
+                    valid = true;
+                    u64::from_str(m.as_str())?
+                },
+                None => 0
+            };
+            if !valid {
+                ParseBitPositionError::new("Value must be supplied for byte or bit".to_string());
+            }
+            let sign = match caps.name("sign") {
+                Some(m) => match m.as_str() {
+                    "+" => Sign::Positive,
+                    "-" => Sign::Negative,
+                    _ => unreachable!()
+                },
+                None => Sign::Positive
+            };
+            byte += bit >> 3;
+            let bit = (bit & 0b111) as u8;
+            Ok(BitPosition{sign, byte, bit})
+        } else {
+            Err(ParseBitPositionError::new(format!("Invalid format for bit position: '{}'", s).to_string()))
+        }
     }
 }
 
@@ -418,6 +486,18 @@ impl<'a, 'b> std::ops::Sub<&'a BitPosition> for &'b BitPosition {
 #[cfg(test)]
 mod bitposition_tests {
     use super::*;
+
+    #[test]
+    fn parse_test() {
+        assert_eq!(BitPosition::new(15, 4), BitPosition::from_str("15B4b").unwrap());
+        assert_eq!(BitPosition::new(1300, 4), BitPosition::from_str("1300B4b").unwrap());
+        assert_eq!(BitPosition::new(0, 4), BitPosition::from_str("4b").unwrap());
+        assert_eq!(BitPosition::new(5, 5), BitPosition::from_str("45b").unwrap());
+        assert_eq!(BitPosition::new(4, 0), BitPosition::from_str("4B").unwrap());
+        assert_eq!(BitPosition::new(0, 0), BitPosition::from_str("0B").unwrap());
+        assert_eq!(BitPosition::new(15, 3), BitPosition::from_str("10B43b").unwrap());
+    }
+
     #[test]
     fn add_test() {
         assert_eq!(BitPosition::new(5, 1) + BitPosition::new(3, 2), BitPosition::new(8, 3));
@@ -435,17 +515,151 @@ mod bitposition_tests {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug, PartialEq)]
+pub struct MyStrSpan<'a> {
+    start: usize,
+    text: &'a str
+}
+
+impl<'a> MyStrSpan<'a> {
+    fn new(start: usize, text: &'a str) -> MyStrSpan<'a> {
+        MyStrSpan {
+            start, text
+        }
+    }
+
+    fn from_range(input: &'a MyStrSpan, rng: std::ops::Range<usize>) -> MyStrSpan<'a> {
+        input.slice(rng.start, rng.end)
+    }
+
+    /// Constructs a new `StrSpan` from substring.
+    pub fn from_substr(text: &str, start: usize, end: usize) -> MyStrSpan {
+        debug_assert!(start <= end);
+        MyStrSpan { text: &text[start..end], start }
+    }
+
+    /// Returns `true` is self is empty.
+    pub fn is_empty(&self) -> bool {
+        self.text.is_empty()
+    }
+
+    /// Returns the start position of the span.
+    pub fn start(&self) -> usize {
+        self.start
+    }
+
+    /// Returns the end position of the span.
+    pub fn end(&self) -> usize {
+        self.start + self.text.len()
+    }
+
+    pub fn as_str(&self) -> &'a str {
+        &self.text
+    }
+
+    pub fn range(&self) -> std::ops::Range<usize> {
+        std::ops::Range {
+            start: self.start,
+            end: self.end()
+        }
+    }
+
+    pub fn chars(&self) -> StrSpanChars {
+        StrSpanChars::new(self)
+    }
+
+    fn slice(&self, start: usize, stop: usize) -> MyStrSpan<'a> {
+        MyStrSpan {
+            start,
+            text: &self.text[(start - self.start)..(stop - self.start)]
+        }
+    }
+
+    fn trim(&self) -> MyStrSpan<'a> {
+        let new_text = self.text.trim_start();
+        MyStrSpan {
+            start: self.start + self.text.len() - new_text.len(),
+            text: new_text.trim_end()
+        }
+    }
+}
+
+pub struct StrSpanChars<'a> {
+    start: usize,
+    text: &'a str,
+    iter: CharIndices<'a>
+}
+
+impl<'a> Iterator for StrSpanChars<'a> {
+    type Item = MyStrSpan<'a>;
+
+    fn next(&mut self) -> Option<MyStrSpan<'a>> {
+        match self.iter.next() {
+            None => None,
+            Some((i, ch)) => {
+                let n = ch.to_string().bytes().len();
+                let s = &self.text[i..i+n];//self.text.split_at(i).1.split_at(n).0;
+                Some(MyStrSpan::new(self.start + i, s))
+            }
+        }
+    }
+
+    #[inline]
+    fn count(self) -> usize {
+        self.iter.count()
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.iter.size_hint()
+    }
+
+    // #[inline]
+    // fn last(mut self) -> Option<(usize, char)> {
+    //     self.iter.next_back().map(|ch| {
+    //         let index = self.front_offset + self.iter.iter.len();
+    //         (index, ch)
+    //     })
+    // }
+
+}
+
+impl<'a> StrSpanChars<'a> {
+    fn new(sspan: &MyStrSpan<'a>) -> StrSpanChars<'a> {
+        StrSpanChars {
+            start: sspan.start,
+            text: sspan.text,
+            iter: sspan.text.char_indices()
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum ExprOp {
     Add,
     Sub,
     Mult,
     Div,
     Neg,
-    Eq
+    Eq,
+    List,
+    Function(String)
 }
 
 impl ExprOp {
+    fn priority(&self) -> u8 {
+        match self {
+            ExprOp::Function(_) => 0,
+            ExprOp::Mult => 1,
+            ExprOp::Div => 1,
+            ExprOp::Add => 2,
+            ExprOp::Sub => 2,
+            ExprOp::Eq => 3,
+            ExprOp::List => 5,
+            _ => todo!()
+        }
+    }
+
     fn apply(&self, args: Vec<ExprValue>) -> Result<ExprValue, ()> {
         match self {
             ExprOp::Add => {
@@ -485,11 +699,12 @@ impl ExprOp {
                 }
                 Ok(ExprValue::Bool(true))
             }
+            _ => todo!()
         }
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum ExprValue {
     Integer(i64),
     Position(BitPosition),
@@ -620,12 +835,123 @@ impl<'a, 'b> std::ops::Sub<&'a ExprValue> for &'b ExprValue {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
+pub struct ParseExprError {
+    details: String
+}
+
+impl ParseExprError {
+    pub fn new(msg: String) -> ParseExprError {
+        ParseExprError{details: msg}
+    }
+}
+
+impl std::fmt::Display for ParseExprError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.details)
+    }    
+}
+
+#[derive(Debug)]
+pub enum ExprToken {
+    Var(String, std::ops::Range<usize>),
+    Delimited(std::ops::Range<usize>),
+    Operator(ExprOp, std::ops::Range<usize>),
+    Parsed(Expr, std::ops::Range<usize>)
+}
+
+impl ExprToken {
+
+    fn from_undelimited_sspan(mut sspan: MyStrSpan) -> Vec<ExprToken> {
+        println!("Parsing section: {}", sspan.as_str());
+        let mut tokens = Vec::<ExprToken>::new();
+        while !sspan.as_str().trim().is_empty() {
+            if let Some(m) = EXPR_VAR_RE.find(sspan.as_str()) {
+                let token_sspan = sspan.slice(sspan.start() + m.start(), sspan.start() + m.end());
+                // match m.as_str() {
+                //     "atan2" => tokens.push(ExprToken::Operator(ExprOp::Function("atan2".to_string()), token_sspan.range())),
+                //     _ => {
+                //         println!("Var token: {}", m.as_str());
+                //         tokens.push(ExprToken::Parsed(Expr::Var(m.as_str().to_string()), token_sspan.range()));
+                //     }
+                // }
+                println!("Var token: {}", m.as_str());
+                tokens.push(ExprToken::Var(m.as_str().to_string(), token_sspan.range()));
+                sspan = sspan.slice(sspan.start() + m.end(), sspan.end()).trim();
+            } else if let Some(m) = EXPR_ARG_RE.find(sspan.as_str()) {
+                if let Ok(i) = usize::from_str(&m.as_str()[1..]) {
+                    println!("Arg token: {}", m.as_str());
+                    let token_sspan = sspan.slice(sspan.start() + m.start(), sspan.start() + m.end());
+                    tokens.push(ExprToken::Parsed(Expr::Arg(i), token_sspan.range()));
+                    sspan = sspan.slice(sspan.start() + m.end(), sspan.end()).trim();
+                } else {
+                    panic!("Unable to parse token: {}", m.as_str())
+                }
+            } else if let Some(m) = EXPR_BP_RE.find(sspan.as_str()) {
+                println!("BitPosition token: {}", m.as_str());
+                let token_sspan = sspan.slice(sspan.start() + m.start(), sspan.start() + m.end());
+                tokens.push(ExprToken::Parsed(Expr::Value(ExprValue::Position(BitPosition::from_str(m.as_str()).unwrap())), token_sspan.range()));
+                sspan = sspan.slice(sspan.start() + m.end(), sspan.end()).trim();
+            } else if let Some(m) = EXPR_FLOAT_RE.find(sspan.as_str()) {
+                println!("Float token: {}", m.as_str());
+                let token_sspan = sspan.slice(sspan.start() + m.start(), sspan.start() + m.end());
+                todo!();
+                //tokens.push(ExprToken::Parsed(Expr::Value(ExprValue::Float(f64::from_str(m.as_str()))), token_sspan.range()));
+                sspan = sspan.slice(sspan.start() + m.end(), sspan.end()).trim();
+            } else if let Some(m) = EXPR_INT_RE.find(sspan.as_str()) {
+                println!("Int token: {}", m.as_str());
+                let token_sspan = sspan.slice(sspan.start() + m.start(), sspan.start() + m.end());
+                tokens.push(ExprToken::Parsed(Expr::Value(ExprValue::Integer(i64::from_str(m.as_str()).unwrap())), token_sspan.range()));
+                sspan = sspan.slice(sspan.start() + m.end(), sspan.end()).trim();
+            } else if let Some(m) = EXPR_OP_RE.find(sspan.as_str()) {
+                println!("Op token: {}", m.as_str());
+                let op = match m.as_str() {
+                    "+" => ExprOp::Add,
+                    "-" => ExprOp::Sub,
+                    "*" => ExprOp::Mult,
+                    "/" => ExprOp::Div,
+                    "==" => ExprOp::Eq,
+                    "," => ExprOp::List,
+                    _ => panic!("Unable to parse operator: '{}'", m.as_str())
+                };
+                let token_sspan = sspan.slice(sspan.start() + m.start(), sspan.start() + m.end());
+                tokens.push(ExprToken::Operator(op, token_sspan.range()));
+                sspan = sspan.slice(sspan.start() + m.end(), sspan.end()).trim();
+            } else {
+                println!("Unrecognized token: {}", sspan.as_str());
+            }
+        }
+
+        tokens
+    }
+
+    // fn from_undelimited_sspan(sspan: MyStrSpan) -> ExprToken {
+    //     match sspan.as_str().trim() {
+    //         "+" => ExprToken::Operator(ExprOp::Add, sspan.range()),
+    //         "-" => ExprToken::Operator(ExprOp::Sub, sspan.range()),
+    //         "*" => ExprToken::Operator(ExprOp::Mult, sspan.range()),
+    //         "/" => ExprToken::Operator(ExprOp::Div, sspan.range()),
+    //         "==" => ExprToken::Operator(ExprOp::Eq, sspan.range()),
+    //         "," => ExprToken::Operator(ExprOp::List, sspan.range()),
+    //         // // TODO
+    //         // "date" => ExprToken::Operator(ExprOp::DateLiteral, sspan.range()),
+    //         // "cos" => ExprToken::Operator(ExprOp::Function("cos".to_string()), sspan.range()),
+    //         // "sin" => ExprToken::Operator(ExprOp::Function("sin".to_string()), sspan.range()),
+    //         // "atan2" => ExprToken::Operator(ExprOp::Function("atan2".to_string()), sspan.range()),
+    //         // "clamp" => ExprToken::Operator(ExprOp::Function("clamp".to_string()), sspan.range()),
+    //         // "sum" => ExprToken::Operator(ExprOp::Function("sum".to_string()), sspan.range()),
+    //         _ => ExprToken::Unidentified(sspan.range())
+    //     }
+    // }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum Expr {
     Op{op: ExprOp, args: Vec<Expr>},
     Value(ExprValue),
     Var(String),
-    Arg(usize)
+    Arg(usize),
+    Empty
 }
 
 impl Expr {
@@ -653,7 +979,8 @@ impl Expr {
                 } else {
                     Err(ExprEvalError::ArgumentCountError{accessed: *n, provided: arguments.len()})
                 }
-            }
+            },
+            Expr::Empty => todo!()
         }
     }
 
@@ -688,8 +1015,284 @@ impl Expr {
                 vars.insert(s.to_string());
                 vars
             },
-            Expr::Arg(n) => HashSet::new()
+            Expr::Arg(_) | Expr::Empty => HashSet::new(),
         }
+    }
+
+    fn from_str_span(input: MyStrSpan) -> Result<Expr, ParseExprError> {
+        let tokens = Expr::tokens_from_str_span(&input)?;
+        Expr::from_tokens(&input, tokens)
+    }
+
+    fn from_tokens(input: &MyStrSpan, mut tokens: Vec<ExprToken>) -> Result<Expr, ParseExprError> {
+        println!("Parsing Tokens: {:?}", tokens);
+
+        if tokens.len() == 0 {
+            return Ok(Expr::Empty);
+        } else if tokens.len() == 1 {
+            match tokens.pop().unwrap() {
+                ExprToken::Delimited(rng) => {
+                    let sspan = MyStrSpan::from_range(input, rng);
+                    return Expr::from_str_span(sspan)
+                },
+                ExprToken::Operator(rng, _) => {
+                    panic!("Unexpected operator encountered")
+                },
+                ExprToken::Parsed(expr, _) => {
+                    return Ok(expr)
+                },
+                ExprToken::Var(s, _) => {
+                    return Ok(Expr::Var(s))
+                }
+            }
+        } else if tokens.len() == 2 {
+            let token_1 = tokens.pop().unwrap();
+            let token_0 = tokens.pop().unwrap();
+            match (token_0, token_1) {
+                (ExprToken::Var(s, _), ExprToken::Delimited(rng)) => {
+                    let op = ExprOp::Function(s);
+                    let sspan = MyStrSpan::from_range(input, rng);
+                    let function_args = Expr::from_str_span(sspan)?;
+                    let args = match function_args {
+                        Expr::Op{op, args} if matches!(op, ExprOp::List) => {
+                            args
+                        },
+                        function_args => vec![function_args]
+                    };
+                    return Ok(Expr::Op{op, args})
+                },
+                (token_0, token_1) => tokens = vec![token_0, token_1]
+            }
+        }
+
+        let mut op_priority = 0;
+        let mut op_present = false;
+        for token in &tokens {
+            if let ExprToken::Operator(op, _) = token {
+                op_priority = std::cmp::max(op_priority, op.priority());
+                op_present = true;
+            }
+        }
+        if !op_present {
+            return Err(ParseExprError::new("Expression does not contain operator".to_string()))
+        }
+
+        //let mut token_groups = Vec::<Vec<ExprToken>::new();
+        let mut current_group = Vec::<ExprToken>::new();
+        let mut current_op: Option<ExprOp> = None;
+        let mut expr_args = Vec::<Expr>::new();
+
+        let mut token_iter = tokens.into_iter().rev();
+        let mut token_option = token_iter.next();
+
+        while token_option.is_some() {
+            // let token = token_option.unwrap();
+
+            match &current_op {
+                None => {
+                    match token_option {
+                        Some(ExprToken::Operator(op, _)) if op.priority() == op_priority => {
+                            expr_args.push(Expr::from_tokens(input, current_group.into_iter().rev().collect())?);
+                            current_group = vec![];
+                            current_op = Some(op);
+                        },
+                        Some(token) => {
+                            current_group.push(token);
+                        },
+                        None => unreachable!()
+                    }
+                },
+                Some(current_op) => {
+                    match &token_option {
+                        Some(ExprToken::Operator(op, _)) if op == current_op => {
+                            expr_args.push(Expr::from_tokens(input, current_group.into_iter().rev().collect())?);
+                            current_group = vec![];
+                        },
+                        Some(ExprToken::Operator(op, _)) if op.priority() == op_priority => {
+                            current_group.push(token_option.unwrap());
+                            current_group.extend(token_iter.collect::<Vec<ExprToken>>());
+                            expr_args.push(Expr::from_tokens(input, current_group.into_iter().rev().collect())?);
+                            current_group = vec![];
+                            break;
+                        },
+                        Some(_) => {
+                            current_group.push(token_option.unwrap());
+                        },
+                        None => unreachable!()
+                    }
+                }
+            }
+
+            token_option = token_iter.next();
+        }
+
+        // let empty = current_group.is_empty();
+        if !current_group.is_empty() {
+            expr_args.push(Expr::from_tokens(input, current_group.into_iter().rev().collect())?);
+        }
+
+        expr_args = expr_args.into_iter().rev().collect();
+
+
+        Ok(Expr::Op{op: current_op.unwrap(), args: expr_args})
+    }
+
+    fn tokens_from_str_span(input: &MyStrSpan) -> Result<Vec<ExprToken>, ParseExprError> {
+        println!("Input: {}", input.as_str());
+        // Regex matches any of the following:
+        //      Variables/Constants: A letter or underscore followed by any combination of letters, digits, and underscores
+        //      Integers/Floats: Either of the following, which may optionally be followed by e or E, possibly +/-, then one or more digits
+        //          0 or more digits, a decimal point, then zero or more digits
+        //          1 or more digits
+        //      Operators: Any combination of one or more characters that are not digits, letters, underscores, or spaces.
+        // let token_re = regex::Regex::new(r"^(([\$_a-zA-Z][_a-zA-Z0-9\.]*)|([0-9]*([0-9]|(\.[0-9]*))([eE][\-\+]?[0-9]+)?)|([^0-9a-zA-Z_ \$']+)|('[^']*')|([\+\-]?([0-9]+[Bb])|([0-9]+B[0-9]+b)))").unwrap();
+        // assert!(token_re.is_match("5B3b"));
+
+
+        let mut delimiter_stack = Vec::<MyStrSpan>::new();
+        let mut in_string_literal = false;
+        let mut escaped = false;
+        let mut tokens = Vec::<ExprToken>::new();
+        let mut current_token_start = input.start();
+        // let mut was_token_match = false;
+
+        let mut chars_iter = input.chars();
+
+        while let Some(ch) = chars_iter.next() {
+            let ch_str = ch.as_str();
+            // println!("ch: {}", ch_str);
+            match ch_str {
+                "'" => if !escaped {
+                    if in_string_literal {
+                        in_string_literal = false;
+                        let string_literal_sspan = input.slice(current_token_start, ch.start());
+                        println!("String literal token: '{}'", string_literal_sspan.as_str());
+                        tokens.push(ExprToken::Parsed(Expr::Value(ExprValue::String(string_literal_sspan.as_str().to_string())), string_literal_sspan.range()));
+                    } else {
+                        let mut undelimited_sspan = input.slice(current_token_start, ch.start()).trim();
+                        tokens.extend(ExprToken::from_undelimited_sspan(undelimited_sspan));
+                        in_string_literal = true;
+                    }
+                    current_token_start = ch.end();
+                },                
+                "(" | "[" | "{" if !in_string_literal => {
+                    if delimiter_stack.is_empty() {
+                        // let token_sspan = MyStrSpan::new(current_token_start, &input.as_str()[current_token_start..ch.start()]);
+                        let mut undelimited_sspan = input.slice(current_token_start, ch.start()).trim();
+                        tokens.extend(ExprToken::from_undelimited_sspan(undelimited_sspan));
+                        // if !undelimited_sspan.as_str().trim().is_empty() {
+                        //     while !undelimited_sspan.as_str().trim().is_empty() {
+                        //         if let Some(m) = token_re.find(undelimited_sspan.as_str()) {
+                        //             let token_sspan = undelimited_sspan.slice(undelimited_sspan.start() + m.start(), undelimited_sspan.start() + m.end());
+                        //             println!("Token: '{}'", token_sspan.as_str());
+                        //             tokens.push(ExprToken::from_undelimited_sspan(token_sspan));
+                        //             undelimited_sspan = undelimited_sspan.slice(undelimited_sspan.start() + m.end(), undelimited_sspan.end()).trim();
+                        //         } else {
+                        //             panic!("Unrecognized token: {}", undelimited_sspan.as_str());
+                        //         }
+                        //     }
+                        //     // tokens.push(ExprToken::from_undelimited_sspan(token_sspan));
+                        // }
+                        current_token_start = ch.end();
+                        // was_token_match = false;
+                    }
+                    delimiter_stack.push(ch)
+                },
+                ")" | "]" | "}" if !in_string_literal => match (ch_str, delimiter_stack.pop().map(|d| d.as_str())) {
+                    (")", Some("(")) | ("]", Some("[")) | ("}", Some("{")) => {
+                        if delimiter_stack.is_empty() {
+                            //let token_sspan = MyStrSpan::new(current_token_start, &input.as_str()[current_token_start..ch.start()]);
+                            let token_sspan = input.slice(current_token_start, ch.start());
+                            println!("Delimited: '{}'", token_sspan.as_str());
+                            tokens.push(ExprToken::Delimited(token_sspan.range()));
+                            current_token_start = ch.end();
+                            // was_token_match = false;
+                        }
+                    },
+                    (_, None) => return Err(ParseExprError::new("Mismatched delimiters 1".to_string())),
+                    (_, Some(d)) => return Err(ParseExprError::new(format!("Mismatched delimiters: {}, {}", ch_str, d).to_string()))
+                },
+                _ if delimiter_stack.is_empty() => {
+                    // let token_str = input.slice(current_token_start, ch.end()).as_str();
+
+
+                    // if token_re.is_match(token_str.trim()) {
+                    //     was_token_match = true;
+                    // } else if was_token_match {
+                    //     let token_sspan = input.slice(current_token_start, ch.start()).trim();
+                    //     if !token_sspan.as_str().is_empty() {
+                    //         println!("Token: '{}'", token_sspan.as_str());
+                    //         tokens.push(ExprToken::from_undelimited_sspan(token_sspan));
+                    //     }
+                    //     current_token_start = ch.start();
+                    //     was_token_match = false;
+                        
+                    // }
+                },
+                _ => {
+                    // Do nothing
+                }
+
+            }
+        }
+
+        if in_string_literal {
+            panic!("Encountered end of input while parsing string literal")
+        }
+
+        if delimiter_stack.is_empty() {
+            // let token_sspan = input.slice(current_token_start, input.end()).trim();
+            // if !token_sspan.as_str().is_empty() {
+            //     tokens.push(ExprToken::from_undelimited_sspan(token_sspan));
+            // }
+
+            let mut undelimited_sspan = input.slice(current_token_start, input.end()).trim();
+            tokens.extend(ExprToken::from_undelimited_sspan(undelimited_sspan));
+            // if !undelimited_sspan.as_str().trim().is_empty() {
+            //     while !undelimited_sspan.as_str().trim().is_empty() {
+            //         if let Some(m) = token_re.find(undelimited_sspan.as_str()) {
+            //             let token_sspan = undelimited_sspan.slice(undelimited_sspan.start() + m.start(), undelimited_sspan.start() + m.end());
+            //             println!("Token: '{}'", token_sspan.as_str());
+            //             tokens.push(ExprToken::from_undelimited_sspan(token_sspan));
+            //             undelimited_sspan = undelimited_sspan.slice(undelimited_sspan.start() + m.end(), undelimited_sspan.end()).trim();
+            //         } else {
+            //             panic!("Unrecognized token: {}", undelimited_sspan.as_str());
+            //         }
+            //     }
+            //     // tokens.push(ExprToken::from_undelimited_sspan(token_sspan));
+            // }
+            
+        } else {
+            return Err(ParseExprError::new("Mismatched delimiters".to_string()));
+        }
+        println!("{:?}", tokens);
+        Ok(tokens)
+    }
+}
+
+impl FromStr for Expr {
+    type Err = ParseExprError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Expr::from_str_span(MyStrSpan::new(0, s))
+    }
+}
+
+#[cfg(test)]
+mod expr_parse_tests {
+    use super::*;
+    #[test]
+    fn expr_parse_tests() {
+        let add_arg1 = Expr::Op{op: ExprOp::Add, args: vec![Expr::Var("x".to_string()), Expr::Value(ExprValue::Integer(5))]}; // x + 5
+        assert_eq!(Expr::from_str("x + 5").unwrap(), add_arg1);
+        let mul_arg1 = Expr::Op{op: ExprOp::Mult, args: vec![Expr::Value(ExprValue::Integer(3)), Expr::Var("x".to_string())]}; // 3 * x
+        let mul_arg2 = Expr::Op{op: ExprOp::Mult, args: vec![Expr::Value(ExprValue::Integer(5)), Expr::Arg(12), add_arg1]}; // 5 * $12 * (x + 5)
+        let add_arg2 = Expr::Op{op: ExprOp::Add, args: vec![mul_arg1, mul_arg2]}; // 3 * x + 5 * $12 * (x + 5)
+        let eq_arg1 = Expr::Op{op: ExprOp::Eq, args: vec![add_arg2.clone(), Expr::Value(ExprValue::String("hello?".to_string()))]};
+        assert_eq!(Expr::from_str("3 * x + 5 * $12 * (x + 5) == 'hello?'").unwrap(), eq_arg1);
+        let bp1 = Expr::Value(ExprValue::Position(BitPosition::new(5, 3)));
+        assert_eq!(Expr::from_str("5B3b").unwrap(), bp1);
+        let atan2 = Expr::Op{op: ExprOp::Function("atan2".to_string()), args: vec![add_arg2, Expr::Var("y".to_string())]};
+        assert_eq!(Expr::from_str("atan2(3 * x + 5 * $12 * (x + 5), y)").unwrap(), atan2);
     }
 }
 
@@ -854,10 +1457,6 @@ enum SectionType {
     Footer
 }
 
-const SECTION_START_KEY: &str = "section.start";
-const SECTION_END_KEY: &str = "section.end";
-const SECTION_LENGTH_KEY: &str = "section.length";
-
 struct PositionedSectionSpec<'a> {
     parent: &'a SectionSpec,
     position: BitPosition, // Position == start since alignment is already done
@@ -882,372 +1481,15 @@ impl<'a> PositionedSectionSpec<'a> {
         self.position.clone()
     }
 
-    fn position_id(&self) -> String {
-        todo!()
-    }
-
-    fn length_id(&self) -> String {
-        todo!()
-    }
-
-    fn content_length_id(&self) -> String {
-        todo!()
-    }
-
-    fn end_id(&self) -> String {
-        todo!()
-    }
-
-    fn field_position_id(&self, index: usize) -> String {
-        let field_name = self.parent.fields[index].id.clone();
-        format!("{}.position", field_name).to_string()
-    }
-
-    fn field_offset_id(&self, index: usize) -> String {
-        let field_name = self.parent.fields[index].id.clone();
-        format!("{}.offset", field_name).to_string()
-    }
-
-    fn field_start_id(&self, index: usize) -> String {
-        let field_name = self.parent.fields[index].id.clone();
-        format!("{}.start", field_name).to_string()
-    }
-
-    fn field_length_id(&self, index: usize) -> String {
-        let field_name = self.parent.fields[index].id.clone();
-        format!("{}.length", field_name).to_string()
-    }
-
-    fn field_alignment_id(&self, index: usize) -> String {
-        let field_name = self.parent.fields[index].id.clone();
-        format!("{}.alignment", field_name).to_string()
-    }
-    fn field_alignment_base_id(&self, index: usize) -> String {
-        let field_name = self.parent.fields[index].id.clone();
-        format!("{}.alignment_base", field_name).to_string()
-    }
-
-    fn field_end_id(&self, index: usize) -> String {
-        let field_name = self.parent.fields[index].id.clone();
-        format!("{}.end", field_name).to_string()
-    }
-
-    fn try_get_field(&self, key: String) -> Result<DependencyReport<FieldSpec>, ExprEvalError> {
-        todo!("Trying to get field {}", key);
-    }
-
     fn try_get_position(&self, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
         return Ok(DependencyReport::success(ExprValue::Position(self.position.clone())))
-        // match self.position.evaluate_expect_position(lookup) {
-        //     Ok(position) => {
-        //         let mut dr = DependencyReport::success(ExprValue::Position(position));
-        //         dr.add_pc_pairs(self.position.vars(), key);
-        //         Ok(dr)
-        //     },
-        //     Err(ExprEvalError::LookupError{..}) => {
-        //         Ok(DependencyReport::incomplete(self.position.vars()))
-        //     }
-        //     Err(err) => return Err(err)
-        // }
+
     }
-
-    // fn try_get_field_length(&self, index: usize, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
-    //     let field = &self.parent.fields[index];
-    //     match field.length.evaluate_expect_position(lookup) {
-    //         Ok(length) => {
-    //             let mut dr = DependencyReport::success(ExprValue::Position(length));
-    //             dr.add_pc_pairs(self.convert_expr_vars(field.length.vars())?, HashSet::from([self.field_length_id(index)]));
-    //             Ok(dr)
-    //         },
-    //         Err(ExprEvalError::LookupError{..}) => {
-    //             Ok(DependencyReport::incomplete(self.convert_expr_vars(field.length.vars())?))
-    //         }
-    //         Err(err) => return Err(err)
-    //     }
-    // }
-
-    // fn try_get_field_offset(&self, index: usize, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
-    //     let field = &self.parent.fields[index];
-    //     match field.offset.evaluate_expect_position(lookup) {
-    //         Ok(offset) => {
-    //             let mut dr = DependencyReport::success(ExprValue::Position(offset));
-    //             dr.add_pc_pairs(self.convert_expr_vars(field.offset.vars())?, HashSet::from([self.field_offset_id(index)]));
-    //             Ok(dr)
-    //         },
-    //         Err(ExprEvalError::LookupError{..}) => {
-    //             Ok(DependencyReport::incomplete(self.convert_expr_vars(field.offset.vars())?))
-    //         }
-    //         Err(err) => return Err(err)
-    //     }
-    // }
-
-    // fn try_get_field_alignment(&self, index: usize, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
-    //     let field = &self.parent.fields[index];
-    //     match field.alignment.evaluate_expect_position(lookup) {
-    //         Ok(alignment) => {
-    //             let mut dr = DependencyReport::success(ExprValue::Position(alignment));
-    //             dr.add_pc_pairs(self.convert_expr_vars(field.alignment.vars())?, HashSet::from([self.field_alignment_id(index)]));
-    //             Ok(dr)
-    //         },
-    //         Err(ExprEvalError::LookupError{..}) => {
-    //             Ok(DependencyReport::incomplete(self.convert_expr_vars(field.alignment.vars())?))
-    //         }
-    //         Err(err) => return Err(err)
-    //     }
-    // }
-
-    // fn try_get_field_alignment_base(&self, index: usize, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
-    //     let field = &self.parent.fields[index];
-    //     match field.alignment_base.evaluate_expect_position(lookup) {
-    //         Ok(alignment_base) => {
-    //             let mut dr = DependencyReport::success(ExprValue::Position(alignment_base));
-    //             dr.add_pc_pairs(self.convert_expr_vars(field.alignment_base.vars())?, HashSet::from([self.field_alignment_base_id(index)]));
-    //             Ok(dr)
-    //         },
-    //         Err(ExprEvalError::LookupError{..}) => {
-    //             Ok(DependencyReport::incomplete(self.convert_expr_vars(field.alignment_base.vars())?))
-    //         }
-    //         Err(err) => return Err(err)
-    //     }
-    // }
-
-    // fn try_get_field_end(&self, index: usize, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
-    //     let field = &self.parent.fields[index];
-    //     let mut parents = HashSet::new();
-    //     let start_id = self.field_start_id(index);
-    //     let length_id = self.field_length_id(index);
-    //     parents.insert(start_id.clone());
-    //     parents.insert(length_id.clone());
-
-    //     let start = match lookup(&start_id) {
-    //         Some(value) => value.expect_position()?,
-    //         None => return Ok(DependencyReport::incomplete(parents))
-    //     };
-        
-    //     let length = match lookup(&length_id) {
-    //         Some(value) => value.expect_position()?,
-    //         None => return Ok(DependencyReport::incomplete(parents))
-    //     };
-
-    //     let mut dr = DependencyReport::success(ExprValue::Position(start + length));
-    //     dr.add_pc_pairs(parents, HashSet::from([self.field_end_id(index)]));
-    //     Ok(dr)
-    // }
-
-    // fn try_get_field_position(&self, index: usize, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
-    //     let field = &self.parent.fields[index];
-    //     if index == 0 {
-    //         // If it's the first field, its position is equal to the structure's start position
-    //         let start_id = self.position_id();
-    //         match lookup(&start_id) {
-    //             Some(ev) => {
-    //                 let mut dr = DependencyReport::success(ExprValue::Position(ev.expect_position()?));
-    //                 dr.add_pc_pairs(HashSet::from([start_id]), HashSet::from([self.field_position_id(index)]));
-    //                 Ok(dr)
-    //             },
-    //             None => {
-    //                 Ok(DependencyReport::incomplete(HashSet::from([start_id])))
-    //             }
-    //         }
-    //     } else {
-    //         // If its not the first field, its position is equal to the previous field's end position
-    //         let end_id = self.field_end_id(index - 1);
-    //         match lookup(&end_id) {
-    //             Some(ev) => {
-    //                 let mut dr = DependencyReport::success(ExprValue::Position(ev.expect_position()?));
-    //                 dr.add_pc_pairs(HashSet::from([end_id]), HashSet::from([self.field_position_id(index)]));
-    //                 Ok(dr)
-    //             },
-    //             None => {
-    //                 Ok(DependencyReport::incomplete(HashSet::from([end_id])))
-    //             }
-    //         }
-    //     }
-    // }
-
-    // fn try_get_content_length(&self, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
-    //     // TODO: handle fields.len() == 0
-    //     let last_field_index = self.parent.fields.len() - 1;
-    //     let end_id = self.field_end_id(last_field_index);
-    //     match lookup(&end_id) {
-    //         Some(ev) => {
-    //             let mut dr = DependencyReport::success(ExprValue::Position(ev.expect_position()?));
-    //             dr.add_pc_pairs(HashSet::from([end_id]), HashSet::from([self.content_length_id()]));
-    //             Ok(dr)
-    //         },
-    //         None => {
-    //             Ok(DependencyReport::incomplete(HashSet::from([end_id])))
-    //         }
-    //     }
-    // }
-
-    // fn try_get_length(&self, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
-    //     match &self.parent.length {
-    //         LengthPolicy::FitContents => {
-    //             let content_length_id = self.content_length_id();
-    //             match lookup(&content_length_id) {
-    //                 Some(ev) => {
-    //                     let mut dr = DependencyReport::success(ExprValue::Position(ev.expect_position()?));
-    //                     dr.add_pc_pairs(HashSet::from([content_length_id]), HashSet::from([self.length_id()]));
-    //                     Ok(dr)
-    //                 },
-    //                 None => {
-    //                     Ok(DependencyReport::incomplete(HashSet::from([content_length_id])))
-    //                 }
-    //             }
-    //         },
-    //         LengthPolicy::Expr(expr) => {
-    //             match expr.evaluate_expect_position(lookup) {
-    //                 Ok(length) => {
-    //                     let mut dr = DependencyReport::success(ExprValue::Position(length));
-    //                     dr.add_pc_pairs(self.convert_expr_vars(expr.vars())?, HashSet::from([self.length_id()]));
-    //                     Ok(dr)
-    //                 },
-    //                 Err(ExprEvalError::LookupError{..}) => {
-    //                     Ok(DependencyReport::incomplete(self.convert_expr_vars(expr.vars())?))
-    //                 }
-    //                 Err(err) => return Err(err)
-    //             }
-    //         },
-    //         LengthPolicy::Expand => {
-    //             Ok(DependencyReport::does_not_exist())
-    //         }
-    //     }
-    // }
-
-    // fn try_get_end(&self, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
-    //     let mut parents = HashSet::new();
-    //     parents.insert(self.position_id());
-    //     let start = match lookup(&self.position_id()) {
-    //         Some(value) => value.expect_position()?,
-    //         None => return Ok(DependencyReport::incomplete(parents))
-    //     };
-    //     parents.insert(self.length_id());
-    //     let length = match lookup(&self.length_id()) {
-    //         Some(value) => value.expect_position()?,
-    //         None => return Ok(DependencyReport::incomplete(parents))
-    //     };
-
-    //     let mut dr = DependencyReport::success(ExprValue::Position(start + length));
-    //     dr.add_pc_pairs(parents, HashSet::from([self.end_id()]));
-    //     Ok(dr)
-    // }
-
-    // fn try_lookup(&mut self, key: String, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
-    //     if key == self.position_id() {
-    //         self.try_get_position(lookup)
-    //     } else if key == self.length_id() {
-    //         self.try_get_length(lookup)
-    //     } else if key == self.end_id() {
-    //         self.try_get_end(lookup)
-    //     } else if let Some(caps) = KEY_RE.captures(&key) {
-    //         if let (Some(structure_match), Some(attr_match)) = (caps.name("structure"), caps.name("attribute")) {
-    //             if let Some(index_str) = caps.name("index") {
-    //                 panic!("Index not valid in {}", key)
-    //             }
-    //             if let Some(field_index) = self.parent.id_map.get(structure_match.as_str()) {
-                    
-    //                 match attr_match.as_str() {
-    //                     "length" => {
-    //                         self.try_get_field_length(*field_index, lookup)
-    //                     },
-    //                     "offset" => {
-    //                         self.try_get_field_offset(*field_index, lookup)
-    //                     },
-    //                     "alignment" => {
-    //                         self.try_get_field_alignment(*field_index, lookup)
-    //                     },
-    //                     "alignment_base" => {
-    //                         self.try_get_field_alignment_base(*field_index, lookup)
-    //                     },
-    //                     "end" => {
-    //                         self.try_get_field_end(*field_index, lookup)
-    //                     },
-    //                     "position" => {
-    //                         self.try_get_field_position(*field_index, lookup)
-    //                     },
-    //                     _ => panic!("Unrecognized key: {}", key)
-    //                 }
-    //             } else {
-    //                 Ok(DependencyReport::does_not_exist())
-    //             }
-    //         } else {
-    //             Ok(DependencyReport::does_not_exist())
-    //         }
-    //     } else {
-    //         todo!()
-    //     }
-    // }
-
-    // pub fn try_get_field_address(&self, id: &str) -> Option<(BitPosition, BitPosition)> {
-    //     if let Some(index) = self.parent.id_map.get(id) {
-    //         if *index < self.field_lengths.len() {
-    //             Some((&self.field_offsets[*index] + &self.position, self.field_lengths[*index].clone()))
-    //         } else {
-    //             None
-    //         }
-    //     } else {
-    //         None
-    //     }
-    // }
 
     fn contains_value(&self, key: String) -> bool {
         self.parent.contains_value(key)
     }
 
-    pub fn unkowns(&self) -> HashSet<String> {
-        let mut unks = HashSet::from([self.position_id(), self.length_id()]);
-
-        for i in 0..self.parent.fields.len() {
-            unks.insert(self.field_start_id(i));
-            unks.insert(self.field_length_id(i));
-        }
-
-        unks
-    }
-
-    // Calculates and saves the offsets of as many fields as possible with the 
-    // lookup it's provided. Stops once a lookup error occurs and returns the current
-    // number of fields with determined offset/length.
-    // pub fn try_resolve(&mut self, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<DependenctReport<()>, ExprEvalError> {
-    //     let start_index = self.field_offsets.len();
-    //     if self.field_lengths.len() + 1 == start_index {
-    //         // The last field found has a position but not a length
-    //         let length_id = self.parent.field_length_id(start_index - 1);
-    //         let length = match lookup(&length_id) {
-    //             Some(ev) => ev.expect_position()?,
-    //             None => {
-    //                 let mut dr = DependencyReport::incomplete(HashSet::from([length_id]));
-    //                 // dr.add_pc_pairs()
-    //                 return Ok(dr)
-    //         };
-    //     } else if self.field_lengths.len() != start_index {
-    //         panic!("Unexpected condition")
-    //     }
-
-    //     for (i, field) in self.parent.fields.iter().enumerate().skip(start_index) {
-    //         println!("{}", i);
-    //         match field.get_position(self.resolved_length.clone(), lookup) {
-    //             Ok(offset) => {
-    //                 self.field_offsets.push(offset.clone());
-    //                 self.resolved_length = offset;
-    //             },
-    //             Err(ExprEvalError::LookupError{..}) => return Ok(i + 1),
-    //             Err(err) => return Err(err)
-    //         }
-    //         println!("Getting length");
-    //         match field.get_length(lookup) {
-    //             Ok(length) => {
-    //                 self.field_lengths.push(length.clone());
-    //                 self.resolved_length = self.resolved_length.clone() + length.clone();
-    //             },
-    //             Err(ExprEvalError::LookupError{..}) => return Ok(i + 1),
-    //             Err(err) => return Err(err)
-    //         }
-    //     }
-
-    //     return Ok(self.field_lengths.len())
-    // }
 }
 
 struct SectionSpec {
@@ -1443,6 +1685,13 @@ use lazy_static::lazy_static;
 lazy_static! {
     static ref KEY_RE: regex::Regex = regex::Regex::new(r"^(?<structure>\w+)\.(?<attribute>\w+)(?<index>[\d+])?$").unwrap();
     static ref FIELD_KEY_RE: regex::Regex = regex::Regex::new(r"^(?<structure>\w+):(?<field>\w+)(\.(?<attribute>\w+))?$").unwrap();
+
+    static ref EXPR_ARG_RE: regex::Regex = regex::Regex::new(r"^\$[0-9]+").unwrap();
+    static ref EXPR_VAR_RE: regex::Regex = regex::Regex::new(r"^[_a-zA-Z][_a-zA-Z0-9\.]*").unwrap();
+    static ref EXPR_INT_RE: regex::Regex = regex::Regex::new(r"^[0-9]+").unwrap();
+    static ref EXPR_BP_RE: regex::Regex = regex::Regex::new(r"[\-\+]?(([0-9]+B)?[0-9]+b)|([0-9]+B)").unwrap();
+    static ref EXPR_FLOAT_RE: regex::Regex = regex::Regex::new(r"^[0-9]*((\.[0-9]*)|((\.[0-9]*)?([eE][\-\+]?[0-9]+)))").unwrap();
+    static ref EXPR_OP_RE: regex::Regex = regex::Regex::new(r"^[^0-9a-zA-Z_ \$]+").unwrap();
 
     static ref STRUCT_ATTR_RE: regex::Regex = regex::Regex::new(r"^(?<structure>\w+)\.(?<attribute>\w+)(?<index>[\d+])?$").unwrap();
     static ref FIELD_ATTR_RE: regex::Regex = regex::Regex::new(r"^(?<structure>\w+):(?<field>\w+)(\.(?<attribute>\w+))?$").unwrap();
@@ -2574,128 +2823,6 @@ impl<'a> PartiallyResolvedStructure<'a> {
         }
     }
 
-    // fn contains_value(&self, key: String, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<DepResult<bool>, ExprEvalError> {
-    //     match self.stype.as_ref() {
-    //         PartiallyResolvedStructureType::UnresolvedSection{initial, pss} => {
-    //             // Since we have a fixed-format section, it can always be determined whether it contains a value
-    //             Ok(DepResult::Success(initial.contains_value(key)))
-    //         },
-    //         PartiallyResolvedStructureType::ResolvedSection(section) => {
-    //             Ok(DepResult::Success(section.contains_value(key)))
-    //         },
-    //         PartiallyResolvedStructureType::Addressed{content, pss, ..} => {
-    //             todo!("Use pss here");
-    //             Ok(content.contains_value(key, lookup))
-    //         },
-    //         PartiallyResolvedStructureType::Sequence(sequence) => {
-    //             let mut result = DepResult::Success(false);
-    //             for structure in sequence {
-    //                 match structure.borrow().contains_value(key.clone(), lookup)? {
-    //                     DepResult::Success(true) => return Ok(DepResult::Success(true)),
-    //                     DepResult::Success(false) => {},
-    //                     DepResult::Incomplete(vars) => {
-    //                         result = DepResult::Incomplete(vars);
-    //                     },
-    //                     DepResult::MightExist(vars) => panic!("contains_value should not return MightExist"),
-    //                     DepResult::DoesNotExist => panic!("Unexpected case")
-    //                 }
-    //             }
-    //             Ok(result)
-    //         },
-    //         PartiallyResolvedStructureType::Switch{value, cases, default, pss} => {
-    //             match lookup(&self.switch_value_id()) {
-    //                 Some(value) => {
-
-    //                     for (i, (check, structure)) in cases.iter().enumerate() {
-    //                         match lookup(&self.switch_case_id(i)) {
-    //                             Some(b) => {
-    //                                 if b.expect_bool()? {
-    //                                     return Ok(structure.contains_value(key, lookup));
-    //                                 } else {
-    //                                     // Do nothing. This isn't the case, so the variables it contains don't matter.
-    //                                 }
-    //                             },
-    //                             None => {
-    //                                 match structure.contains_value(key.clone(), lookup) {
-    //                                     DepResult::Success(true) => return Ok(DepResult::Incomplete(HashSet::from([self.switch_case_id(i)]))),
-    //                                     DepResult::Success(false) => {
-    //                                         // Do nothing. We don't know if this is the case but it doesn't matter because it doesn't
-    //                                         // contain the variable.
-    //                                     },
-    //                                     DepResult::Incomplete(vars) => {
-    //                                         // Note: This neglects the possibility that the result could be dependent on 'vars'
-    //                                         return Ok(DepResult::Incomplete(HashSet::from([self.switch_case_id(i)])))
-    //                                     },
-    //                                     DepResult::MightExist(vars) => panic!("contains_value should not return MightExist"),
-    //                                     DepResult::DoesNotExist => panic!("Unexpected case")
-    //                                 }
-    //                             }
-    //                         }
-    //                     }
-
-    //                     Ok(default.contains_value(key, lookup))
-    //                 },
-    //                 None => {
-    //                     for (i, (check, structure)) in cases.iter().enumerate() {
-    //                         match structure.contains_value(key.clone(), lookup) {
-    //                             DepResult::Success(true) => {
-    //                                 todo!("Check to see if the case is resoved before returning this");
-    //                                 return Ok(DepResult::Incomplete(HashSet::from([self.switch_case_id(i)])));
-    //                             },
-    //                             DepResult::Success(false) => {
-    //                                 // Do nothing. We don't know if this is the case but it doesn't matter because it doesn't
-    //                                 // contain the variable.
-    //                             },
-    //                             DepResult::Incomplete(vars) => {
-    //                                 // Note: This neglects the possibility that the result could be dependent on 'vars'
-    //                                 todo!("Check to see if the case is resoved before returning this");
-    //                                 return Ok(DepResult::Incomplete(HashSet::from([self.switch_case_id(i)])))
-    //                             },
-    //                             DepResult::MightExist(vars) => panic!("contains_value should not return MightExist"),
-    //                             DepResult::DoesNotExist => panic!("Unexpected case")
-    //                         }
-    //                     }
-
-    //                     // We don't know which case to pick, but none of the other cases contain the variable so
-    //                     // it's all dependent on whether the last case contains the variable.
-    //                     Ok(default.contains_value(key, lookup))
-    //                 }
-    //             }
-    //         },
-    //         PartiallyResolvedStructureType::Repeat{structure, seq, finalized, ..} | PartiallyResolvedStructureType::RepeatUntil{structure, seq, finalized, ..} => {
-    //             match lookup(&self.repetitions_id()) {
-    //                 Some(_) => {
-    //                     // If repetions is not None, then the "seq" variable should already be populated.
-    //                     // No processing is needed here.
-    //                 },
-    //                 None => {
-    //                     return Ok(structure.contains_value(key, lookup))
-    //                 }
-    //             }
-
-    //             if *finalized {
-    //                 // If the seq variable is populated, just treat it like a Sequence
-    //                 let mut result = DepResult::Success(false);
-    //                 for structure in seq {
-    //                     match structure.borrow().contains_value(key.clone(), lookup)? {
-    //                         DepResult::Success(true) => return Ok(DepResult::Success(true)),
-    //                         DepResult::Success(false) => {},
-    //                         DepResult::Incomplete(vars) => {
-    //                             result = DepResult::Incomplete(vars);
-    //                         },
-    //                         DepResult::MightExist(vars) => panic!("contains_value should not return MightExist"),
-    //                         DepResult::DoesNotExist => panic!("Unexpected case")
-    //                     }
-    //                 }
-    //                 Ok(result)
-    //             } else {
-    //                 todo!("Cannot determine for unfinalzed repeat")
-
-    //             }
-    //         }
-    //     }
-    // }
-
     fn try_get_switch_value(&self, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
         match *(self.stype) {
             PartiallyResolvedStructureType::Switch{value, ..} => {
@@ -3363,20 +3490,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
                 // Note: This is discounting the possibility that the length could be determined
                 // by finding that the lengths of all cases are identical
                 let mut parents = HashSet::new();
-                // let switch_index_id = self.id.get_attr_ident(StructureAttrType::SwitchIndex);
-                // parents.insert(switch_index_id.clone().to_abstract());
 
-                // let index = match vd.lookup_struct_attr(&switch_index_id) {
-                //     Some(bp) => bp.expect_integer()? as usize,
-                //     None => { 
-                //         return Ok(DependencyReport::incomplete(parents))
-                //     }
-                // };
-                // let structure = if index < cases.len() {
-                //     cases[index].1
-                // } else {
-                //     default
-                // };
                 if let Some(pss) = pss {
                     let struct_length_id = pss.borrow().id.get_attr_ident(StructureAttrType::Length);
                     let struct_start_pad_id = pss.borrow().id.get_attr_ident(StructureAttrType::StartPad);
@@ -3652,71 +3766,6 @@ struct Structure {
     length: LengthPolicy,
     exports: HashSet<String>,
     stype: StructureType
-}
-
-impl Structure {
-
-    fn length_id(&self) -> String {
-        todo!()
-    }
-
-    fn start_pad_id(&self) -> String {
-        todo!()
-    }
-
-    fn contains_value(&self, key: String, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> DepResult<bool> {
-        todo!()
-    }
-
-    // This returns the minimum dependencies to *start* resolving the structure into
-    // one or more PositionedSectionSpecs. The dependencies returned here should not be
-    // expected to allow the Structure to be completely resolved. In many cases, the data
-    // needed to resolve the Structure may not be completely knowable until it is partially
-    // resolved.
-    // fn dependencies(&self) -> HashSet<String> {
-    //     let mut deps = HashSet::new();
-    //     match &self.stype {
-    //         StructureType::Section(section) => {
-    //             // TODO: Make this add everything needed to resolve the section
-    //             // deps.extend(section.length.vars());
-    //         },
-    //         StructureType::Addressed{position, content} => {
-    //             deps.extend(self.convert_expr_vars(position.vars()));
-    //         },
-    //         StructureType::Sequence(sections) => {
-    //             if !sections.is_empty() {
-    //                 deps.extend(sections[0].dependencies());
-    //             } 
-    //         },
-    //         StructureType::Switch{value, cases, default} => {
-    //             match cases.len() {
-    //                 0 => {},
-    //                 _ => {
-    //                     deps.extend(self.convert_expr_vars(value.vars()));
-    //                     deps.extend(self.convert_expr_vars(cases[0].0.vars()));
-    //                 }
-    //             }
-    //         },
-    //         StructureType::Repeat{n, ..} => {
-    //             deps.extend(self.convert_expr_vars(n.vars()));
-    //         },
-    //         StructureType::RepeatUntil{end, structure} => {
-    //             deps.extend(self.convert_expr_vars(end.vars()));
-    //             deps.extend(structure.dependencies());
-    //         }
-    //     }
-
-    //     deps
-    // }
-
-    // fn resolve(&self, fm: &mut crate::hex_edit::FileManager, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Vec<SectionSpec> {
-    //     match self {
-    //         Structure::Switch{value, cases} => {
-    //             let value = value.evaluate(lookup);
-    //             for (check, s) in 
-    //         }
-    //     }
-    // }
 }
 
 use std::cell::RefCell;
@@ -4206,8 +4255,8 @@ mod file_tests {
 
         let sig_struct = Structure {
             id: "png_signature".to_string(),
-            alignment: Expr::Value(ExprValue::Position(BitPosition::bytes(1))),
-            alignment_base: Expr::Value(ExprValue::Position(BitPosition::zero())),
+            alignment: Expr::Value(ExprValue::Position(BitPosition::from_str("1B").unwrap())),
+            alignment_base: Expr::Value(ExprValue::Position(BitPosition::from_str("0B").unwrap())),
             length: LengthPolicy::FitContents,
             exports: HashSet::new(),
             stype: StructureType::Section(sig_section)
