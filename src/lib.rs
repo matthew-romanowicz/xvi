@@ -16,8 +16,11 @@ mod large_text_view;
 use crate::large_text_view::LargeTextView;
 
 mod hex_edit;
-use crate::hex_edit::{FileManager, Action, CompoundAction, ActionStack, UpdateDescription, EditMode, ActionResult, ShowType, ByteOperation, FillType, shift_vector, vector_op, HexEdit, DataSource};
+use crate::hex_edit::{FileManager, Action, CompoundAction, ActionStack, UpdateDescription, 
+        EditMode, ActionResult, ShowType, ByteOperation, FillType, shift_vector, 
+        vector_op, HexEdit, DataSource, Structure, make_png};
 pub use crate::hex_edit::FileManagerType;
+
 
 mod parsers;
 use crate::parsers::{CommandToken, CommandKeyword, parse_command, parse_bytes, KeystrokeToken, parse_keystroke};
@@ -199,12 +202,17 @@ impl<'a> EditorStack<'a> {
         }
     }
 
-    fn push(&mut self, filename: String, file_manager_type: FileManagerType, extract: bool) -> std::io::Result<usize> {
+    fn push(&mut self, filename: String, file_manager_type: FileManagerType, extract: bool, file_spec: Option<&'a Structure>) -> std::io::Result<usize> {
         let fm = FileManager::new(filename, file_manager_type, extract)?;
+        let mut hex_edit = HexEdit::new(fm, self.x, self.y, self.width, self.height,
+            16, self.show_filename, self.show_hex, self.show_ascii, // Line Length, Show filename, Show Hex, Show ASCII
+            '.', "  ".to_string(), self.caps);
+        if let Some(s) = file_spec {
+            hex_edit.set_file_spec(&s);
+        }
+        
         self.editors.push(HexEditManager {
-            hex_edit: HexEdit::new(fm, self.x, self.y, self.width, self.height,
-                16, self.show_filename, self.show_hex, self.show_ascii, // Line Length, Show filename, Show Hex, Show ASCII
-                '.', "  ".to_string(), self.caps), // Invalid ASCII, Separator, Capitalize Hex
+            hex_edit,
             action_stack: ActionStack::new(256)
         });
 
@@ -953,11 +961,12 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
 
     init_colors();
 
+    let png = make_png();
 
     let mut current_keystroke = Vec::<char>::new();
 
     let mut editors = EditorStack::new(0, 0, window.get_max_x() as usize - 1, window.get_max_y()as usize - 1);
-    if let Err(msg) = editors.push(filename, file_manager_type, extract) {
+    if let Err(msg) = editors.push(filename, file_manager_type, extract, Some(&png)) {
         eprintln!("{}", msg);
         std::process::exit(1);
     };
@@ -1131,7 +1140,7 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                                 manual_view.draw(&mut window);
                             },
                             CommandInstruction::Open(filename) => {
-                                if let Ok(i) = editors.push(filename, FileManagerType::ReadOnly, extract) {
+                                if let Ok(i) = editors.push(filename, FileManagerType::ReadOnly, extract, None) {
                                     editors.current = i;
                                     editors.editors[editors.current].hex_edit.set_viewport_row(0);
                                     editors.editors[editors.current].hex_edit.draw(&mut window);//.update(&mut window, UpdateDescription::All);

@@ -6,6 +6,8 @@ use flate2::write::DeflateEncoder;
 use flate2::write::DeflateDecoder;
 use flate2::Compression;
 
+use bitutils2::{BitIndex};
+
 use crate::globals;
 
 use crate::AlertType;
@@ -14,7 +16,8 @@ mod file_manager;
 pub use crate::hex_edit::file_manager::{FileManagerType, FileManager};
 
 mod file_specs;
-use crate::hex_edit::file_specs::{FileSpec, BinaryField, PngFileSpec};
+pub use crate::hex_edit::file_specs::{FileSpec, BinaryField, PngFileSpec, ExprValue, FileMap, FileRegion, Structure, make_png};
+
 
 extern crate pancurses;
 use pancurses::{Input, Window, Attributes, chtype, start_color, init_pair};
@@ -853,8 +856,8 @@ pub struct HexEdit<'a> {
     display_data: Vec::<u8>,
     valid_bytes: usize,
     clipboard_registers: [Vec::<u8>; 32], //Needs to be 32 or less for Default::default() to work
-    file_spec: Option<Box<dyn FileSpec>>,
-    current_field: Option<BinaryField>
+    file_spec: Option<FileMap<'a>>,
+    current_field: Option<std::ops::Range<BitIndex>>
 }
 
 pub fn shift_vector(buffer: &mut Vec<u8>, shift: i8) -> Result<(), String> { // TODO: 8 and -8 cause panic
@@ -898,7 +901,9 @@ impl<'a> HexEdit<'a> {
     pub fn new(mut file_manager: FileManager, x: usize, y: usize, width: usize, height: usize, line_length: u8, show_filename: bool, 
                 show_hex: bool, show_ascii: bool, invalid_ascii_char: char, separator: String, capitalize_hex: bool) -> HexEdit {
 
-        let fs = PngFileSpec::new(&mut file_manager);
+        // let fs = PngFileSpec::new(&mut file_manager);
+        // let png_struct = make_png();
+        // let fs = FileMap::new(&png_struct);
 
         HexEdit {
             file_manager,
@@ -927,7 +932,7 @@ impl<'a> HexEdit<'a> {
             display_data: Vec::<u8>::new(),
             valid_bytes: 0,
             clipboard_registers: Default::default(),
-            file_spec: Some(Box::new(fs)),
+            file_spec: None,
             current_field: None
         }
     }
@@ -1007,6 +1012,10 @@ impl<'a> HexEdit<'a> {
     pub fn set_fill(&mut self, fill: FillType) -> ActionResult {
         self.fill = fill;
         ActionResult::no_error(UpdateDescription::NoUpdate) // TODO: Make this return an action
+    }
+
+    pub fn set_file_spec(&mut self, fs: &'a Structure) {
+        self.file_spec = Some(FileMap::new(fs))
     }
 
     pub fn get_cursor_pos(&self) -> usize {
@@ -1651,16 +1660,34 @@ impl<'a> HexEdit<'a> {
         res.set_action(Some(Rc::new(action)));
 
         if let Some(ref mut fs) = &mut self.file_spec {
-            self.current_field = fs.field_at(self.cursor_pos, &mut self.file_manager);
-            match &self.current_field {
-                Some(field) => {
-                    let field_info = match &field.value {
-                        Some(s) => format!("{}: {}", field.name, s).to_string(),
-                        None => field.name.clone()
-                    };
-                    res.set_info(field_info)
-                },
-                _ => {}
+            // self.current_field = fs.field_at(self.cursor_pos, &mut self.file_manager);
+            if self.cursor_pos < self.file_manager.len() {
+                let region = fs.region_at(BitIndex::bytes(self.cursor_pos), &mut self.file_manager);
+
+                match region {
+                    FileRegion::Field(field_id) => {
+                        let s_name = fs.structure_name(field_id.structure.clone());
+                        let field = fs.get_field(field_id.clone(), &mut self.file_manager);
+                        self.current_field = Some(field.start..(field.start + field.span));
+                        let value = field.parse(&mut self.file_manager).unwrap();
+                        let field_info = match value {
+                            ExprValue::Integer(v) => format!("[{}] {}: {}", s_name, field.name, v).to_string(),
+                            ExprValue::String(v) => format!("[{}] {}: {}", s_name, field.name, v).to_string(),
+                            _ => todo!()
+                        };
+                        res.set_info(field_info);
+                        
+                    },
+                    FileRegion::Spare(struct_id, rng) => {
+                        self.current_field = Some(rng);
+                        let s_name = fs.structure_name(struct_id);
+                        res.set_info(format!("[{}] Spare", s_name).to_string());
+                    }
+                    _ => todo!()
+                }
+            } else {
+                self.current_field = None;
+                
             }
         }
         
@@ -1985,10 +2012,12 @@ impl<'a> HexEdit<'a> {
         let field_attr = chtype::from(field_attr);
 
         if let Some(h) = &self.current_field {
-            if h.start + h.span > start && h.start < end { // If the highlight is in the viewport
-                let first_line = (h.start / (self.line_length as usize)) as isize - (self.start_line as isize);
-                let last_line = ((h.start + h.span) / (self.line_length as usize)) as isize - (self.start_line as isize);
-                // if (h.start + h.span) % (self.line_length as usize) == 0 {
+            let h_end = h.end.byte();
+            let h_start = h.start.byte();
+            if h_end > start && h_start < end { // If the highlight is in the viewport
+                let first_line = (h_start / (self.line_length as usize)) as isize - (self.start_line as isize);
+                let last_line = ((h_end) / (self.line_length as usize)) as isize - (self.start_line as isize);
+                // if (h_start + h.span) % (self.line_length as usize) == 0 {
                 //     last_line -= 1;
                 // }
                 //println!("In view: {}, {}", first_line, last_line);
@@ -1996,12 +2025,12 @@ impl<'a> HexEdit<'a> {
                     let mut x1 = 0;
                     let mut x2 = self.line_length as usize;
                     if y == first_line {
-                        x1 = h.start % (self.line_length as usize);
+                        x1 = h_start % (self.line_length as usize);
                     }
                     if y == last_line {
-                        x2 = (h.start + h.span) % (self.line_length as usize);
+                        x2 = (h_end) % (self.line_length as usize);
                     }
-                    // println!("y={}, x1={}, x2={}, h.start={}, h.span={}, line_length={}", y, x1, x2, h.start, h.span, self.line_length);
+                    // println!("y={}, x1={}, x2={}, h_start={}, h.span={}, line_length={}", y, x1, x2, h_start, h.span, self.line_length);
                     if x1 != x2 {
                         window.mvchgat(top_margin + y as i32, (x1*3 + hex_offset) as i32, ((x2 - x1)*3 - 1) as i32, field_attr, 0);
                         //window.mvchgat(top_margin + y as i32, (x1 + ascii_offset) as i32, (x2 - x1) as i32, field_attr, 0);

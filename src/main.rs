@@ -1,4 +1,5 @@
 use std::env;
+use log::*;
 use xvi::{run, FileManagerType};
 
 fn main() {
