@@ -1,0 +1,287 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<sequence id="PNG" name="PNG" length-policy="expand">
+    <section id="png_sig" name="PNG Signature">
+        <field id="png_sig" name="PNG Signature" length="8B" dtype="B"/>
+    </section>
+
+    <repeat id="png_chunks" name="PNG Chunks" until="file.end" length-policy="expand">
+        <sequence id="chunk" name="Chunk" length-policy="fit">
+
+            <export source="ihdr_color_type"/>
+
+            <section-header id="chunk_header" name="Chunk Header" length="8B">
+                <export source="chunk_length"/>
+                <export source="chunk_type"/>
+                <field id="chunk_length" name="Chunk Length" length="4B" dtype="U" endian="big" units="bytes"/>
+                <field id="chunk_type" name="Chunk Type" length="4B" dtype="S"/>
+            </section-header>
+
+            <switch id="chunk_body" name="Chunk Body" value="chunk_type" length="bytes(chunk_length)">
+
+                <export source="ihdr_color_type"/>
+                <anchor id="chunk_body_start" offset="0B"/>
+
+
+                <switch-case check="$0 == 'IHDR'">
+                    <section-body id="ihdr_body" name="IHDR Body" length-policy="expand">
+                        <export source="ihdr_color_type"/>
+                        <field id="ihdr_width" name="Width" length="4B" dtype="U" endian="big" units="px"/>
+                        <field id="ihdr_height" name="Height" length="4B" dtype="U" endian="big" units="px"/>
+                        <field id="ihdr_bit_depth" name="Bit Depth" length="1B" dtype="U" endian="big"/>
+                        <field id="ihdr_color_type" name="Color Type" length="1B" dtype="U" endian="big">
+                            <enum>
+                                <enum-case index="0" value="Grayscale"/>
+                                <enum-case index="2" value="Truecolor"/>
+                                <enum-case index="3" value="Indexed"/>
+                                <enum-case index="4" value="Grayscale and Alpha"/>
+                                <enum-case index="6" value="Truecolor and Alpha"/>
+                                <enum-else value="Invalid"/>
+                            </enum>
+                        </field>
+                        <field id="ihdr_compression_method" name="Compression Method" length="1B" dtype="U" endian="big">
+                            <enum>
+                                <enum-case index="0" value="Only Accepted Value"/>
+                                <enum-else value="Invalid"/>
+                            </enum>
+                        </field>
+                        <field id="ihdr_filter_method" name="Filter Method" length="1B" dtype="U" endian="big">
+                            <enum>
+                                <enum-case index="0" value="Only Accepted Value"/>
+                                <enum-else value="Invalid"/>
+                            </enum>
+                        </field>
+                        <field id="ihdr_interlace_method" name="Interlace Method" length="1B" dtype="U" endian="big">
+                            <enum>
+                                <enum-case index="0" value="No Interlace"/>
+                                <enum-case index="1" value="Adam7 Interlace"/>
+                                <enum-else value="Invalid"/>
+                            </enum>
+                        </field>
+                    </section-body>
+                </switch-case>
+
+                <!-- https://www.w3.org/TR/png/#11tRNS -->
+                <switch-case check="$0 == 'tRNS'">
+                    <switch id="trns_body" name="tRNS Body" value="ihdr_color_type" length-policy="expand">
+                        <switch-case check="$0 == 0">
+                            <section-body id="trns_body_gray" name="tRNS Body (Grayscale)">
+                                <field id="trns_gray" name="Gray Sample Value" length="2B" dtype="U" endian="big"/>
+                            </section-body>
+                        </switch-case>
+                        <switch-case check="$0 == 3">
+                            <section-body id="trns_body_rgb" name="tRNS Body (RGB)">
+                                <field id="trns_red" name="Red Sample Value" length="2B" dtype="U" endian="big"/>
+                                <field id="trns_green" name="Green Sample Value" length="2B" dtype="U" endian="big"/>
+                                <field id="trns_blue" name="Blue Sample Value" length="2B" dtype="U" endian="big"/>
+                            </section-body>
+                        </switch-case>
+                        <switch-case check="$0 == 3">
+                            <repeat id="trns_body_indexed" name="tRNS Body (Indexed)" n="chunk_length">
+                                <section-body id="trns_pallette" name="tRNS Pallette">
+                                    <field id="trns_alpha" name="Alpha" length="1B" dtype="U" endian="big"/>
+                                </section-body>
+                            </repeat>
+                        </switch-case>
+                        <switch-else>
+                            <section-body id="trns_default_body" name="tRNS Default Body" length-policy="expand">
+                            </section-body>
+                        </switch-else>
+                    </switch>
+                </switch-case>
+
+                <!-- https://www.w3.org/TR/png/#11cHRM -->
+                <switch-case check="$0 == 'cHRM'">
+                    <section-body id="chrm_body" name="cHRM Body" length-policy="expand">
+                        <field id="chrm_white_x" name="White Point X" length="4B" dtype="U" endian="big"/>
+                        <field id="chrm_white_y" name="White Point Y" length="4B" dtype="U" endian="big"/>
+                        <field id="chrm_red_x" name="Red X" length="4B" dtype="U" endian="big"/>
+                        <field id="chrm_red_y" name="Red Y" length="4B" dtype="U" endian="big"/>
+                        <field id="chrm_green_x" name="Green X" length="4B" dtype="U" endian="big"/>
+                        <field id="chrm_green_y" name="Green Y" length="4B" dtype="U" endian="big"/>
+                        <field id="chrm_blue_x" name="Blue X" length="4B" dtype="U" endian="big"/>
+                        <field id="chrm_blue_y" name="Blue Y" length="4B" dtype="U" endian="big"/>
+                    </section-body>
+                </switch-case>
+
+                <!-- https://www.w3.org/TR/png/#11gAMA -->
+                <switch-case check="$0 == 'gAMA'">
+                    <section-body id="gama_body" name="gAMA Body" length-policy="expand">
+                        <field id="gama_gamma" name="Gamma" length="4B" dtype="U" endian="big" units="E-5"/>
+                    </section-body>
+                </switch-case>
+
+                <switch-case check="$0 == 'pHYs'">
+                    <section-body id="phys body" name="pHYs Body" length-policy="expand">
+                        <field id="phys_ppu_x" name="Pixels Per Unit (X)" length="4B" dtype="U" endian="big" units="px"/>
+                        <field id="phys_ppu_y" name="Pixels Per Unit (Y)" length="4B" dtype="U" endian="big" units="px"/>
+                        <field id="phys_unit" name="Unit Specifier" length="1B" dtype="U" endian="big">
+                            <enum>
+                                <enum-case index="0" value="Unknown"/>
+                                <enum-case index="1" value="Meter"/>
+                                <enum-else value="Invalid"/>
+                            </enum>
+                        </field>
+                    </section-body>
+                </switch-case>
+
+                <!-- https://www.w3.org/TR/png/#11sPLT -->
+                <switch-case check="$0 == 'sPLT'">
+                    <sequence id="splt_chunk" name="sPLT Chunk" length-policy="expand">
+                        <section-header id="splt_header" name="sPLT Header" length-policy="fit">
+                            <export source="splt_sample_depth"/>
+                            <search id="null_location" start="chunk_body_start" n="0" find=":00"/>
+                            <field id="splt_name" name="Pallette Name" length="null_location - chunk_body_start" dtype="S" endian="big"/>
+                            <field id="splt_null" name="Null Seprator" length="1B" dtype="U" endian="big"/>
+                            <field id="splt_sample_depth" name="Sample Depth" length="1B" dtype="U" endian="big"/>
+                        </section-header>
+                        <switch id="splt_switch" name="sPLT Switch" value="splt_sample_depth" length-policy="expand">
+                            <switch-case check="$0 == 8">
+                                <repeat id="splt_body" name="sPLT Body" until="chunk_body_start + bytes(chunk_length)" length-policy="expand">
+                                    <section-body id="splt_pallette" name="sPLT Pallette" length="6B">
+                                        <field id="splt_red" name="Red" length="1B" dtype="U" endian="big"/>
+                                        <field id="splt_green" name="Green" length="1B" dtype="U" endian="big"/>
+                                        <field id="splt_blue" name="Blue" length="1B" dtype="U" endian="big"/>
+                                        <field id="splt_alpha" name="Alpha" length="1B" dtype="U" endian="big"/>
+                                        <field id="splt_freq" name="Frequency" length="2B" dtype="U" endian="big"/>
+                                    </section-body>
+                                </repeat>
+                            </switch-case>
+                            <switch-case check="$0 == 16">
+                                <repeat id="splt_body" name="sPLT Body" until="chunk_body_start + bytes(chunk_length)" length-policy="expand">
+                                    <section-body id="splt_pallette" name="sPLT Pallette" length="10B">
+                                        <field id="splt_red" name="Red" length="2B" dtype="U" endian="big"/>
+                                        <field id="splt_green" name="Green" length="2B" dtype="U" endian="big"/>
+                                        <field id="splt_blue" name="Blue" length="2B" dtype="U" endian="big"/>
+                                        <field id="splt_alpha" name="Alpha" length="2B" dtype="U" endian="big"/>
+                                        <field id="splt_freq" name="Frequency" length="2B" dtype="U" endian="big"/>
+                                    </section-body>
+                                </repeat>
+                            </switch-case>
+                            <switch-else>
+                                <section-body id="splt_default_body" name="sPLT Default Body" length-policy="expand">
+                                </section-body>
+                            </switch-else>
+                        </switch>
+                    </sequence>
+                </switch-case>
+
+                <!-- https://www.w3.org/TR/png/#11PLTE -->
+                <switch-case check="$0 == 'PLTE'">
+                    <repeat id="splt_body" name="sPLT Body" until="chunk_body_start + bytes(chunk_length)" length-policy="expand">
+                        <section-body id="plte_pallette" name="PLTE Pallette" length="3B">
+                            <field id="plte_red" name="Red" length="1B" dtype="U" endian="big"/>
+                            <field id="plte_green" name="Green" length="1B" dtype="U" endian="big"/>
+                            <field id="plte_blue" name="Blue" length="1B" dtype="U" endian="big"/>
+                        </section-body>
+                    </repeat>
+                </switch-case>
+
+                <!-- https://www.w3.org/TR/png/#11bKGD -->
+                <switch-case check="$0 == 'bKGD'">
+                    <switch id="bkgd_body" name="bKGD Body" value="ihdr_color_type" length-policy="expand">
+                        <switch-case check="$0 == 0 || $0 == 4">
+                            <section-body id="bkgd_body_gray" name="bKGD Body (Grayscale)">
+                                <field id="bkgd_gray" name="Grayscale" length="2B" dtype="U" endian="big"/>
+                            </section-body>
+                        </switch-case>
+                        <switch-case check="$0 == 2 || $0 == 6">
+                            <section-body id="bkgd_body_rgb" name="bKGD Body (RGB)">
+                                <field id="bkgd_red" name="Red" length="2B" dtype="U" endian="big"/>
+                                <field id="bkgd_green" name="Green" length="2B" dtype="U" endian="big"/>
+                                <field id="bkgd_blue" name="Blue" length="2B" dtype="U" endian="big"/>
+                            </section-body>
+                        </switch-case>
+                        <switch-case check="$0 == 3">
+                            <section-body id="bkgd_body_indexed" name="bKGD Body (Indexed)">
+                                <field id="bkgd_alpha" name="Alpha" length="1B" dtype="U" endian="big"/>
+                            </section-body>
+                        </switch-case>
+                        <switch-else>
+                            <section-body id="bkgd_default_body" name="bKGD Default Body" length-policy="expand">
+                            </section-body>
+                        </switch-else>
+                    </switch>
+                </switch-case>
+
+                <!-- https://www.w3.org/TR/png/#11hIST -->
+                <switch-case check="$0 == 'hIST'">
+                    <repeat id="hist_body" name="hIST Body" until="chunk_body_start + bytes(chunk_length)" length-policy="expand">
+                        <section-body id="hist_entry" name="hIST Entry">
+                            <field id="hist_freq" name="Frequency" length="2B" dtype="U" endian="big"/>
+                        </section-body>
+                    </repeat>
+                </switch-case>
+
+                <!-- https://www.w3.org/TR/png/#11tIME -->
+                <switch-case check="$0 == 'tIME'">
+                    <section-body id="time_body" name="tIME Body">
+                        <field id="time_year" name="Year" length="2B" dtype="U" endian="big"/>
+                        <field id="time_month" name="Month" length="1B" dtype="U" endian="big"/>
+                        <field id="time_day" name="Day" length="1B" dtype="U" endian="big"/>
+                        <field id="time_hour" name="Hour" length="1B" dtype="U" endian="big"/>
+                        <field id="time_minute" name="Minute" length="1B" dtype="U" endian="big"/>
+                        <field id="time_second" name="Second" length="1B" dtype="U" endian="big"/>
+                    </section-body>
+                </switch-case>
+
+                <switch-case check="$0 == 'tEXt'">
+                    <section-body id="text_body" name="tEXt Body" length-policy="expand">
+                        <anchor id="text_start" offset="0B"/>
+                        <search id="null_location" start="text_start" n="0" find=":00"/>
+                        <field id="text_keyword" name="Keyword" length="null_location - text_start" dtype="S" endian="big"/>
+                        <field id="text_null" name="Null Seprator" length="1B" dtype="U" endian="big"/>
+                        <!-- (text_start - null_location) + (bytes(chunk_length - 1)) -->
+                        <field id="text_string" name="String" length="text_start - null_location + bytes(chunk_length - 1)" dtype="S" endian="big"/>
+                    </section-body>
+                </switch-case>
+
+                <switch-case check="$0 == 'sBIT'">
+                    <switch id="sbit_body" name="sBIT Body" length-policy="expand" value="ihdr_color_type">
+                        <switch-case check="$0 == 0">
+                            <section-body id="sbit_body_grey" name="sBIT Body (Grayscale)">
+                                <field id="sbit_gray" name="Significant Grayscale Bits" length="1B" dtype="U" endian="big"/>
+                            </section-body>
+                        </switch-case>
+                        <switch-case check="$0 == 2 || $0 == 3">
+                            <section-body id="sbit_body_rgb" name="sBIT Body (RGB)">
+                                <field id="sbit_red" name="Significant Red Bits" length="1B" dtype="U" endian="big"/>
+                                <field id="sbit_green" name="Significant Green Bits" length="1B" dtype="U" endian="big"/>
+                                <field id="sbit_blue" name="Significant Blue Bits" length="1B" dtype="U" endian="big"/>
+                            </section-body>
+                        </switch-case>
+                        <switch-case check="$0 == 4">
+                            <section-body id="sbit_body_ga" name="sBIT Body (Gray/Alpha)">
+                                <field id="sbit_gray" name="Significant Grayscale Bits" length="1B" dtype="U" endian="big"/>
+                                <field id="sbit_alpha" name="Significant Alpha Bits" length="1B" dtype="U" endian="big"/>
+                            </section-body>
+                        </switch-case>
+                        <switch-case check="$0 == 6">
+                            <section-body id="sbit_body_rgba" name="sBIT Body (RGBA)">
+                                <field id="sbit_red" name="Significant Red Bits" length="1B" dtype="U" endian="big"/>
+                                <field id="sbit_green" name="Significant Green Bits" length="1B" dtype="U" endian="big"/>
+                                <field id="sbit_blue" name="Significant Blue Bits" length="1B" dtype="U" endian="big"/>
+                                <field id="sbit_alpha" name="Significant Alpha Bits" length="1B" dtype="U" endian="big"/>
+                            </section-body>
+                        </switch-case>
+                        <switch-else>
+                            <section-body id="default_sbit_body" name="Default sBIT Body" length-policy="expand">
+                                <field id="sbit_body" name="sBIT Body" length="bytes(chunk_length)" dtype="B"/>
+                            </section-body>
+                        </switch-else>
+                    </switch>
+                </switch-case>
+                <switch-else>
+                    <section-body id="default body" name="Default Body" length-policy="expand">
+                        <field id="chunk_body" name="Chunk Body" length="bytes(chunk_length)" dtype="B"/>
+                    </section-body>
+                </switch-else>
+            </switch>
+
+            <section-footer id="chunk_footer" name="Chunk Footer" length="4B">
+                <field id="chunk_crc" name="Chunk CRC" length="4B" dtype="B"/>
+            </section-footer>
+
+        </sequence>
+    </repeat>
+
+</sequence>

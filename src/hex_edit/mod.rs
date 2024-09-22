@@ -1670,11 +1670,13 @@ impl<'a> HexEdit<'a> {
                         let field = fs.get_field(field_id.clone(), &mut self.file_manager);
                         self.current_field = Some(field.start..(field.start + field.span));
                         let value = field.parse(&mut self.file_manager).unwrap();
-                        let field_info = match value {
-                            ExprValue::Integer(v) => format!("[{}] {}: {}", s_name, field.name, v).to_string(),
-                            ExprValue::String(v) => format!("[{}] {}: {}", s_name, field.name, v).to_string(),
-                            _ => todo!()
-                        };
+                        let field_data = fs.format_field_data(field_id, value);
+                        let field_info = format!("[{}] {}: {}", s_name, field.name, field_data).to_string();
+                        // let field_info = match value {
+                        //     ExprValue::Integer(v) => format!("[{}] {}: {}", s_name, field.name, v).to_string(),
+                        //     ExprValue::String(v) => format!("[{}] {}: {}", s_name, field.name, v).to_string(),
+                        //     _ => todo!()
+                        // };
                         res.set_info(field_info);
                         
                     },
@@ -1687,7 +1689,7 @@ impl<'a> HexEdit<'a> {
                 }
             } else {
                 self.current_field = None;
-                
+
             }
         }
         

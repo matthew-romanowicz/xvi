@@ -528,7 +528,7 @@ impl FileManager<'_> {
         }        
     }
 
-    pub fn find(&mut self, expr: &Vec<u8>, ignore_case: bool, use_regex: bool) -> Vec<FindResult>{
+    pub fn find(&mut self, expr: &Vec<u8>, ignore_case: bool, use_regex: bool) -> Vec<FindResult> {
         let mut result = Vec::<FindResult>::new();
         match self.file_manager_type {
             FileManagerType::RamOnly => {

@@ -4,6 +4,8 @@ use xvi::{run, FileManagerType};
 
 fn main() {
 
+    pretty_env_logger::init();
+
     const VERSION: &str = env!("CARGO_PKG_VERSION");
 
     let HELP_TEXT: String = format!("xvi v{} (2023-05-14)
@@ -57,7 +59,14 @@ options:
     }
 
 
-    match run(r"C:\Users\Matthew\Documents\Rust\xvi\test_file.png".to_string(), file_manager_type, extract) {
+    let fname = r"C:\Users\Matthew\Documents\Rust\xvi\tests\ps2n0g08.png".to_string();
+    // let fname = r"C:\Users\Matthew\Documents\Rust\xvi\tests\s03n3p01.png".to_string();
+    // let fname = r"C:\Users\Matthew\Documents\Rust\xvi\tests\tbbn0g04.png".to_string();
+    // let fname = r"C:\Users\Matthew\Documents\Rust\xvi\tests\ch1n3p04.png".to_string();
+    // let fname = r"C:\Users\Matthew\Documents\Rust\xvi\tests\cm9n0g04.png".to_string();
+    // let fname = r"C:\Users\Matthew\Documents\Rust\xvi\tests\ccwn3p08.png".to_string();
+    // let fname = r"C:\Users\Matthew\Documents\Rust\xvi\tests\exif2c08.png".to_string();
+    match run(fname, file_manager_type, extract) {
         Ok(_) => {
             std::process::exit(0);
         },
