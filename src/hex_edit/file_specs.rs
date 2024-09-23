@@ -2335,9 +2335,8 @@ enum DataSource {
 }
 
 enum PartiallyResolvedStructureType<'a> {
-    UnresolvedSection{initial: &'a SectionSpec, pss: Option<PositionedSectionSpec<'a>>},
-    ResolvedSection(PositionedSectionSpec<'a>),
-    Addressed{position: &'a Expr, content: &'a Structure, pss: Option<Rc<RefCell<PartiallyResolvedStructure<'a>>>>},
+    UnresolvedSection{initial: &'a SectionSpec},
+    Addressed{position: &'a Expr, pss: Rc<RefCell<PartiallyResolvedStructure<'a>>>},
     Sequence(Vec<Rc<RefCell<PartiallyResolvedStructure<'a>>>>),
     Switch{value: &'a Expr, cases: Vec<(&'a Expr, &'a Structure)>, default: &'a Structure, pss: Option<Rc<RefCell<PartiallyResolvedStructure<'a>>>>},
     Repeat{n: &'a Expr, structure: &'a Structure, seq: Vec<Rc<RefCell<PartiallyResolvedStructure<'a>>>>, finalized: bool}, // seq is used to store the actual structure instances once "n" is determined
@@ -2370,14 +2369,14 @@ impl<'a> PartiallyResolvedStructure<'a> {
         let mut import_monikers = HashMap::new();
         let stype = match &original.stype {
             StructureType::Section(section) => {
-                PartiallyResolvedStructureType::UnresolvedSection{initial: &section, pss: None}
+                PartiallyResolvedStructureType::UnresolvedSection{initial: &section}
             },
             StructureType::Addressed{position, content} => {
                 for name in &content.exports {
                     import_monikers.insert(name.clone(), None);
                 }
                 let pss = PartiallyResolvedStructure::new(&content, parent_id.clone(), prs_map);
-                PartiallyResolvedStructureType::Addressed{position: &position, content: &content, pss: Some(pss)}
+                PartiallyResolvedStructureType::Addressed{position: &position, pss}
             },
             StructureType::Sequence(seq) => {
                 for structure in seq {
@@ -2442,14 +2441,14 @@ impl<'a> PartiallyResolvedStructure<'a> {
         let mut import_monikers = HashMap::new();
         let stype = match &original.stype {
             StructureType::Section(section) => {
-                PartiallyResolvedStructureType::UnresolvedSection{initial: &section, pss: None}
+                PartiallyResolvedStructureType::UnresolvedSection{initial: &section}
             },
             StructureType::Addressed{position, content} => {
                 for name in &content.exports {
                     import_monikers.insert(name.clone(), None);
                 }
                 let pss = PartiallyResolvedStructure::new_indexed(&content, parent_id.clone(), index.clone(), prs_map);
-                PartiallyResolvedStructureType::Addressed{position: &position, content: &content, pss: Some(pss)}
+                PartiallyResolvedStructureType::Addressed{position: &position, pss}
             },
             StructureType::Sequence(seq) => {
                 for structure in seq {
@@ -2529,7 +2528,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
                 }
             },
             PartiallyResolvedStructureType::Addressed{ref mut pss, ..} => {
-                pss.as_ref().unwrap().borrow_mut().initialize_inherited_monikers(prs_map, child_monikers.clone());
+                pss.borrow_mut().initialize_inherited_monikers(prs_map, child_monikers.clone());
             },
             _ => {
                 // Do nothing
@@ -2592,7 +2591,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
         }
 
         match self.stype.as_ref() {
-            PartiallyResolvedStructureType::UnresolvedSection{initial, ..} => {
+            PartiallyResolvedStructureType::UnresolvedSection{initial} => {
                 let mut prev_end = start;
                 for field in &initial.fields {
                     let field_id = self.id.get_field_ident(field.id.clone());
@@ -2627,15 +2626,8 @@ impl<'a> PartiallyResolvedStructure<'a> {
                 }
                 Ok(DependencyReport::success(FileRegion::Spare(self.id.clone(), prev_end..end)))
             },
-            PartiallyResolvedStructureType::ResolvedSection(section) => {
-                todo!()
-            },
             PartiallyResolvedStructureType::Addressed{position, pss, ..} => {
-                if let Some(pss) = pss {
-                    return pss.borrow().try_get_region_at(vd, location)
-                } else {
-                    todo!("This should be impossible since pss is always Some when inititalized")
-                }
+                return pss.borrow().try_get_region_at(vd, location)
             },
             PartiallyResolvedStructureType::Sequence(seq) => {
                 for prs in seq {
@@ -2792,7 +2784,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
                 };
 
                 match self.stype.as_ref() {
-                    PartiallyResolvedStructureType::UnresolvedSection{initial, pss} => {
+                    PartiallyResolvedStructureType::UnresolvedSection{initial} => {
                         match initial.get_field_info(field_id.id.clone()) {
                             Ok((name, dtype, endian)) => {
                                 let field = UnparsedBinaryField {
@@ -2991,7 +2983,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
 
     fn try_get_field_position(&self, field_id: FieldIdent, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
         match self.stype.as_ref() {
-            PartiallyResolvedStructureType::UnresolvedSection{initial, pss} => {
+            PartiallyResolvedStructureType::UnresolvedSection{initial} => {
                 let field_index = match initial.id_map.get(&field_id.id) {
                     Some(i) => i,
                     None => return Ok(DependencyReport::does_not_exist())
@@ -3042,7 +3034,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
 
     fn try_get_field_start(&self, field_id: FieldIdent, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
         match self.stype.as_ref() {
-            PartiallyResolvedStructureType::UnresolvedSection{initial, pss} => {
+            PartiallyResolvedStructureType::UnresolvedSection{initial} => {
 
                 let start_pad_id = field_id.clone().get_attr_ident(FieldAttrType::StartPad);
                 let position_id = field_id.clone().get_attr_ident(FieldAttrType::Position);
@@ -3074,7 +3066,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
     fn try_get_field_start_pad(&self, field_id: FieldIdent, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
 
         match self.stype.as_ref() {
-            PartiallyResolvedStructureType::UnresolvedSection{initial, pss} => {
+            PartiallyResolvedStructureType::UnresolvedSection{initial} => {
 
                 let alignment_id = field_id.clone().get_attr_ident(FieldAttrType::Align);
                 let alignment_base_id = field_id.clone().get_attr_ident(FieldAttrType::AlignBase);
@@ -3121,7 +3113,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
 
     fn try_get_field_length(&self, field_id: FieldIdent, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
         match self.stype.as_ref() {
-            PartiallyResolvedStructureType::UnresolvedSection{initial, pss} => {
+            PartiallyResolvedStructureType::UnresolvedSection{initial} => {
                 let field_index = match initial.id_map.get(&field_id.id) {
                     Some(i) => i,
                     None => return Ok(DependencyReport::does_not_exist())
@@ -3149,7 +3141,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
 
     fn try_get_field_offset(&self, field_id: FieldIdent, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
         match self.stype.as_ref() {
-            PartiallyResolvedStructureType::UnresolvedSection{initial, pss} => {
+            PartiallyResolvedStructureType::UnresolvedSection{initial} => {
                 let field_index = match initial.id_map.get(&field_id.id) {
                     Some(i) => i,
                     None => return Ok(DependencyReport::does_not_exist())
@@ -3176,7 +3168,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
 
     fn try_get_field_alignment(&self, field_id: FieldIdent, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
         match self.stype.as_ref() {
-            PartiallyResolvedStructureType::UnresolvedSection{initial, pss} => {
+            PartiallyResolvedStructureType::UnresolvedSection{initial} => {
                 let field_index = match initial.id_map.get(&field_id.id) {
                     Some(i) => i,
                     None => return Ok(DependencyReport::does_not_exist())
@@ -3203,7 +3195,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
 
     fn try_get_field_alignment_base(&self, field_id: FieldIdent, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
         match self.stype.as_ref() {
-            PartiallyResolvedStructureType::UnresolvedSection{initial, pss} => {
+            PartiallyResolvedStructureType::UnresolvedSection{initial} => {
                 let field_index = match initial.id_map.get(&field_id.id) {
                     Some(i) => i,
                     None => return Ok(DependencyReport::does_not_exist())
@@ -3230,7 +3222,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
 
     fn try_get_field_end(&self, field_id: FieldIdent, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
         match self.stype.as_ref() {
-            PartiallyResolvedStructureType::UnresolvedSection{initial, pss} => {
+            PartiallyResolvedStructureType::UnresolvedSection{initial} => {
 
                 let start_id = field_id.clone().get_attr_ident(FieldAttrType::Start);
                 let length_id = field_id.clone().get_attr_ident(FieldAttrType::Length);
@@ -3329,38 +3321,30 @@ impl<'a> PartiallyResolvedStructure<'a> {
         let mut current_position_key = self.id.get_attr_ident(StructureAttrType::Position);
 
         match self.stype.as_mut() {
-            PartiallyResolvedStructureType::UnresolvedSection{initial, pss} => {
+            PartiallyResolvedStructureType::UnresolvedSection{..} => {
                 
                 Ok(DependencyReport::does_not_exist())
 
             },
-            PartiallyResolvedStructureType::ResolvedSection(section) => {
-                todo!()
-            },
-            PartiallyResolvedStructureType::Addressed{position, content, ref mut pss, ..} => {
+            PartiallyResolvedStructureType::Addressed{position, ref mut pss, ..} => {
 
                 let position = position.clone(); // Need this for the borrow checker
-                //content.try_lookup(key)
-                if let Some(ref mut pss) = pss {
-                    let dr = pss.borrow_mut().try_lookup(key.clone(), vd, prs_map)?;
 
-                    // This block is to account for children not knowing their own position. This
-                    // catches that case and populates the dependency report itself.
-                    if matches!(dr.result, DepResult::DoesNotExist) && key == pss.borrow().id.get_attr_ident(StructureAttrType::Position).to_abstract() {
-                        match vd.lookup_struct_attr(&current_position_key) {
-                            Some(pos) => {
-                                let mut dr = DependencyReport::success(pos);
-                                dr.add_pc_pairs(HashSet::from([current_position_key.to_abstract()]), HashSet::from([key]));
-                                Ok(dr)
-                            },
-                            None => Ok(DependencyReport::incomplete(HashSet::from([current_position_key.to_abstract()])))
-                        }
-                    } else {
-                        Ok(dr)
+                let dr = pss.borrow_mut().try_lookup(key.clone(), vd, prs_map)?;
+
+                // This block is to account for children not knowing their own position. This
+                // catches that case and populates the dependency report itself.
+                if matches!(dr.result, DepResult::DoesNotExist) && key == pss.borrow().id.get_attr_ident(StructureAttrType::Position).to_abstract() {
+                    match vd.lookup_struct_attr(&current_position_key) {
+                        Some(pos) => {
+                            let mut dr = DependencyReport::success(pos);
+                            dr.add_pc_pairs(HashSet::from([current_position_key.to_abstract()]), HashSet::from([key]));
+                            Ok(dr)
+                        },
+                        None => Ok(DependencyReport::incomplete(HashSet::from([current_position_key.to_abstract()])))
                     }
-
                 } else {
-                    Ok(DependencyReport::might_exist(self.convert_expr_vars(position.vars())?))
+                    Ok(dr)
                 }
                 
             },
@@ -3666,12 +3650,9 @@ impl<'a> PartiallyResolvedStructure<'a> {
 
     fn try_get_position(&self, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
         match self.stype.as_ref() {
-            PartiallyResolvedStructureType::UnresolvedSection{initial, pss: Some(section)} => {
-                Ok(DependencyReport::success(ExprValue::Position(section.get_position())))
-            },
-            PartiallyResolvedStructureType::ResolvedSection(section) => {
-                Ok(DependencyReport::success(ExprValue::Position(section.get_position())))
-            },
+            // PartiallyResolvedStructureType::UnresolvedSection{initial, pss: Some(section)} => {
+            //     Ok(DependencyReport::success(ExprValue::Position(section.get_position())))
+            // },
             PartiallyResolvedStructureType::Addressed{position, ..} => {
                 match position.evaluate_expect_position(lookup) {
                     Ok(value) => {
@@ -3890,7 +3871,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
     fn try_resolve_import(&self, key: String) -> Result<DependencyReport<StructureIdent>, ExprEvalError> {
         info!("Trying to resolve import in {:?}", self.id);
         match self.stype.as_ref() {
-            PartiallyResolvedStructureType::UnresolvedSection{initial, pss} => {
+            PartiallyResolvedStructureType::UnresolvedSection{initial} => {
 
                 if self.exports.contains(&key) {
                     Ok(DependencyReport::success(self.id.clone()))
@@ -3899,19 +3880,11 @@ impl<'a> PartiallyResolvedStructure<'a> {
                 }
                 
             },
-            PartiallyResolvedStructureType::ResolvedSection(section) => {
-                todo!()
-            },
-            PartiallyResolvedStructureType::Addressed{position, content, pss, ..} => {
+            PartiallyResolvedStructureType::Addressed{position, pss, ..} => {
 
-                if content.exports.contains(&key) {
+                if self.exports.contains(&key) {
 
-                    if let Some(pss) = pss {
-                        pss.borrow().try_resolve_import(key)
-
-                    } else {
-                        Ok(DependencyReport::might_exist(self.convert_expr_vars(position.vars())?))
-                    }
+                    pss.borrow().try_resolve_import(key)
                 } else {
                     Ok(DependencyReport::does_not_exist())
                 }
@@ -4001,83 +3974,58 @@ impl<'a> PartiallyResolvedStructure<'a> {
     /// its call in try_get_length. The return value will not be valid outside of that context.
     fn try_get_contents_length(&self, vd: &ValueDictionary, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
         match self.stype.as_ref() {
-            PartiallyResolvedStructureType::UnresolvedSection{initial, pss} => {
-                match pss {
-                    Some(section) => {
-                        let length_id = self.id.get_attr_ident(StructureAttrType::Length);
-                        match vd.lookup_struct_attr(&length_id) {
-                            Some(value) => {
-                                let mut dr = DependencyReport::success(value);
+            PartiallyResolvedStructureType::UnresolvedSection{initial} => {
+                let section = initial;
+                match &section.length {
+                    LengthPolicy::Expand => {
+                        return Ok(DependencyReport::does_not_exist())
+                    },
+                    LengthPolicy::Expr(expr) => {
+                        match expr.evaluate_expect_position(lookup) {
+                            Ok(value) => {
+                                let mut dr = DependencyReport::success(ExprValue::Position(value));
                                 let contents_length_id = self.id.get_attr_ident(StructureAttrType::ContentsLength).to_abstract();
-                                dr.add_pc_pairs(HashSet::from([length_id.to_abstract()]), HashSet::from([contents_length_id]));
+                                dr.add_pc_pairs(self.convert_expr_vars(expr.vars())?, HashSet::from([contents_length_id]));
                                 Ok(dr)
                             },
-                            None => Ok(DependencyReport::incomplete(HashSet::from([length_id.to_abstract()])))
+                            Err(ExprEvalError::LookupError{..}) => Ok(DependencyReport::incomplete(self.convert_expr_vars(expr.vars())?)),
+                            Err(err) => Err(err)
                         }
                     },
-                    None => {
-                        let section = initial;
-                        match &section.length {
-                            LengthPolicy::Expand => {
-                                return Ok(DependencyReport::does_not_exist())
-                            },
-                            LengthPolicy::Expr(expr) => {
-                                match expr.evaluate_expect_position(lookup) {
-                                    Ok(value) => {
-                                        let mut dr = DependencyReport::success(ExprValue::Position(value));
-                                        let contents_length_id = self.id.get_attr_ident(StructureAttrType::ContentsLength).to_abstract();
-                                        dr.add_pc_pairs(self.convert_expr_vars(expr.vars())?, HashSet::from([contents_length_id]));
-                                        Ok(dr)
-                                    },
-                                    Err(ExprEvalError::LookupError{..}) => Ok(DependencyReport::incomplete(self.convert_expr_vars(expr.vars())?)),
-                                    Err(err) => Err(err)
-                                }
-                            },
-                            LengthPolicy::FitContents => {
-                                if section.fields.is_empty() {
-                                    Ok(DependencyReport::success(ExprValue::Position(BitIndex::zero())))
-                                } else {
-                                    let last_field_index = section.fields.len() - 1;
-                                    let last_field_id = self.id.clone().get_field_ident(section.fields[last_field_index].id.clone());
-                                    let last_field_end_id = last_field_id.get_attr_ident(FieldAttrType::End);
-                                    let position_id = self.id.get_attr_ident(StructureAttrType::Position);
+                    LengthPolicy::FitContents => {
+                        if section.fields.is_empty() {
+                            Ok(DependencyReport::success(ExprValue::Position(BitIndex::zero())))
+                        } else {
+                            let last_field_index = section.fields.len() - 1;
+                            let last_field_id = self.id.clone().get_field_ident(section.fields[last_field_index].id.clone());
+                            let last_field_end_id = last_field_id.get_attr_ident(FieldAttrType::End);
+                            let position_id = self.id.get_attr_ident(StructureAttrType::Position);
 
-                                    let parents = HashSet::from([last_field_end_id.clone().to_abstract(), position_id.clone().to_abstract()]);
+                            let parents = HashSet::from([last_field_end_id.clone().to_abstract(), position_id.clone().to_abstract()]);
 
-                                    let contents_end = match vd.lookup_field_attr(&last_field_end_id) {
-                                        Some(value) => value.expect_position()?,
-                                        None => return Ok(DependencyReport::incomplete(parents))
-                                    };
-                                    let position = match vd.lookup_struct_attr(&position_id) {
-                                        Some(value) => value.expect_position()?,
-                                        None => return Ok(DependencyReport::incomplete(parents))
-                                    };
+                            let contents_end = match vd.lookup_field_attr(&last_field_end_id) {
+                                Some(value) => value.expect_position()?,
+                                None => return Ok(DependencyReport::incomplete(parents))
+                            };
+                            let position = match vd.lookup_struct_attr(&position_id) {
+                                Some(value) => value.expect_position()?,
+                                None => return Ok(DependencyReport::incomplete(parents))
+                            };
 
-                                    let mut dr = DependencyReport::success(ExprValue::Position(contents_end - position));
-                                    let contents_length_id = self.id.get_attr_ident(StructureAttrType::Position).to_abstract();
-                                    dr.add_pc_pairs(parents, HashSet::from([contents_length_id]));
-                                    Ok(dr)
+                            let mut dr = DependencyReport::success(ExprValue::Position(contents_end - position));
+                            let contents_length_id = self.id.get_attr_ident(StructureAttrType::Position).to_abstract();
+                            dr.add_pc_pairs(parents, HashSet::from([contents_length_id]));
+                            Ok(dr)
 
-                                }
-                                
-                            }
                         }
-                        // let section = initial;
-                        // match lookup(&section.length_id()) {
-                        //     Some(value) => {
-                        //         let mut dr = DependencyReport::success(value);
-                        //         dr.add_pc_pairs(HashSet::from([section.length_id()]), HashSet::from([self.contents_length_id()]));
-                        //         Ok(dr)
-                        //     },
-                        //     None => Ok(DependencyReport::incomplete(HashSet::from([section.length_id()])))
-                        // }
+                        
                     }
                 }
 
             },
-            PartiallyResolvedStructureType::ResolvedSection(section) => {
-                let section = section;
-                let length_id = self.id.get_attr_ident(StructureAttrType::Length);
+            PartiallyResolvedStructureType::Addressed{pss, ..} => {
+
+                let length_id = pss.borrow().id.get_attr_ident(StructureAttrType::Length);
                 match vd.lookup_struct_attr(&length_id) {
                     Some(value) => {
                         let mut dr = DependencyReport::success(value);
@@ -4086,23 +4034,6 @@ impl<'a> PartiallyResolvedStructure<'a> {
                         Ok(dr)
                     },
                     None => Ok(DependencyReport::incomplete(HashSet::from([length_id.to_abstract()])))
-                }
-            },
-            PartiallyResolvedStructureType::Addressed{content, pss, ..} => {
-                // let content = *content;
-                if let Some(pss) = pss {
-                    let length_id = pss.borrow().id.get_attr_ident(StructureAttrType::Length);
-                    match vd.lookup_struct_attr(&length_id) {
-                        Some(value) => {
-                            let mut dr = DependencyReport::success(value);
-                            let contents_length_id = self.id.get_attr_ident(StructureAttrType::Position).to_abstract();
-                            dr.add_pc_pairs(HashSet::from([length_id.to_abstract()]), HashSet::from([contents_length_id]));
-                            Ok(dr)
-                        },
-                        None => Ok(DependencyReport::incomplete(HashSet::from([length_id.to_abstract()])))
-                    }
-                } else {
-                    todo!()
                 }
 
             },
@@ -4286,7 +4217,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
         unks.insert(self.id.get_attr_ident(StructureAttrType::Length).to_abstract());
 
         match self.stype.as_ref() {
-            PartiallyResolvedStructureType::UnresolvedSection{initial, pss} => {
+            PartiallyResolvedStructureType::UnresolvedSection{..} => {
                 
                 // for field in &initial.fields {
                 //     let field_id = self.id.get_field_ident(field.id.clone());
@@ -4295,19 +4226,10 @@ impl<'a> PartiallyResolvedStructure<'a> {
                 // }
 
             },
-            PartiallyResolvedStructureType::ResolvedSection(section) => {
-                todo!()
-            },
-            PartiallyResolvedStructureType::Addressed{content, pss, ..} => {
-                if let Some(structure) = pss {
-                    let (new_unks, new_expand_deps) = structure.borrow().unknowns(vd)?;
-                    unks.extend(new_unks);
-                    expand_deps.extend(new_expand_deps);
-                } else {
-                    // If pss is not Some(_), then we must not have the start position yet.
-                    // It is needed to get more information.
-                    expand_deps.insert(self.id.get_attr_ident(StructureAttrType::Start).to_abstract());
-                }
+            PartiallyResolvedStructureType::Addressed{pss, ..} => {
+                let (new_unks, new_expand_deps) = pss.borrow().unknowns(vd)?;
+                unks.extend(new_unks);
+                expand_deps.extend(new_expand_deps);
                 
             },
             PartiallyResolvedStructureType::Sequence(structures) => {
@@ -4967,7 +4889,7 @@ impl<'a> FileMap<'a> {
         let mut targets = vec![];
         loop {
             for prs in self.prs_map.values() {
-                if let PartiallyResolvedStructureType::Addressed{pss: Some(pss), ..} = prs.borrow().stype.as_ref() {
+                if let PartiallyResolvedStructureType::Addressed{pss, ..} = prs.borrow().stype.as_ref() {
                     let vd = std::mem::take(&mut self.value_dict);
                     let dr = pss.borrow().try_get_region_at(&vd, index).unwrap();
                     self.value_dict = vd;
@@ -5020,14 +4942,8 @@ impl<'a> FileMap<'a> {
         let s = self.prs_map[&field.structure].clone();
         let s_borrow = s.borrow();
         match s_borrow.stype.as_ref() {
-            PartiallyResolvedStructureType::UnresolvedSection{initial, pss} => {
+            PartiallyResolvedStructureType::UnresolvedSection{initial} => {
                 return initial.format_field_data(field.id.clone(), value)
-                // match initial.get_field_info(field.id.clone()) {
-                //     Ok((name, dtype, endian)) => {
-                //         return name.clone()
-                //     },
-                //     Err(()) => panic!("Structure did not contain the field!!!")
-                // }
                 
 
             },
@@ -5054,11 +4970,6 @@ impl<'a> FileMap<'a> {
         
     }
 
-    // pub fn get_field_name(&self, field: FieldIdent) -> String {
-    //     let sid = field.structure.unindexed();
-
-    // }
-
     fn get_data(&mut self, targets: Vec<AbstractIdent>, fm: &mut crate::FileManager) {
         let mut dg = std::mem::take(&mut self.dep_graph);
         let mut vd = std::mem::take(&mut self.value_dict);
@@ -5068,10 +4979,8 @@ impl<'a> FileMap<'a> {
 
         let file_struct = StructureIdent::new("file".to_string());
 
-        // let mut interval = 0;
-        loop {
 
-            // let prev_prs_map: HashSet<StructureIdent> = prs_map.keys().cloned().collect();
+        loop {
 
             for target in targets {
 
@@ -5264,9 +5173,6 @@ impl<'a> FileMap<'a> {
                                 }
                             }
                         }
-                        // } else {
-                        //     panic!("Invalid target: {}", target);
-                        // }
                     },
                     AbstractIdent::Field(ref f) => {
                         panic!("Invalid target: {}", target);
@@ -5276,34 +5182,12 @@ impl<'a> FileMap<'a> {
 
             }
 
-            // Discover new unkowns
-            // for k in prs_map.keys() {
-            //     if !prev_prs_map.contains(k) {
-            //         let (mut unk0, unk1) = prs_map[k].borrow().unknowns(&vd).unwrap();
-            //         unk0.extend(unk1);
-            //         for ident in unk0 {
-            //             if !dg.dep_map.contains_key(&ident) {
-            //                 dg.dep_map.insert(ident.clone(), Rc::new(RefCell::new(DepNode::new(ident.clone()))));
-            //                 dg.dep_roots.insert(ident);
-            //             }
-            //         }
-            //     }
-            // }
-
             targets = dg.get_resolvable_unknowns(&vd);//Vec::new();
 
             info!("{:?}", targets);
             if targets.is_empty() {
                 break;
             }
-            // interval += 1;
-            // info!("============= INTERVAL #{} ==============", interval);
-            // info!("Knowns: {}, Total: {}, Targets: {}", vd.len(), dg.dep_map.len(), targets.len());
-            // if interval > 7000 {
-            //     // info!("Width: {:?}", vd.lookup_any(&width_id).unwrap());
-
-            //     panic!()
-            // }
         }
 
         self.dep_graph = dg;
@@ -5358,256 +5242,6 @@ impl<'a> FileMap<'a> {
         }
     }
 
-    // fn resolve_structure(&mut self, fm: &mut crate::FileManager) {
-
-    //     let file_struct = StructureIdent::new("file".to_string());
-
-    //     // let mut prs_map = HashMap::new();
-    //     // let mut vd = ValueDictionary::new();
-    //     let mut dg = std::mem::take(&mut self.dep_graph);
-    //     let mut vd = std::mem::take(&mut self.value_dict);
-    //     let mut prs_map = std::mem::take(&mut self.prs_map);
-
-    //     // let mut s = PartiallyResolvedStructure::new(&self.structure, file_struct.clone(), &mut prs_map);
-    //     // let mut s = self.prs;
-    //     // let initial_monikers = HashMap::new();
-    //     // self.prs.borrow_mut().initialize_inherited_monikers(&prs_map, initial_monikers);
-
-    //     // let mut dg = DepGraph::new();
-    //     // dg.lookup_self = vec![];
-    //     // dg.lookup_path = vec![self.prs.borrow().id.id.clone()];
-
-    //     let (unk0, unk1) = self.prs.borrow().unknowns(&vd).unwrap();
-
-    //     info!("Unknowns 0: {:?}", unk0);
-    //     info!("Unknowns 1: {:?}", unk1);
-
-    //     let mut targets: Vec<AbstractIdent> = unk0.into_iter().collect();//vec![self.prs.end_id()];
-    //     targets.extend(unk1);
-
-    //     let width_id = self.prs.borrow().id.clone().get_field_ident("IHDR_width".to_string()).to_abstract();
-    //     targets.push(width_id.clone());
-
-    //     let mut interval = 0;
-    //     loop {
-
-    //         let prev_prs_map: HashSet<StructureIdent> = prs_map.keys().cloned().collect();
-
-    //         for target in targets {
-
-    //             info!("");
-    //             info!("Lookup up {}", target);
-    //             match target {
-    //                 AbstractIdent::Field(ref fi) => {
-    //                     info!("Target is a Field");
-
-    //                     let child = prs_map.get(&fi.structure).unwrap();
-
-    //                     // let field_id = struct_id.get_field_ident(fi.id);
-    //                     let dr = child.borrow().try_get_field(fi.clone(), &vd, &prs_map).unwrap();
-    //                     match dr.result {
-    //                         DepResult::Success(f) => {
-    //                             let v = f.parse(fm).unwrap();
-    //                             info!("Field parsed! Value is {:?}", v);
-    //                             //dg.lookup_values.insert(target.clone(), v);
-    //                             vd.insert_field(fi.clone(), v);
-    //                             for pc in dr.parents_children.into_iter() {
-    //                                 let deps: Vec<AbstractIdent> = pc.0.clone().into_iter().collect();
-    //                                 for c in pc.1 {
-    //                                     info!("Adding dependencies for {}: {:?}", c, deps);
-    //                                     dg.add_dependancies(c, deps.clone());
-    //                                 }
-    //                             }
-
-    //                         },
-    //                         DepResult::Incomplete(deps) | DepResult::MightExist(deps) => {
-    //                             info!("Lookup incomplete");
-    //                             let deps: Vec<AbstractIdent> = deps.into_iter().collect();
-    //                             info!("Adding dependencies for {}: {:?}", target, deps);
-    //                             dg.add_dependancies(target.clone(), deps.into_iter().collect());
-    //                         },
-    //                         DepResult::DoesNotExist => {
-    //                             todo!("Field does not exist?")
-    //                         }
-    //                     }
-
-    //                     continue;
-
-    //                 },
-    //                 AbstractIdent::FieldAttr(ref fai) => {
-    //                     info!("Target is a Field");
-
-    //                     let child = prs_map.get(&fai.field.structure).unwrap().clone();
-
-    //                     let dr = child.borrow_mut().try_lookup(target.clone(), &vd, &mut prs_map).unwrap();
-    //                     match dr.result {
-    //                         DepResult::Success(v) => {
-    //                             //dg.lookup_values.insert(target.clone(), v);
-    //                             vd.insert_field_attr(fai.clone(), v);
-    //                             info!("Adding value for {}", target);
-    //                             for pc in dr.parents_children.into_iter() {
-    //                                 let deps: Vec<AbstractIdent> = pc.0.clone().into_iter().collect();
-    //                                 for c in pc.1 {
-    //                                     info!("Adding dependencies for {}: {:?}", c, deps);
-    //                                     dg.add_dependancies(c, deps.clone());
-    //                                 }
-    //                             }
-    //                         },
-    //                         DepResult::Incomplete(deps) | DepResult::MightExist(deps) => {
-    //                             info!("Lookup incomplete");
-    //                             let deps: Vec<AbstractIdent> = deps.into_iter().collect();
-    //                             info!("Adding dependencies for {}: {:?}", target, deps);
-    //                             dg.add_dependancies(target, deps.into_iter().collect());
-    //                         },
-    //                         DepResult::DoesNotExist => {
-    //                             todo!("Field Attribute does not exist?");
-                                
-                                
-    //                         }
-    //                     }
-
-    //                     continue;
-    //                 }
-    //                 AbstractIdent::StructureAttr(ref sai) => {
-
-    //                     info!("Targt is a Structure Attribute");
-    //                     //if let (Some(structure_match), Some(attr_match)) = (caps.name("structure"), caps.name("attribute")) {
-
-    //                     if sai.structure == file_struct {
-    //                         match sai.attr {
-    //                             StructureAttrType::End | StructureAttrType::SpareLength | StructureAttrType::Length => {
-    //                                 vd.insert_struct_attr(sai.clone(), ExprValue::Position(BitIndex::bytes(fm.len())));
-    //                             },
-    //                             StructureAttrType::Start => {
-    //                                 vd.insert_struct_attr(sai.clone(), ExprValue::Position(BitIndex::zero()));
-    //                             },
-    //                             _ => panic!("Invalid file property: {}", sai.attr)
-    //                         }
-                            
-    //                     } else {
-    //                         //let struct_id = StructureIdent::new(structure_match.as_str().to_string());
-    //                         let mut child = prs_map.get(&sai.structure).unwrap().clone();
-
-    //                         loop {
-    //                             let dr = child.borrow_mut().try_lookup(target.clone(), &vd, &mut prs_map).unwrap();
-    //                             match dr.result {
-    //                                 DepResult::Success(v) => {
-    //                                     vd.insert_struct_attr(sai.clone(), v);
-    //                                     info!("Adding value for {}", target);
-    //                                     for pc in dr.parents_children.into_iter() {
-    //                                         let deps: Vec<AbstractIdent> = pc.0.clone().into_iter().collect();
-    //                                         for c in pc.1 {
-    //                                             info!("Adding dependencies for {}: {:?}", c, deps);
-    //                                             dg.add_dependancies(c, deps.clone());
-    //                                         }
-    //                                     }
-    //                                     break;
-    //                                 },
-    //                                 DepResult::Incomplete(deps) | DepResult::MightExist(deps) => {
-    //                                     info!("Lookup incomplete");
-    //                                     let deps: Vec<AbstractIdent> = deps.into_iter().collect();
-    //                                     info!("Adding dependencies for {}: {:?}", target, deps);
-    //                                     dg.add_dependancies(target, deps.into_iter().collect());
-    //                                     break;
-    //                                 },
-    //                                 DepResult::DoesNotExist => {
-    //                                     info!("Field does not exist. Searching in parent");
-    //                                     let new_child_id = child.borrow().parent_id.clone();
-    //                                     if new_child_id == file_struct {
-    //                                         if *sai == self.prs.borrow().id.get_attr_ident(StructureAttrType::Position) {
-    //                                             //dg.lookup_values.insert(target, ExprValue::Position(BitIndex::zero()));
-    //                                             vd.insert_struct_attr(sai.clone(), ExprValue::Position(BitIndex::zero()));
-    //                                         } else if matches!(self.prs.borrow().length, LengthPolicy::Expand) {
-    //                                             if target == self.prs.borrow().id.get_attr_ident(StructureAttrType::Length).to_abstract() {
-    //                                                 let start_id = self.prs.borrow().id.get_attr_ident(StructureAttrType::Start);
-    //                                                 if let Some(start) = vd.lookup_struct_attr(&start_id) {
-    //                                                     let start = start.clone().expect_position().unwrap();
-    //                                                     let end = BitIndex::bytes(fm.len());
-    //                                                     //dg.lookup_values.insert(target, ExprValue::Position(end - start));
-    //                                                     vd.insert_struct_attr(sai.clone(), ExprValue::Position(end - start))
-    //                                                 } else {
-    //                                                     dg.add_dependancies(target, vec![start_id.to_abstract()]);
-    //                                                 }
-                                                    
-    //                                             } else {
-    //                                                 panic!("Invalid file property: {}", target)
-    //                                             }
-    //                                         } else {
-    //                                             panic!("Invalid file property: {}", target)
-    //                                         }
-    //                                         break;
-    //                                     } else {
-    //                                         child = prs_map.get(&new_child_id).unwrap().clone();
-    //                                     }
-                                        
-    //                                 }
-    //                             }
-    //                         }
-    //                     }
-    //                     // } else {
-    //                     //     panic!("Invalid target: {}", target);
-    //                     // }
-    //                 },
-    //                 AbstractIdent::Field(ref f) => {
-    //                     panic!("Invalid target: {}", target);
-    //                 }
-    //             }
-
-
-    //         }
-
-    //         // Discover new unkowns
-    //         for k in prs_map.keys() {
-    //             if !prev_prs_map.contains(k) {
-    //                 let (mut unk0, unk1) = prs_map[k].borrow().unknowns(&vd).unwrap();
-    //                 unk0.extend(unk1);
-    //                 for ident in unk0 {
-    //                     if !dg.dep_map.contains_key(&ident) {
-    //                         dg.dep_map.insert(ident.clone(), Rc::new(RefCell::new(DepNode::new(ident.clone()))));
-    //                         dg.dep_roots.insert(ident);
-    //                     }
-    //                 }
-    //             }
-    //         }
-
-    //         targets = dg.get_resolvable_unknowns(&vd);//Vec::new();
-
-    //         info!("{:?}", targets);
-    //         if targets.is_empty() {
-    //             break;
-    //         }
-    //         interval += 1;
-    //         info!("============= INTERVAL #{} ==============", interval);
-    //         info!("Knowns: {}, Total: {}, Targets: {}", vd.len(), dg.dep_map.len(), targets.len());
-    //         if interval > 7000 {
-    //             println!("Width: {:?}", vd.lookup_any(&width_id).unwrap());
-
-    //             panic!()
-    //         }
-    //     }
-
-    //     // println!("Fields Attributes: {:?}", vd.field_attr_values);
-    //     println!("Width: {:?}", vd.lookup_any(&width_id).unwrap());
-    //     let num_chunks_id = StructureIdent::new("png_chunks".to_string()).get_attr_ident(StructureAttrType::Repetitions);
-    //     println!("Num chunks: {:?}", vd.lookup_any(&num_chunks_id.to_abstract()).unwrap());
-        
-    //     // println!("{:?}", dg.dep_map);
-    //     // println!("results: {:?}", dg.lookup_values);
-    //     // println!("Dependencies:");
-    //     // for value in dg.dep_map.values() {
-    //     //     println!("\t{:?}", value);
-    //     // }
-    //     // println!("Values:");
-    //     // for (key, value) in dg.lookup_values.iter() {
-    //     //     println!("{}: {:?}", key, value);
-    //     // }
-    //     todo!();
-
-    //     self.dep_graph = dg;
-    //     self.value_dict = vd;
-    //     self.prs_map = prs_map;
-
-    // }
 }
 
 pub fn make_png() -> Structure {
