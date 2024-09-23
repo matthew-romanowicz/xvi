@@ -60,6 +60,17 @@
                     </section-body>
                 </switch-case>
 
+                <!-- https://www.w3.org/TR/png/#11PLTE -->
+                <switch-case check="$0 == 'PLTE'">
+                    <repeat id="plte_body" name="PLTE Body" until="chunk_body_start + bytes(chunk_length)" length-policy="expand">
+                        <section-body id="plte_pallette" name="PLTE Pallette" length="3B">
+                            <field id="plte_red" name="Red" length="1B" dtype="U" endian="big"/>
+                            <field id="plte_green" name="Green" length="1B" dtype="U" endian="big"/>
+                            <field id="plte_blue" name="Blue" length="1B" dtype="U" endian="big"/>
+                        </section-body>
+                    </repeat>
+                </switch-case>
+
                 <!-- https://www.w3.org/TR/png/#11tRNS -->
                 <switch-case check="$0 == 'tRNS'">
                     <switch id="trns_body" name="tRNS Body" value="ihdr_color_type" length-policy="expand">
@@ -110,6 +121,92 @@
                     </section-body>
                 </switch-case>
 
+                <!-- https://www.w3.org/TR/png/#11sBIT -->
+                <switch-case check="$0 == 'sBIT'">
+                    <switch id="sbit_body" name="sBIT Body" length-policy="expand" value="ihdr_color_type">
+                        <switch-case check="$0 == 0">
+                            <section-body id="sbit_body_gray" name="sBIT Body (Grayscale)">
+                                <field id="sbit_gray" name="Significant Grayscale Bits" length="1B" dtype="U" endian="big"/>
+                            </section-body>
+                        </switch-case>
+                        <switch-case check="$0 == 2 || $0 == 3">
+                            <section-body id="sbit_body_rgb" name="sBIT Body (RGB)">
+                                <field id="sbit_red" name="Significant Red Bits" length="1B" dtype="U" endian="big"/>
+                                <field id="sbit_green" name="Significant Green Bits" length="1B" dtype="U" endian="big"/>
+                                <field id="sbit_blue" name="Significant Blue Bits" length="1B" dtype="U" endian="big"/>
+                            </section-body>
+                        </switch-case>
+                        <switch-case check="$0 == 4">
+                            <section-body id="sbit_body_ga" name="sBIT Body (Gray/Alpha)">
+                                <field id="sbit_gray" name="Significant Grayscale Bits" length="1B" dtype="U" endian="big"/>
+                                <field id="sbit_alpha" name="Significant Alpha Bits" length="1B" dtype="U" endian="big"/>
+                            </section-body>
+                        </switch-case>
+                        <switch-case check="$0 == 6">
+                            <section-body id="sbit_body_rgba" name="sBIT Body (RGBA)">
+                                <field id="sbit_red" name="Significant Red Bits" length="1B" dtype="U" endian="big"/>
+                                <field id="sbit_green" name="Significant Green Bits" length="1B" dtype="U" endian="big"/>
+                                <field id="sbit_blue" name="Significant Blue Bits" length="1B" dtype="U" endian="big"/>
+                                <field id="sbit_alpha" name="Significant Alpha Bits" length="1B" dtype="U" endian="big"/>
+                            </section-body>
+                        </switch-case>
+                        <switch-else>
+                            <section-body id="default_sbit_body" name="Default sBIT Body" length-policy="expand">
+                                <field id="sbit_body" name="sBIT Body" length="bytes(chunk_length)" dtype="B"/>
+                            </section-body>
+                        </switch-else>
+                    </switch>
+                </switch-case>
+
+                <!-- https://www.w3.org/TR/png/#11tEXt -->
+                <switch-case check="$0 == 'tEXt'">
+                    <section-body id="text_body" name="tEXt Body" length-policy="expand">
+                        <anchor id="text_start" offset="0B"/>
+                        <search id="null_location" start="text_start" n="0" find=":00"/>
+                        <field id="text_keyword" name="Keyword" length="null_location - text_start" dtype="S" endian="big"/>
+                        <field id="text_null" name="Null Seprator" length="1B" dtype="U" endian="big"/>
+                        <!-- (text_start - null_location) + (bytes(chunk_length - 1)) -->
+                        <field id="text_string" name="String" length="text_start - null_location + bytes(chunk_length - 1)" dtype="S" endian="big"/>
+                    </section-body>
+                </switch-case>
+
+                <!-- https://www.w3.org/TR/png/#11bKGD -->
+                <switch-case check="$0 == 'bKGD'">
+                    <switch id="bkgd_body" name="bKGD Body" value="ihdr_color_type" length-policy="expand">
+                        <switch-case check="$0 == 0 || $0 == 4">
+                            <section-body id="bkgd_body_gray" name="bKGD Body (Grayscale)">
+                                <field id="bkgd_gray" name="Grayscale" length="2B" dtype="U" endian="big"/>
+                            </section-body>
+                        </switch-case>
+                        <switch-case check="$0 == 2 || $0 == 6">
+                            <section-body id="bkgd_body_rgb" name="bKGD Body (RGB)">
+                                <field id="bkgd_red" name="Red" length="2B" dtype="U" endian="big"/>
+                                <field id="bkgd_green" name="Green" length="2B" dtype="U" endian="big"/>
+                                <field id="bkgd_blue" name="Blue" length="2B" dtype="U" endian="big"/>
+                            </section-body>
+                        </switch-case>
+                        <switch-case check="$0 == 3">
+                            <section-body id="bkgd_body_indexed" name="bKGD Body (Indexed)">
+                                <field id="bkgd_alpha" name="Alpha" length="1B" dtype="U" endian="big"/>
+                            </section-body>
+                        </switch-case>
+                        <switch-else>
+                            <section-body id="bkgd_default_body" name="bKGD Default Body" length-policy="expand">
+                            </section-body>
+                        </switch-else>
+                    </switch>
+                </switch-case>
+
+                <!-- https://www.w3.org/TR/png/#11hIST -->
+                <switch-case check="$0 == 'hIST'">
+                    <repeat id="hist_body" name="hIST Body" until="chunk_body_start + bytes(chunk_length)" length-policy="expand">
+                        <section-body id="hist_entry" name="hIST Entry">
+                            <field id="hist_freq" name="Frequency" length="2B" dtype="U" endian="big"/>
+                        </section-body>
+                    </repeat>
+                </switch-case>
+
+                <!-- https://www.w3.org/TR/png/#11pHYs -->
                 <switch-case check="$0 == 'pHYs'">
                     <section-body id="phys body" name="pHYs Body" length-policy="expand">
                         <field id="phys_ppu_x" name="Pixels Per Unit (X)" length="4B" dtype="U" endian="big" units="px"/>
@@ -165,53 +262,6 @@
                     </sequence>
                 </switch-case>
 
-                <!-- https://www.w3.org/TR/png/#11PLTE -->
-                <switch-case check="$0 == 'PLTE'">
-                    <repeat id="splt_body" name="sPLT Body" until="chunk_body_start + bytes(chunk_length)" length-policy="expand">
-                        <section-body id="plte_pallette" name="PLTE Pallette" length="3B">
-                            <field id="plte_red" name="Red" length="1B" dtype="U" endian="big"/>
-                            <field id="plte_green" name="Green" length="1B" dtype="U" endian="big"/>
-                            <field id="plte_blue" name="Blue" length="1B" dtype="U" endian="big"/>
-                        </section-body>
-                    </repeat>
-                </switch-case>
-
-                <!-- https://www.w3.org/TR/png/#11bKGD -->
-                <switch-case check="$0 == 'bKGD'">
-                    <switch id="bkgd_body" name="bKGD Body" value="ihdr_color_type" length-policy="expand">
-                        <switch-case check="$0 == 0 || $0 == 4">
-                            <section-body id="bkgd_body_gray" name="bKGD Body (Grayscale)">
-                                <field id="bkgd_gray" name="Grayscale" length="2B" dtype="U" endian="big"/>
-                            </section-body>
-                        </switch-case>
-                        <switch-case check="$0 == 2 || $0 == 6">
-                            <section-body id="bkgd_body_rgb" name="bKGD Body (RGB)">
-                                <field id="bkgd_red" name="Red" length="2B" dtype="U" endian="big"/>
-                                <field id="bkgd_green" name="Green" length="2B" dtype="U" endian="big"/>
-                                <field id="bkgd_blue" name="Blue" length="2B" dtype="U" endian="big"/>
-                            </section-body>
-                        </switch-case>
-                        <switch-case check="$0 == 3">
-                            <section-body id="bkgd_body_indexed" name="bKGD Body (Indexed)">
-                                <field id="bkgd_alpha" name="Alpha" length="1B" dtype="U" endian="big"/>
-                            </section-body>
-                        </switch-case>
-                        <switch-else>
-                            <section-body id="bkgd_default_body" name="bKGD Default Body" length-policy="expand">
-                            </section-body>
-                        </switch-else>
-                    </switch>
-                </switch-case>
-
-                <!-- https://www.w3.org/TR/png/#11hIST -->
-                <switch-case check="$0 == 'hIST'">
-                    <repeat id="hist_body" name="hIST Body" until="chunk_body_start + bytes(chunk_length)" length-policy="expand">
-                        <section-body id="hist_entry" name="hIST Entry">
-                            <field id="hist_freq" name="Frequency" length="2B" dtype="U" endian="big"/>
-                        </section-body>
-                    </repeat>
-                </switch-case>
-
                 <!-- https://www.w3.org/TR/png/#11tIME -->
                 <switch-case check="$0 == 'tIME'">
                     <section-body id="time_body" name="tIME Body">
@@ -224,52 +274,121 @@
                     </section-body>
                 </switch-case>
 
-                <switch-case check="$0 == 'tEXt'">
-                    <section-body id="text_body" name="tEXt Body" length-policy="expand">
-                        <anchor id="text_start" offset="0B"/>
-                        <search id="null_location" start="text_start" n="0" find=":00"/>
-                        <field id="text_keyword" name="Keyword" length="null_location - text_start" dtype="S" endian="big"/>
-                        <field id="text_null" name="Null Seprator" length="1B" dtype="U" endian="big"/>
-                        <!-- (text_start - null_location) + (bytes(chunk_length - 1)) -->
-                        <field id="text_string" name="String" length="text_start - null_location + bytes(chunk_length - 1)" dtype="S" endian="big"/>
-                    </section-body>
+                <!-- https://www.media.mit.edu/pia/Research/deepview/exif.html -->
+                <switch-case check="$0 == 'eXIf'">
+                    <sequence id="exif_chunk" name="eXIf Chunk">
+
+                        <section-header id="exif_header" name="eXIf Header" length-policy="fit">
+                            <export source="exif_num_ifd_entries"/>
+                            <field id="exif_byte_align" name="Byte Align" length="2B" dtype="S" endian="big"/>
+                            <field id="exif_tag_align" name="TAG Mark" length="2B" dtype="U" endian="big"/>
+                            <field id="exif_ifd_offset" name="Offset to IFD" length="4B" dtype="U" endian="big"/>
+                            <field id="exif_num_ifd_entries" name="Number of IFD Entries" length="2B" dtype="U" endian="big"/>
+                        </section-header>
+
+                        <repeat id="exif_ifd_entries" name="eXIf IFD Entries" n="exif_num_ifd_entries">
+                            <sequence id="exif_ifd_entry" name="eXIf IFD Entry">
+
+                                <section-header id="exif_ifd_entry_header" name="eXIf IFD Entry Header" length-policy="fit">
+                                    <export source="exif_ifd_format"/>
+                                    <export source="exif_ifd_num"/>
+                                    <field id="exif_ifd_tag" name="IFD Tag" length="2B" dtype="U" endian="big"/>
+                                    <field id="exif_ifd_format" name="IFD Format" length="2B" dtype="U" endian="big">
+                                        <enum>
+                                            <enum-case index="1" value="Unsigned Byte"/>
+                                            <enum-case index="2" value="ASCII Strings"/>
+                                            <enum-case index="3" value="Unsigned Short"/>
+                                            <enum-case index="4" value="Unsigned Long"/>
+                                            <enum-case index="5" value="Unsigned Rational"/>
+                                            <enum-case index="6" value="Signed Byte"/>
+                                            <enum-case index="7" value="Undefined"/>
+                                            <enum-case index="8" value="Signed Short"/>
+                                            <enum-case index="9" value="Signed Long"/>
+                                            <enum-case index="10" value="Signed Rational"/>
+                                            <enum-case index="11" value="Single Float"/>
+                                            <enum-case index="12" value="Double Float"/>
+                                            <enum-else value="Invalid"/>
+                                        </enum>
+                                    </field>
+                                    <field id="exif_ifd_num" name="IFD Number of Components" length="4B" dtype="U" endian="big"/>
+                                </section-header>
+
+                                <switch id="exif_ifd_entry_body" name="eXIf IFD Entry Body" length="4B" value="exif_ifd_format">
+
+                                    <!-- Unsigned Byte -->
+                                    <switch-case check="$0 == 1"> 
+                                        <switch id="exif_ifd_entry_u8" name="IFD Unsigned Byte" length="4B" value="exif_ifd_num">
+
+                                            <!-- Fits in 4-byte data field -->
+                                            <switch-case check="$0 * 1 == 4">
+                                                <repeat id="exif_ifd_u8_repeat" name="eXIf Payload" n="exif_ifd_num">
+                                                    <section-body id="exif_ifd_u8_body" name="eXIf U8">
+                                                        <field id="exif_ifd_u8" name="IFD Unsigned Byte" length="1B" dtype="U" endian="big"/>
+                                                    </section-body>
+                                                </repeat>
+                                            </switch-case>
+
+                                            <!-- Doesn't fit in 4-byte data field -->
+                                            <switch-else>
+                                                <section-body id="exif_ifd_address_u8_section" name="eXIf Address">
+                                                    <export source="exif_ifd_address_u8"/>
+                                                    <field id="exif_ifd_address_u8" name="IFD Address" length="4B" dtype="U"/>
+                                                </section-body>
+                                            </switch-else>
+
+                                        </switch>
+                                    </switch-case>
+
+                                    <!-- ASCII String -->
+                                    <switch-case check="$0 == 2"> 
+                                        <switch id="exif_ifd_entry_ascii" name="IFD ASCII" length="4B" value="exif_ifd_num">
+
+                                            <!-- Fits in 4-byte data field -->
+                                            <switch-case check="$0 == 0 || $0 == 1 || $0 == 2 || $0 == 3 || $0 == 4">
+                                                <section-body id="exif_ifd_ascii_body" name="eXIf ASCII">
+                                                    <field id="exif_ifd_ascii" name="IFD ASCII" length="bytes(exif_ifd_num)" dtype="S" endian="big"/>
+                                                </section-body>
+                                            </switch-case>
+
+                                            <!-- Doesn't fit in 4-byte data field -->
+                                            <switch-else>
+                                                <sequence id="exif_ifd_ascii_address_sequence" name="IFD ASCII Addressed Sequence">
+                                                    <section-body id="exif_ifd_address_ascii_section" name="eXIf Address">
+                                                        <export source="exif_ifd_address_ascii"/>
+                                                        <field id="exif_ifd_address_ascii" name="IFD Address" length="4B" dtype="U"/>
+                                                    </section-body>
+                                                    <addressed id="exif_ifd_ascii_addressed" name="IFD ASCII Addressed" pos="chunk_body_start + bytes(exif_ifd_address_ascii)">
+                                                        <section-body id="exif_ifd_ascii_body_addressed" name="eXIf ASCII">
+                                                            <field id="exif_ifd_ascii" name="IFD ASCII" length="bytes(exif_ifd_num)" dtype="S" endian="big"/>
+                                                        </section-body>
+                                                    </addressed>
+                                                </sequence>
+                                            </switch-else>
+
+                                        </switch>
+                                    </switch-case>
+
+                                    <switch-case check="$0 == 3">
+                                        <section-body id="exif_body_u16" name="eXIf Payload">
+                                            <field id="exif_ifd_u16" name="IFD Unsigned Short" length="2B" dtype="U" endian="big"/>
+                                        </section-body>
+                                    </switch-case>
+
+                                    <switch-else>
+                                        <section-body id="exif_body_default" name="eXIf Payload">
+                                            <field id="exif_ifd_default" name="IFD Unknown" length="4B" dtype="B"/>
+                                        </section-body>
+                                    </switch-else>
+                                </switch>
+                            </sequence>
+                        </repeat>
+
+                        <section-footer id="exif_ifd_footer" name="IFD Footer">
+                            <field id="exif_next_ifd" name="Next IFD Offset" length="4B" dtype="U" endian="big"/>
+                        </section-footer>
+                    </sequence>
                 </switch-case>
 
-                <switch-case check="$0 == 'sBIT'">
-                    <switch id="sbit_body" name="sBIT Body" length-policy="expand" value="ihdr_color_type">
-                        <switch-case check="$0 == 0">
-                            <section-body id="sbit_body_grey" name="sBIT Body (Grayscale)">
-                                <field id="sbit_gray" name="Significant Grayscale Bits" length="1B" dtype="U" endian="big"/>
-                            </section-body>
-                        </switch-case>
-                        <switch-case check="$0 == 2 || $0 == 3">
-                            <section-body id="sbit_body_rgb" name="sBIT Body (RGB)">
-                                <field id="sbit_red" name="Significant Red Bits" length="1B" dtype="U" endian="big"/>
-                                <field id="sbit_green" name="Significant Green Bits" length="1B" dtype="U" endian="big"/>
-                                <field id="sbit_blue" name="Significant Blue Bits" length="1B" dtype="U" endian="big"/>
-                            </section-body>
-                        </switch-case>
-                        <switch-case check="$0 == 4">
-                            <section-body id="sbit_body_ga" name="sBIT Body (Gray/Alpha)">
-                                <field id="sbit_gray" name="Significant Grayscale Bits" length="1B" dtype="U" endian="big"/>
-                                <field id="sbit_alpha" name="Significant Alpha Bits" length="1B" dtype="U" endian="big"/>
-                            </section-body>
-                        </switch-case>
-                        <switch-case check="$0 == 6">
-                            <section-body id="sbit_body_rgba" name="sBIT Body (RGBA)">
-                                <field id="sbit_red" name="Significant Red Bits" length="1B" dtype="U" endian="big"/>
-                                <field id="sbit_green" name="Significant Green Bits" length="1B" dtype="U" endian="big"/>
-                                <field id="sbit_blue" name="Significant Blue Bits" length="1B" dtype="U" endian="big"/>
-                                <field id="sbit_alpha" name="Significant Alpha Bits" length="1B" dtype="U" endian="big"/>
-                            </section-body>
-                        </switch-case>
-                        <switch-else>
-                            <section-body id="default_sbit_body" name="Default sBIT Body" length-policy="expand">
-                                <field id="sbit_body" name="sBIT Body" length="bytes(chunk_length)" dtype="B"/>
-                            </section-body>
-                        </switch-else>
-                    </switch>
-                </switch-case>
                 <switch-else>
                     <section-body id="default body" name="Default Body" length-policy="expand">
                         <field id="chunk_body" name="Chunk Body" length="bytes(chunk_length)" dtype="B"/>
@@ -278,7 +397,7 @@
             </switch>
 
             <section-footer id="chunk_footer" name="Chunk Footer" length="4B">
-                <field id="chunk_crc" name="Chunk CRC" length="4B" dtype="B"/>
+                <field id="chunk_crc" name="Chunk CRC" length="4B" dtype="U"/>
             </section-footer>
 
         </sequence>

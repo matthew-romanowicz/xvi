@@ -1672,6 +1672,7 @@ impl<'a> HexEdit<'a> {
                         let value = field.parse(&mut self.file_manager).unwrap();
                         let field_data = fs.format_field_data(field_id, value);
                         let field_info = format!("[{}] {}: {}", s_name, field.name, field_data).to_string();
+                        let mut field_info = field_info.replace("\x00", "\\x00");
                         // let field_info = match value {
                         //     ExprValue::Integer(v) => format!("[{}] {}: {}", s_name, field.name, v).to_string(),
                         //     ExprValue::String(v) => format!("[{}] {}: {}", s_name, field.name, v).to_string(),

@@ -354,6 +354,7 @@ enum ExprOp {
     Div,
     Neg,
     Eq,
+    Le,
     Or,
     List,
     Function(String)
@@ -369,6 +370,7 @@ impl ExprOp {
             ExprOp::Add => 2,
             ExprOp::Sub => 2,
             ExprOp::Eq => 3,
+            ExprOp::Le => 3,
             ExprOp::Or => 4,
             ExprOp::List => 5,
             _ => todo!()
@@ -467,6 +469,18 @@ impl ExprOp {
                 for arg in args_iter {
                     if &init != *arg {
                         return Ok(ExprValue::Bool(false));
+                    }
+                }
+                Ok(ExprValue::Bool(true))
+            },
+            ExprOp::Le => {
+                let mut args_iter = args.iter();
+                let mut prev = args_iter.next().unwrap().clone();
+                for arg in args_iter {
+                    if &prev > arg {
+                        return Ok(ExprValue::Bool(false));
+                    } else {
+                        prev = arg.clone();
                     }
                 }
                 Ok(ExprValue::Bool(true))
@@ -570,6 +584,26 @@ impl std::cmp::PartialEq<ExprValue> for &ExprValue {
     }
 }
 
+impl std::cmp::PartialOrd for ExprValue {
+    fn partial_cmp(&self, other: &ExprValue) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl std::cmp::Ord for ExprValue {
+    fn cmp(&self, other: &ExprValue) -> std::cmp::Ordering {
+        match (self, other) {
+            (ExprValue::Integer(left), ExprValue::Integer(right)) => {
+                std::cmp::Ord::cmp(left, right)
+            },
+            (ExprValue::Position(left), ExprValue::Position(right)) => {
+                std::cmp::Ord::cmp(left, right)
+            },
+            _ => todo!()
+        }
+    }
+}
+
 impl std::ops::Neg for ExprValue {
     type Output = ExprValue;
     fn neg(self) -> Self::Output {
@@ -664,7 +698,7 @@ fn sample_line(line: &str, min_index: usize, max_index: usize) -> (String, usize
     } else if max_index - min_index + MIN_LINE_CONTEXT * 2 < MAX_LINE_LENGTH {
         let offset = (min_index + max_index - MAX_LINE_LENGTH) / 2 - MIN_LINE_CONTEXT;
         let ellipsis = LEFT_ELLIPSIS.len();
-        println!("min: {} max: {} Offset: {}", min_index, max_index, offset);
+        info!("min: {} max: {} Offset: {}", min_index, max_index, offset);
         let elided = &line[offset..offset+MAX_LINE_LENGTH];
         ("\x1b[0;96m".to_string() + LEFT_ELLIPSIS + "\x1b[0m" + elided + "\x1b[0;96m" + RIGHT_ELLIPSIS + "\x1b[0m", min_index - offset + ellipsis, max_index - offset + ellipsis)
     } else {
@@ -753,7 +787,7 @@ impl ExprToken {
 
     /// Converts a string span that does not contain delimiters into a token stream
     fn from_undelimited_sspan(mut sspan: MyStrSpan) -> Result<Vec<ExprToken>, ParseExprError> {
-        println!("Parsing section: {}", sspan.as_str());
+        info!("Parsing section: {}", sspan.as_str());
 
         // Vector used to accumulate tokens
         let mut tokens = Vec::<ExprToken>::new();
@@ -764,12 +798,12 @@ impl ExprToken {
             let (token, match_end_index) = if let Some(m) = EXPR_VAR_RE.find(sspan.as_str()) {
 
                 let token_sspan = sspan.slice(sspan.start() + m.start(), sspan.start() + m.end());
-                println!("Var token: {}", m.as_str());
+                info!("Var token: {}", m.as_str());
                 (ExprToken::Var(m.as_str().to_string(), token_sspan.range()), m.end())
 
             } else if let Some(m) = EXPR_ARG_RE.find(sspan.as_str()) {
 
-                println!("Arg token: {}", m.as_str());
+                info!("Arg token: {}", m.as_str());
                 let token_sspan = sspan.slice(sspan.start() + m.start(), sspan.start() + m.end());
                 match usize::from_str(&m.as_str()[1..]) {
                     Ok(i) => {
@@ -783,12 +817,12 @@ impl ExprToken {
 
             } else if let Some(m) = EXPR_BP_RE.find(sspan.as_str()) {
 
-                println!("BitIndex token: {}", m.as_str());
+                info!("BitIndex token: {}", m.as_str());
                 let token_sspan = sspan.slice(sspan.start() + m.start(), sspan.start() + m.end());
                 (ExprToken::Parsed(Expr::Value(ExprValue::Position(BitIndex::from_str(m.as_str()).unwrap())), token_sspan.range()), m.end())
 
             } else if let Some(m) = EXPR_FLOAT_RE.find(sspan.as_str()) {
-                println!("Float token: {}", m.as_str());
+                info!("Float token: {}", m.as_str());
 
                 let token_sspan = sspan.slice(sspan.start() + m.start(), sspan.start() + m.end());
                 todo!();
@@ -796,13 +830,13 @@ impl ExprToken {
 
             } else if let Some(m) = EXPR_INT_RE.find(sspan.as_str()) {
 
-                println!("Int token: {}", m.as_str());
+                info!("Int token: {}", m.as_str());
                 let token_sspan = sspan.slice(sspan.start() + m.start(), sspan.start() + m.end());
                 (ExprToken::Parsed(Expr::Value(ExprValue::Integer(i64::from_str(m.as_str()).unwrap())), token_sspan.range()), m.end())
                 
             } else if let Some(m) = EXPR_OP_RE.find(sspan.as_str()) {
 
-                println!("Op token: {}", m.as_str());
+                info!("Op token: {}", m.as_str());
                 let token_sspan = sspan.slice(sspan.start() + m.start(), sspan.start() + m.end());
                 let op = match m.as_str() {
                     "+" => ExprOp::Add,
@@ -816,6 +850,7 @@ impl ExprToken {
                     "*" => ExprOp::Mult,
                     "/" => ExprOp::Div,
                     "==" => ExprOp::Eq,
+                    "<=" => ExprOp::Le,
                     "||" => ExprOp::Or,
                     "," => ExprOp::List,
                     _ => {
@@ -921,7 +956,7 @@ impl Expr {
 
     // Parses a token stream from tokens_from_str_span into an Expr object
     fn from_tokens(input: &MyStrSpan, mut tokens: Vec<ExprToken>) -> Result<Expr, ParseExprError> {
-        println!("Parsing Tokens: {:?}", tokens);
+        info!("Parsing Tokens: {:?}", tokens);
 
         if tokens.len() == 0 {
             // If there are no tokens, then just return Empty. This could happen in
@@ -1214,7 +1249,7 @@ impl Expr {
     /// Converts a string span into a vector of tokens, which is intended to be processed
     /// by the from_tokens method.
     fn tokens_from_str_span(input: &MyStrSpan) -> Result<Vec<ExprToken>, ParseExprError> {
-        println!("Input: {}", input.as_str());
+        info!("Input: {}", input.as_str());
 
         let mut delimiter_stack = Vec::<MyStrSpan>::new();
         let mut in_string_literal = false;
@@ -1241,7 +1276,7 @@ impl Expr {
                     // has been closed.
                     if ch_str == "'" {
                         let string_literal_sspan = input.slice(current_token_start, ch.start());
-                        println!("String literal token: '{}'", string_literal_sspan.as_str());
+                        info!("String literal token: '{}'", string_literal_sspan.as_str());
                         tokens.push(ExprToken::Parsed(Expr::Value(ExprValue::String(current_string_literal)), string_literal_sspan.range()));
                         current_string_literal = String::new();
                         current_token_start = ch.end();
@@ -1302,7 +1337,7 @@ impl Expr {
                             (")", Some("(")) | ("]", Some("[")) | ("}", Some("{")) => {
                                 if delimiter_stack.is_empty() {
                                     let token_sspan = input.slice(current_token_start, ch.start());
-                                    println!("Delimited: '{}'", token_sspan.as_str());
+                                    info!("Delimited: '{}'", token_sspan.as_str());
                                     tokens.push(ExprToken::Delimited(token_sspan.range()));
                                     current_token_start = ch.end();
                                 }
@@ -1331,7 +1366,7 @@ impl Expr {
             let d = delimiter_stack.pop().unwrap();
             return Err(ParseExprError::new(d.range(), format!("Unclosed delimiter: {}", d.as_str()).to_string()));
         }
-        println!("Tokens: {:?}", tokens);
+        info!("Tokens: {:?}", tokens);
         Ok(tokens)
     }
 }
@@ -1669,13 +1704,13 @@ impl FieldSpec {
         let length = self.length.evaluate_expect_position(lookup)?;
         let position = initial_position + self.offset.evaluate_expect_position(lookup)?;
 
-        println!("alignment_base={:?}, alignment={:?} length={:?}, position={:?}", alignment_base, alignment, length, position);
+        info!("alignment_base={:?}, alignment={:?} length={:?}, position={:?}", alignment_base, alignment, length, position);
 
-        println!("diff: {:?}", &position - &alignment_base);
+        info!("diff: {:?}", &position - &alignment_base);
 
         let remainder = (&position - &alignment_base).rem_euclid(&alignment);
 
-        println!("remainder: {:?}", remainder);
+        info!("remainder: {:?}", remainder);
         if remainder.is_zero() {
             Ok(position)
         } else {
@@ -2341,7 +2376,8 @@ impl<'a> PartiallyResolvedStructure<'a> {
                 for name in &content.exports {
                     import_monikers.insert(name.clone(), None);
                 }
-                PartiallyResolvedStructureType::Addressed{position: &position, content: &content, pss: None}
+                let pss = PartiallyResolvedStructure::new(&content, parent_id.clone(), prs_map);
+                PartiallyResolvedStructureType::Addressed{position: &position, content: &content, pss: Some(pss)}
             },
             StructureType::Sequence(seq) => {
                 for structure in seq {
@@ -2412,7 +2448,8 @@ impl<'a> PartiallyResolvedStructure<'a> {
                 for name in &content.exports {
                     import_monikers.insert(name.clone(), None);
                 }
-                PartiallyResolvedStructureType::Addressed{position: &position, content: &content, pss: None}
+                let pss = PartiallyResolvedStructure::new_indexed(&content, parent_id.clone(), index.clone(), prs_map);
+                PartiallyResolvedStructureType::Addressed{position: &position, content: &content, pss: Some(pss)}
             },
             StructureType::Sequence(seq) => {
                 for structure in seq {
@@ -2490,6 +2527,9 @@ impl<'a> PartiallyResolvedStructure<'a> {
                 for structure in seq.iter_mut() {
                     structure.borrow_mut().initialize_inherited_monikers(prs_map, child_monikers.clone());
                 }
+            },
+            PartiallyResolvedStructureType::Addressed{ref mut pss, ..} => {
+                pss.as_ref().unwrap().borrow_mut().initialize_inherited_monikers(prs_map, child_monikers.clone());
             },
             _ => {
                 // Do nothing
@@ -2590,8 +2630,12 @@ impl<'a> PartiallyResolvedStructure<'a> {
             PartiallyResolvedStructureType::ResolvedSection(section) => {
                 todo!()
             },
-            PartiallyResolvedStructureType::Addressed{position, ..} => {
-                todo!()
+            PartiallyResolvedStructureType::Addressed{position, pss, ..} => {
+                if let Some(pss) = pss {
+                    return pss.borrow().try_get_region_at(vd, location)
+                } else {
+                    todo!("This should be impossible since pss is always Some when inititalized")
+                }
             },
             PartiallyResolvedStructureType::Sequence(seq) => {
                 for prs in seq {
@@ -2605,7 +2649,20 @@ impl<'a> PartiallyResolvedStructure<'a> {
             },
             PartiallyResolvedStructureType::Switch{pss, ..} => {
                 if let Some(pss) = pss {
-                    return pss.borrow().try_get_region_at(vd, location)
+                    let dr = pss.borrow().try_get_region_at(vd, location)?;
+                    match dr.result {
+                        DepResult::DoesNotExist => {
+                            // Location is between the end of the switch contents and the end of the switch... It's a spare.
+                            let pss_end_id = pss.borrow().id.clone().get_attr_ident(StructureAttrType::End);
+                            parents.insert(pss_end_id.clone().to_abstract());
+                            let pss_end = match vd.lookup_struct_attr(&pss_end_id) {
+                                Some(ev) => ev.expect_position()?,
+                                None => return Ok(DependencyReport::incomplete(parents))
+                            };
+                            return Ok(DependencyReport::success(FileRegion::Spare(self.id.clone(), pss_end..end)));
+                        },
+                        DepResult::MightExist{..} | DepResult::Incomplete{..} | DepResult::Success(_) => return Ok(dr)
+                    }
                 } else {
                     let switch_index_id = self.id.get_attr_ident(StructureAttrType::SwitchIndex);
                     parents.insert(switch_index_id.to_abstract());
@@ -2621,7 +2678,19 @@ impl<'a> PartiallyResolvedStructure<'a> {
                     }
                 }
                 if *finalized {
-                    todo!("Unsure how I got here...")
+                    // If the repeat strucutre is finalized and none of the repetitions contain the position, then
+                    // there must be a spare block between the last repetition and the end of the repeat structure
+                    if seq.is_empty() {
+                        return Ok(DependencyReport::success(FileRegion::Spare(self.id.clone(), start..end)));
+                    }
+                    let last_index = seq.len() - 1;
+                    let seq_end_id = seq[last_index].borrow().id.clone().get_attr_ident(StructureAttrType::End);
+                    parents.insert(seq_end_id.clone().to_abstract());
+                    let seq_end = match vd.lookup_struct_attr(&seq_end_id) {
+                        Some(ev) => ev.expect_position()?,
+                        None => return Ok(DependencyReport::incomplete(parents))
+                    };
+                    return Ok(DependencyReport::success(FileRegion::Spare(self.id.clone(), seq_end..end)));
                 } else {
                     let repetitions_id = self.id.get_attr_ident(StructureAttrType::Repetitions);
                     parents.insert(repetitions_id.to_abstract());
@@ -2750,8 +2819,8 @@ impl<'a> PartiallyResolvedStructure<'a> {
 
     fn try_lookup(&mut self, key: AbstractIdent, vd: &ValueDictionary, prs_map: &mut HashMap<StructureIdent, Rc<RefCell<PartiallyResolvedStructure<'a>>>>) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
         let monikers = self.inherited_monikers.clone();
-        println!("Looking for {} in {}", key, self.id);
-        println!("Monikers: {:?}", monikers);
+        info!("Looking for {} in {}", key, self.id);
+        info!("Monikers: {:?}", monikers);
         let lookup = move |alias: &str| match monikers.get(alias) {
             Some(fi) => vd.lookup_field(fi),
             None => {
@@ -3060,7 +3129,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
                 let field = &initial.fields[*field_index];
                 match field.length.evaluate_expect_position(lookup) {
                     Ok(length) => {
-                        println!("Length for {}: {:?}", field_id.id, length);
+                        info!("Length for {}: {:?}", field_id.id, length);
                         let mut dr = DependencyReport::success(ExprValue::Position(length));
                         let field_length_id = field_id.clone().get_attr_ident(FieldAttrType::Length).to_abstract();
                         dr.add_pc_pairs(self.convert_expr_vars(field.length.vars())?, HashSet::from([field_length_id]));
@@ -3538,9 +3607,9 @@ impl<'a> PartiallyResolvedStructure<'a> {
                         *seq = struct_seq;
                         *finalized = true;
                         let mut dr = DependencyReport::success(ExprValue::Integer(v));
-                        let switch_value_id = self.id.get_attr_ident(StructureAttrType::SwitchValue).to_abstract();
+                        let repetitions_id = self.id.get_attr_ident(StructureAttrType::Repetitions).to_abstract();
                         let parents = self.convert_expr_vars(n.vars())?;
-                        dr.add_pc_pairs(parents, HashSet::from([switch_value_id]));
+                        dr.add_pc_pairs(parents, HashSet::from([repetitions_id]));
                         Ok(dr)
                     },
                     Err(ExprEvalError::LookupError{..}) => {
@@ -4460,7 +4529,46 @@ impl Structure {
 
 
             },
-            "addressed" => todo!(),
+            "addressed" => {
+                if obj.children.len() != 1 {
+                    panic!("addressed must have exactly one child")
+                }
+                let mut structure = None;
+                for mut child in obj.children {
+                    match child.element.as_str() {
+                        "export" => {
+                            exports.insert(child.attrs.remove("source").unwrap().as_str().to_string());
+                            if !child.children.is_empty() {
+                                panic!("'export' should not have children!")
+                            }
+                        },
+                        "search" | "anchor" => {
+                            let id = child.attrs.remove("id").unwrap().as_str().to_string();
+                            def_fields.insert(id, DefField::from_xml_object(child)?);
+                        },
+                        _ => {
+                            if structure.is_none() {
+                                structure = Some(Structure::from_xml_object(child)?);
+                            } else {
+                                panic!("'addressed' should only have one non-export child!");
+                            }
+                        }
+                    }
+                    
+                }
+                if let Some(structure) = structure {
+                    let structure = Box::new(structure);
+                    match obj.attrs.remove("pos") {
+                        None => panic!("'pos' must be specified for 'addressed' element"),
+                        Some(expr)=> {
+                            let pos = Expr::from_str(expr.as_str())?;
+                            stype = StructureType::Addressed{position: pos, content: structure};
+                        }
+                    }
+                } else {
+                    panic!("'addressed' has no children!")
+                }
+            },
             "sequence" => {
                 let mut seq = vec![];
                 for mut child in obj.children {
@@ -4832,19 +4940,54 @@ impl<'a> FileMap<'a> {
     }
 
     pub fn region_at(&mut self, index: BitIndex, fm: &mut crate::FileManager) -> FileRegion {
+        let temp_result: FileRegion;
         loop {
             let vd = std::mem::take(&mut self.value_dict);
             let dr = (*self.prs).borrow().try_get_region_at(&vd, index).unwrap();
             self.value_dict = vd;
             match dr.result {
                 DepResult::Success(fr) => {
-                    return fr
+                    match fr {
+                        FileRegion::Spare{..} => {
+                            temp_result = fr;
+                            break;
+                        },
+                        _ => return fr
+                    }
                 },
                 DepResult::Incomplete(deps) | DepResult::MightExist(deps) => {
                     self.get_data(deps.into_iter().collect(), fm);
                 },
                 DepResult::DoesNotExist => panic!("Field does not exist!"),
             }
+        }
+
+        // If the region seems to be spare, loop through the addressed structures to see if there
+        // are any hiding there. TODO: Make this more efficient.
+        let mut targets = vec![];
+        loop {
+            for prs in self.prs_map.values() {
+                if let PartiallyResolvedStructureType::Addressed{pss: Some(pss), ..} = prs.borrow().stype.as_ref() {
+                    let vd = std::mem::take(&mut self.value_dict);
+                    let dr = pss.borrow().try_get_region_at(&vd, index).unwrap();
+                    self.value_dict = vd;
+                    match dr.result {
+                        DepResult::Success(fr) => {
+                            return fr
+                        },
+                        DepResult::Incomplete(deps) | DepResult::MightExist(deps) => {
+                            targets.extend(deps);
+                            // self.get_data(deps.into_iter().collect(), fm);
+                        },
+                        DepResult::DoesNotExist => break
+                    }
+                }
+            }
+            if targets.is_empty() {
+                return temp_result
+            }
+            self.get_data(targets, fm);
+            targets = vec![];
         }
     }
 
@@ -4969,7 +5112,7 @@ impl<'a> FileMap<'a> {
                                         if let Some(bm) = bre.find_iter(&bf).nth(n) {
 
                                             let v = bm.start() + start;
-                                            println!("Search finished! {:?}", v);
+                                            info!("Search finished! {:?}", v);
                                             vd.insert_field(fi.clone(), ExprValue::Position(v));
                                             for pc in dr.parents_children.into_iter() {
                                                 // TODO: Somehow represent dependency on the searched bytes
@@ -5472,108 +5615,802 @@ pub fn make_png() -> Structure {
     parse_xml(&s).unwrap()
 }
 
+#[cfg(test)]
+struct PngIhdr {
+    width: u32,
+    height: u32,
+    bit_depth: u8,
+    color_type: u8,
+    compression_method: u8,
+    filter_method: u8,
+    interlace_method: u8
+}
+
+#[cfg(test)]
+struct PngTime {
+    year: u16,
+    month: u8,
+    day: u8,
+    hour: u8,
+    minute: u8,
+    second: u8
+}
+
+#[cfg(test)]
+enum PngSbit {
+    Gray(u8),
+    Rgb(u8, u8, u8),
+    GrayAlpha(u8, u8),
+    Rgba(u8, u8, u8, u8)
+}
+
+#[cfg(test)]
+enum PngTrns {
+    Gray(u16),
+    Rgb(u16, u16, u16),
+    Indexed(Vec<u8>)
+}
+
+#[cfg(test)]
+enum PngBkgd {
+    Gray(u16),
+    Rgb(u16, u16, u16),
+    Indexed(u8)
+}
 
 
 #[cfg(test)]
-mod file_tests {
+mod png_tests {
     use super::*;
 
-    #[test]
-    fn png_test() {
-        pretty_env_logger::init();
-        let png_struct = make_png();
-        let mut png = FileMap::new(&png_struct);
-        // let filename = "test_file.png".to_string();
-        let filename = r"tests/ps2n0g08.png".to_string();
-        let mut fm = crate::FileManager::new(filename, crate::FileManagerType::ReadOnly, false).unwrap();
+    fn start_file<'a>(s: &'a Structure, filename: &'a str) -> (FileMap<'a>, crate::FileManager<'a>) {
+        // pretty_env_logger::init();
+        let mut png = FileMap::new(&s);
+        let mut fm = crate::FileManager::new(filename.to_string(), crate::FileManagerType::ReadOnly, false).unwrap();
         png.initialize(&mut fm);
+        (png, fm)
+    }
+
+    fn validate_chunks(png: &mut FileMap, fm: &mut crate::FileManager, chunks: Vec<(u32, &str, u32)>) {
 
         let png_chunks = StructureIdent::new_indexed("png_chunks".to_string(), vec![]);
         let png_chunks_reps = png_chunks.get_attr_ident(StructureAttrType::Repetitions);
 
-        let chunk_0_header = StructureIdent::new_indexed("chunk_header".to_string(), vec![0]);
-        let chunk_0_length = chunk_0_header.clone().get_field_ident("chunk_length".to_string());
+        let mut targets = vec![png_chunks_reps.to_abstract()];
+        let mut results = vec![ExprValue::Integer(chunks.len() as i64)];
 
-        let chunk_1_header = StructureIdent::new_indexed("chunk_header".to_string(), vec![1]);
-        let chunk_1_length = chunk_1_header.clone().get_field_ident("chunk_length".to_string());
+        for (i, chunk) in chunks.iter().enumerate() {
+            let chunk_header = StructureIdent::new_indexed("chunk_header".to_string(), vec![i]);
+            let chunk_length = chunk_header.clone().get_field_ident("chunk_length".to_string());
+            let chunk_type = chunk_header.clone().get_field_ident("chunk_type".to_string());
+            let chunk_footer = StructureIdent::new_indexed("chunk_footer".to_string(), vec![i]);
+            let chunk_crc = chunk_footer.clone().get_field_ident("chunk_crc".to_string());
+            targets.push(chunk_length.to_abstract());
+            results.push(ExprValue::Integer(chunk.0 as i64));
+            targets.push(chunk_type.to_abstract());
+            results.push(ExprValue::String(chunk.1.to_string()));
+            targets.push(chunk_crc.to_abstract());
+            results.push(ExprValue::Integer(chunk.2 as i64));
+        }
 
-        let chunk_2_header = StructureIdent::new_indexed("chunk_header".to_string(), vec![2]);
-        let chunk_2_length = chunk_2_header.clone().get_field_ident("chunk_length".to_string());
+        png.get_data(targets.clone(), fm);
 
-        let chunk_3_header = StructureIdent::new_indexed("chunk_header".to_string(), vec![3]);
-        let chunk_3_length = chunk_3_header.clone().get_field_ident("chunk_length".to_string());
+        for (target, result) in targets.iter().zip(results.into_iter()) {
+            assert_eq!(png.value_dict.lookup_any(&target).unwrap(), result);
+        }
+    }
 
-        let chunk_4_header = StructureIdent::new_indexed("chunk_header".to_string(), vec![4]);
-        let chunk_4_length = chunk_4_header.clone().get_field_ident("chunk_length".to_string());
+    fn validate_ihdr(png: &mut FileMap, fm: &mut crate::FileManager, index: usize, ihdr: PngIhdr) {
 
-        let ihdr_struct = StructureIdent::new_indexed("ihdr_body".to_string(), vec![0]);
-        let ihdr_width = ihdr_struct.clone().get_field_ident("ihdr_width".to_string());
-        let ihdr_height = ihdr_struct.clone().get_field_ident("ihdr_height".to_string());
-        let ihdr_bit_depth = ihdr_struct.clone().get_field_ident("ihdr_bit_depth".to_string());
-        let ihdr_color_type = ihdr_struct.clone().get_field_ident("ihdr_color_type".to_string());
-        let ihdr_compression_method = ihdr_struct.clone().get_field_ident("ihdr_compression_method".to_string());
-        let ihdr_filter_method = ihdr_struct.clone().get_field_ident("ihdr_filter_method".to_string());
-        let ihdr_interlace_method = ihdr_struct.clone().get_field_ident("ihdr_interlace_method".to_string());
-
-        let gama_struct = StructureIdent::new_indexed("gama_body".to_string(), vec![1]);
-        let gama_gamma = gama_struct.clone().get_field_ident("gama_gamma".to_string());
+        let ihdr_struct = StructureIdent::new_indexed("ihdr_body".to_string(), vec![index]);
+        let ihdr_width = ihdr_struct.clone().get_field_ident("ihdr_width".to_string()).to_abstract();
+        let ihdr_height = ihdr_struct.clone().get_field_ident("ihdr_height".to_string()).to_abstract();
+        let ihdr_bit_depth = ihdr_struct.clone().get_field_ident("ihdr_bit_depth".to_string()).to_abstract();
+        let ihdr_color_type = ihdr_struct.clone().get_field_ident("ihdr_color_type".to_string()).to_abstract();
+        let ihdr_compression_method = ihdr_struct.clone().get_field_ident("ihdr_compression_method".to_string()).to_abstract();
+        let ihdr_filter_method = ihdr_struct.clone().get_field_ident("ihdr_filter_method".to_string()).to_abstract();
+        let ihdr_interlace_method = ihdr_struct.clone().get_field_ident("ihdr_interlace_method".to_string()).to_abstract();
 
         let targets = vec![
-            png_chunks_reps.clone().to_abstract(),
-
-            chunk_0_length.clone().to_abstract(),
-            chunk_1_length.clone().to_abstract(),
-            chunk_2_length.clone().to_abstract(),
-            chunk_3_length.clone().to_abstract(),
-            chunk_4_length.clone().to_abstract(),
-
-            ihdr_width.clone().to_abstract(),
-            ihdr_height.clone().to_abstract(),
-            ihdr_bit_depth.clone().to_abstract(),
-            ihdr_color_type.clone().to_abstract(),
-            ihdr_compression_method.clone().to_abstract(),
-            ihdr_filter_method.clone().to_abstract(),
-            ihdr_interlace_method.clone().to_abstract(),
-
-            gama_gamma.clone().to_abstract()
+            ihdr_width.clone(),
+            ihdr_height.clone(),
+            ihdr_bit_depth.clone(),
+            ihdr_color_type.clone(),
+            ihdr_compression_method.clone(),
+            ihdr_filter_method.clone(),
+            ihdr_interlace_method.clone(),
         ];
 
-        png.get_data(targets, &mut fm);
+        png.get_data(targets.clone(), fm);
 
-        assert_eq!(png.value_dict.lookup_struct_attr(&png_chunks_reps).unwrap().expect_integer().unwrap(), 5);
+        assert_eq!(png.value_dict.lookup_any(&ihdr_width).unwrap(), ExprValue::Integer(ihdr.width as i64));
+        assert_eq!(png.value_dict.lookup_any(&ihdr_height).unwrap(), ExprValue::Integer(ihdr.height as i64));
+        assert_eq!(png.value_dict.lookup_any(&ihdr_bit_depth).unwrap(), ExprValue::Integer(ihdr.bit_depth as i64));
+        assert_eq!(png.value_dict.lookup_any(&ihdr_color_type).unwrap(), ExprValue::Integer(ihdr.color_type as i64));
+        assert_eq!(png.value_dict.lookup_any(&ihdr_compression_method).unwrap(), ExprValue::Integer(ihdr.compression_method as i64));
+        assert_eq!(png.value_dict.lookup_any(&ihdr_filter_method).unwrap(), ExprValue::Integer(ihdr.filter_method as i64));
+        assert_eq!(png.value_dict.lookup_any(&ihdr_interlace_method).unwrap(), ExprValue::Integer(ihdr.interlace_method as i64));
 
-        assert_eq!(png.value_dict.lookup_field(&chunk_0_length).unwrap().expect_integer().unwrap(), 13);
-        assert_eq!(png.value_dict.lookup_field(&chunk_1_length).unwrap().expect_integer().unwrap(), 4);
-        assert_eq!(png.value_dict.lookup_field(&chunk_2_length).unwrap().expect_integer().unwrap(), 2170);
-        assert_eq!(png.value_dict.lookup_field(&chunk_3_length).unwrap().expect_integer().unwrap(), 65);
-        assert_eq!(png.value_dict.lookup_field(&chunk_4_length).unwrap().expect_integer().unwrap(), 0);
+    }
 
-        assert_eq!(png.value_dict.lookup_field(&ihdr_width).unwrap().expect_integer().unwrap(), 32);
-        assert_eq!(png.value_dict.lookup_field(&ihdr_height).unwrap().expect_integer().unwrap(), 32);
-        assert_eq!(png.value_dict.lookup_field(&ihdr_bit_depth).unwrap().expect_integer().unwrap(), 8);
-        assert_eq!(png.value_dict.lookup_field(&ihdr_color_type).unwrap().expect_integer().unwrap(), 0);
-        assert_eq!(png.value_dict.lookup_field(&ihdr_compression_method).unwrap().expect_integer().unwrap(), 0);
-        assert_eq!(png.value_dict.lookup_field(&ihdr_filter_method).unwrap().expect_integer().unwrap(), 0);
-        assert_eq!(png.value_dict.lookup_field(&ihdr_interlace_method).unwrap().expect_integer().unwrap(), 0);
+    fn validate_plte(png: &mut FileMap, fm: &mut crate::FileManager, index: usize, rgb: Vec<(u8, u8, u8)>) {
 
-        assert_eq!(png.value_dict.lookup_field(&gama_gamma).unwrap().expect_integer().unwrap(), 100000);
+        let plte_body = StructureIdent::new_indexed("plte_body".to_string(), vec![index]);
+        let plte_reps = plte_body.get_attr_ident(StructureAttrType::Repetitions).to_abstract();
 
-        // let num_chunks_id = StructureIdent::new("png_chunks".to_string()).get_attr_ident(StructureAttrType::Repetitions);
+        let targets = vec![
+            plte_reps.clone()
+        ];
 
-        // assert_eq!(png.value_dict.lookup_any(&num_chunks_id.to_abstract()).unwrap().expect_integer().unwrap(), 89);
+        png.get_data(targets.clone(), fm);
 
-        // let width_id = png.prs.borrow().id.clone().get_field_ident("IHDR_width".to_string()).to_abstract();
-        // let targets = vec![width_id.clone()];
-        // png.get_data(targets, &mut fm);
-        // assert_eq!(png.value_dict.lookup_any(&width_id).unwrap().expect_integer().unwrap(), 1707);
+        assert_eq!(png.value_dict.lookup_any(&plte_reps).unwrap(), ExprValue::Integer(rgb.len() as i64));
 
-        // let r = png.region_at(BitIndex::bytes(8346), &mut fm);
-        // panic!("{:?}", r)
-        // panic!("{:?}", f);
+        let mut targets = vec![];
+        for i in 0..rgb.len() {
+            let plte_pallette = StructureIdent::new_indexed("plte_pallette".to_string(), vec![index, i]);
+            targets.push(plte_pallette.clone().get_field_ident("plte_red".to_string()).to_abstract());
+            targets.push(plte_pallette.clone().get_field_ident("plte_green".to_string()).to_abstract());
+            targets.push(plte_pallette.clone().get_field_ident("plte_blue".to_string()).to_abstract());
+        }
+
+        png.get_data(targets.clone(), fm);
+
+        let mut target_index = 0;
+        for (r, g, b) in rgb {
+            assert_eq!(png.value_dict.lookup_any(&targets[target_index + 0]).unwrap(), ExprValue::Integer(r as i64));
+            assert_eq!(png.value_dict.lookup_any(&targets[target_index + 1]).unwrap(), ExprValue::Integer(g as i64));
+            assert_eq!(png.value_dict.lookup_any(&targets[target_index + 2]).unwrap(), ExprValue::Integer(b as i64));
+            target_index += 3;
+        }
+
+    }
+
+    fn validate_trns(png: &mut FileMap, fm: &mut crate::FileManager, index: usize, trns: PngTrns) {
+        match trns {
+            PngTrns::Gray(k) => {
+                let trns_struct = StructureIdent::new_indexed("trns_body_gray".to_string(), vec![index]);
+                let trns_gray = trns_struct.clone().get_field_ident("trns_gray".to_string()).to_abstract();
+
+                let targets = vec![
+                    trns_gray.clone()
+                ];
+
+                png.get_data(targets.clone(), fm);
+
+                assert_eq!(png.value_dict.lookup_any(&trns_gray).unwrap(), ExprValue::Integer(k as i64));
+            },
+            PngTrns::Rgb(r, g, b) => {
+                let trns_struct = StructureIdent::new_indexed("trns_body_rgb".to_string(), vec![index]);
+                let trns_red = trns_struct.clone().get_field_ident("trns_red".to_string()).to_abstract();
+                let trns_green = trns_struct.clone().get_field_ident("trns_green".to_string()).to_abstract();
+                let trns_blue = trns_struct.clone().get_field_ident("trns_blue".to_string()).to_abstract();
+
+                let targets = vec![
+                    trns_red.clone(),
+                    trns_green.clone(),
+                    trns_blue.clone()
+                ];
+
+                png.get_data(targets.clone(), fm);
+
+                assert_eq!(png.value_dict.lookup_any(&trns_red).unwrap(), ExprValue::Integer(r as i64));
+                assert_eq!(png.value_dict.lookup_any(&trns_green).unwrap(), ExprValue::Integer(g as i64));
+                assert_eq!(png.value_dict.lookup_any(&trns_blue).unwrap(), ExprValue::Integer(b as i64));
+            },
+            PngTrns::Indexed(v) => {
+                let trns_body = StructureIdent::new_indexed("trns_body_indexed".to_string(), vec![index]);
+                let trns_reps = trns_body.get_attr_ident(StructureAttrType::Repetitions).to_abstract();
+
+                let targets = vec![
+                    trns_reps.clone()
+                ];
+
+                png.get_data(targets.clone(), fm);
+
+                assert_eq!(png.value_dict.lookup_any(&trns_reps).unwrap(), ExprValue::Integer(v.len() as i64));
+
+                let mut targets = vec![];
+                for i in 0..v.len() {
+                    let trns_pallette = StructureIdent::new_indexed("trns_pallette".to_string(), vec![index, i]);
+                    let trns_alpha = trns_pallette.get_field_ident("trns_alpha".to_string()).to_abstract();
+                    targets.push(trns_alpha)
+                }
+
+                png.get_data(targets.clone(), fm);
+
+                for (target, alpha) in targets.iter().zip(v.into_iter()) {
+                    assert_eq!(png.value_dict.lookup_any(target).unwrap(), ExprValue::Integer(alpha as i64));
+                }
+            }
+        }
+    }
+
+    fn validate_gama(png: &mut FileMap, fm: &mut crate::FileManager, index: usize, gamma: u32) {
+        let gama_struct = StructureIdent::new_indexed("gama_body".to_string(), vec![index]);
+        let gama_gamma = gama_struct.clone().get_field_ident("gama_gamma".to_string()).to_abstract();
+
+        let targets = vec![
+            gama_gamma.clone()
+        ];
+
+        png.get_data(targets.clone(), fm);
+
+        assert_eq!(png.value_dict.lookup_any(&gama_gamma).unwrap(), ExprValue::Integer(gamma as i64));
+    }
+
+    fn validate_sbit(png: &mut FileMap, fm: &mut crate::FileManager, index: usize, sbit: PngSbit) {
+        match sbit {
+            PngSbit::Gray(k) => {
+                let sbit_struct = StructureIdent::new_indexed("sbit_body_gray".to_string(), vec![index]);
+                let sbit_gray = sbit_struct.clone().get_field_ident("sbit_gray".to_string()).to_abstract();
+
+                let targets = vec![
+                    sbit_gray.clone()
+                ];
+
+                png.get_data(targets.clone(), fm);
+
+                assert_eq!(png.value_dict.lookup_any(&sbit_gray).unwrap(), ExprValue::Integer(k as i64));
+            },
+            PngSbit::Rgb(r, g, b) => {
+                let sbit_struct = StructureIdent::new_indexed("sbit_body_rgb".to_string(), vec![index]);
+                let sbit_red = sbit_struct.clone().get_field_ident("sbit_red".to_string()).to_abstract();
+                let sbit_green = sbit_struct.clone().get_field_ident("sbit_green".to_string()).to_abstract();
+                let sbit_blue = sbit_struct.clone().get_field_ident("sbit_blue".to_string()).to_abstract();
+
+                let targets = vec![
+                    sbit_red.clone(),
+                    sbit_green.clone(),
+                    sbit_blue.clone()
+                ];
+
+                png.get_data(targets.clone(), fm);
+
+                assert_eq!(png.value_dict.lookup_any(&sbit_red).unwrap(), ExprValue::Integer(r as i64));
+                assert_eq!(png.value_dict.lookup_any(&sbit_green).unwrap(), ExprValue::Integer(g as i64));
+                assert_eq!(png.value_dict.lookup_any(&sbit_blue).unwrap(), ExprValue::Integer(b as i64));
+            },
+            PngSbit::GrayAlpha(k, a) => {
+                let sbit_struct = StructureIdent::new_indexed("sbit_body_ga".to_string(), vec![index]);
+                let sbit_gray = sbit_struct.clone().get_field_ident("sbit_gray".to_string()).to_abstract();
+                let sbit_alpha = sbit_struct.clone().get_field_ident("sbit_alpha".to_string()).to_abstract();
+
+                let targets = vec![
+                    sbit_gray.clone(),
+                    sbit_alpha.clone()
+                ];
+
+                png.get_data(targets.clone(), fm);
+
+                assert_eq!(png.value_dict.lookup_any(&sbit_gray).unwrap(), ExprValue::Integer(k as i64));
+                assert_eq!(png.value_dict.lookup_any(&sbit_alpha).unwrap(), ExprValue::Integer(a as i64));
+            },
+            PngSbit::Rgba(r, g, b, a) => {
+                let sbit_struct = StructureIdent::new_indexed("sbit_body_rgba".to_string(), vec![index]);
+                let sbit_red = sbit_struct.clone().get_field_ident("sbit_red".to_string()).to_abstract();
+                let sbit_green = sbit_struct.clone().get_field_ident("sbit_green".to_string()).to_abstract();
+                let sbit_blue = sbit_struct.clone().get_field_ident("sbit_blue".to_string()).to_abstract();
+                let sbit_alpha = sbit_struct.clone().get_field_ident("sbit_alpha".to_string()).to_abstract();
+
+                let targets = vec![
+                    sbit_red.clone(),
+                    sbit_green.clone(),
+                    sbit_blue.clone(),
+                    sbit_alpha.clone()
+                ];
+
+                png.get_data(targets.clone(), fm);
+
+                assert_eq!(png.value_dict.lookup_any(&sbit_red).unwrap(), ExprValue::Integer(r as i64));
+                assert_eq!(png.value_dict.lookup_any(&sbit_green).unwrap(), ExprValue::Integer(g as i64));
+                assert_eq!(png.value_dict.lookup_any(&sbit_blue).unwrap(), ExprValue::Integer(b as i64));
+                assert_eq!(png.value_dict.lookup_any(&sbit_alpha).unwrap(), ExprValue::Integer(a as i64));
+            },
+        }
+    }
+
+    fn validate_bkgd(png: &mut FileMap, fm: &mut crate::FileManager, index: usize, bkgd: PngBkgd) {
+        match bkgd {
+            PngBkgd::Gray(k) => {
+                let bkgd_struct = StructureIdent::new_indexed("bkgd_body_gray".to_string(), vec![index]);
+                let bkgd_gray = bkgd_struct.clone().get_field_ident("bkgd_gray".to_string()).to_abstract();
+
+                let targets = vec![
+                    bkgd_gray.clone()
+                ];
+
+                png.get_data(targets.clone(), fm);
+
+                assert_eq!(png.value_dict.lookup_any(&bkgd_gray).unwrap(), ExprValue::Integer(k as i64));
+            },
+            PngBkgd::Rgb(r, g, b) => {
+                let bkgd_struct = StructureIdent::new_indexed("bkgd_body_rgb".to_string(), vec![index]);
+                let bkgd_red = bkgd_struct.clone().get_field_ident("bkgd_red".to_string()).to_abstract();
+                let bkgd_green = bkgd_struct.clone().get_field_ident("bkgd_green".to_string()).to_abstract();
+                let bkgd_blue = bkgd_struct.clone().get_field_ident("bkgd_blue".to_string()).to_abstract();
+
+                let targets = vec![
+                    bkgd_red.clone(),
+                    bkgd_green.clone(),
+                    bkgd_blue.clone()
+                ];
+
+                png.get_data(targets.clone(), fm);
+
+                assert_eq!(png.value_dict.lookup_any(&bkgd_red).unwrap(), ExprValue::Integer(r as i64));
+                assert_eq!(png.value_dict.lookup_any(&bkgd_green).unwrap(), ExprValue::Integer(g as i64));
+                assert_eq!(png.value_dict.lookup_any(&bkgd_blue).unwrap(), ExprValue::Integer(b as i64));
+            },
+            PngBkgd::Indexed(a) => {
+                let bkgd_struct = StructureIdent::new_indexed("bkgd_body_indexed".to_string(), vec![index]);
+                let bkgd_alpha = bkgd_struct.clone().get_field_ident("bkgd_alpha".to_string()).to_abstract();
+
+                let targets = vec![
+                    bkgd_alpha.clone()
+                ];
+
+                png.get_data(targets.clone(), fm);
+
+                assert_eq!(png.value_dict.lookup_any(&bkgd_alpha).unwrap(), ExprValue::Integer(a as i64));
+            }
+        }
+    }
+
+    fn validate_splt(png: &mut FileMap, fm: &mut crate::FileManager, index: usize, name: &str, depth: u8, rgbaf: Vec<(u16, u16, u16, u16, u16)>) {
+        let splt_header = StructureIdent::new_indexed("splt_header".to_string(), vec![index]);
+        let splt_name = splt_header.clone().get_field_ident("splt_name".to_string()).to_abstract();
+        let splt_depth = splt_header.clone().get_field_ident("splt_sample_depth".to_string()).to_abstract();
+        let splt_body = StructureIdent::new_indexed("splt_body".to_string(), vec![index]);
+        let splt_reps = splt_body.get_attr_ident(StructureAttrType::Repetitions).to_abstract();
+
+        let targets = vec![
+            splt_name.clone(),
+            splt_depth.clone(),
+            splt_reps.clone()
+        ];
+
+        png.get_data(targets.clone(), fm);
+
+        assert_eq!(png.value_dict.lookup_any(&splt_name).unwrap(), ExprValue::String(name.to_string()));
+        assert_eq!(png.value_dict.lookup_any(&splt_depth).unwrap(), ExprValue::Integer(depth as i64));
+        assert_eq!(png.value_dict.lookup_any(&splt_reps).unwrap(), ExprValue::Integer(rgbaf.len() as i64));
+
+        let mut targets = vec![];
+        for i in 0..rgbaf.len() {
+            let splt_pallette = StructureIdent::new_indexed("splt_pallette".to_string(), vec![index, i]);
+            targets.push(splt_pallette.clone().get_field_ident("splt_red".to_string()).to_abstract());
+            targets.push(splt_pallette.clone().get_field_ident("splt_green".to_string()).to_abstract());
+            targets.push(splt_pallette.clone().get_field_ident("splt_blue".to_string()).to_abstract());
+            targets.push(splt_pallette.clone().get_field_ident("splt_alpha".to_string()).to_abstract());
+            targets.push(splt_pallette.get_field_ident("splt_freq".to_string()).to_abstract());
+        }
+
+        png.get_data(targets.clone(), fm);
+
+        let mut target_index = 0;
+        for (r, g, b, a, f) in rgbaf {
+            assert_eq!(png.value_dict.lookup_any(&targets[target_index + 0]).unwrap(), ExprValue::Integer(r as i64));
+            assert_eq!(png.value_dict.lookup_any(&targets[target_index + 1]).unwrap(), ExprValue::Integer(g as i64));
+            assert_eq!(png.value_dict.lookup_any(&targets[target_index + 2]).unwrap(), ExprValue::Integer(b as i64));
+            assert_eq!(png.value_dict.lookup_any(&targets[target_index + 3]).unwrap(), ExprValue::Integer(a as i64));
+            assert_eq!(png.value_dict.lookup_any(&targets[target_index + 4]).unwrap(), ExprValue::Integer(f as i64));
+            target_index += 5;
+        }
+    }
+
+    fn validate_hist(png: &mut FileMap, fm: &mut crate::FileManager, index: usize, freqs: Vec<u16>) {
+
+        let hist_body = StructureIdent::new_indexed("hist_body".to_string(), vec![index]);
+        let hist_reps = hist_body.get_attr_ident(StructureAttrType::Repetitions).to_abstract();
+
+        let targets = vec![
+            hist_reps.clone()
+        ];
+
+        png.get_data(targets.clone(), fm);
+
+        assert_eq!(png.value_dict.lookup_any(&hist_reps).unwrap(), ExprValue::Integer(freqs.len() as i64));
+
+        let mut targets = vec![];
+        for i in 0..freqs.len() {
+            let hist_entry = StructureIdent::new_indexed("hist_entry".to_string(), vec![index, i]);
+            targets.push(hist_entry.get_field_ident("hist_freq".to_string()).to_abstract());
+        }
+
+        png.get_data(targets.clone(), fm);
+
+        for (target, f) in targets.iter().zip(freqs.into_iter()) {
+            assert_eq!(png.value_dict.lookup_any(target).unwrap(), ExprValue::Integer(f as i64));
+        }
+
+    }
+
+    fn validate_time(png: &mut FileMap, fm: &mut crate::FileManager, index: usize, time: PngTime) {
+
+        let time_struct = StructureIdent::new_indexed("time_body".to_string(), vec![index]);
+        let time_year = time_struct.clone().get_field_ident("time_year".to_string()).to_abstract();
+        let time_month = time_struct.clone().get_field_ident("time_month".to_string()).to_abstract();
+        let time_day = time_struct.clone().get_field_ident("time_day".to_string()).to_abstract();
+        let time_hour = time_struct.clone().get_field_ident("time_hour".to_string()).to_abstract();
+        let time_minute = time_struct.clone().get_field_ident("time_minute".to_string()).to_abstract();
+        let time_second = time_struct.clone().get_field_ident("time_second".to_string()).to_abstract();
+
+        let targets = vec![
+            time_year.clone(),
+            time_month.clone(),
+            time_day.clone(),
+            time_hour.clone(),
+            time_minute.clone(),
+            time_second.clone(),
+        ];
+
+        png.get_data(targets.clone(), fm);
+
+        assert_eq!(png.value_dict.lookup_any(&time_year).unwrap(), ExprValue::Integer(time.year as i64));
+        assert_eq!(png.value_dict.lookup_any(&time_month).unwrap(), ExprValue::Integer(time.month as i64));
+        assert_eq!(png.value_dict.lookup_any(&time_day).unwrap(), ExprValue::Integer(time.day as i64));
+        assert_eq!(png.value_dict.lookup_any(&time_hour).unwrap(), ExprValue::Integer(time.hour as i64));
+        assert_eq!(png.value_dict.lookup_any(&time_minute).unwrap(), ExprValue::Integer(time.minute as i64));
+        assert_eq!(png.value_dict.lookup_any(&time_second).unwrap(), ExprValue::Integer(time.second as i64));
+
+    }
+
+    #[test]
+    fn chunks_ps2n0g08() {
+
+        let png_struct = make_png();
+        let (mut png, mut fm) = start_file(&png_struct, r"tests/ps2n0g08.png");
+
+        let chunk_data = vec![
+            (13  , "IHDR", 0x56112528),
+            (4   , "gAMA", 0x31e8965f),
+            (2170, "sPLT", 0x96d08b86),
+            (65  , "IDAT", 0x35e2d859),
+            (0   , "IEND", 0xae426082)
+        ];
+
+        validate_chunks(&mut png, &mut fm, chunk_data);
+    }
+
+    #[test]
+    fn chunks_s03n3p01() {
+
+        let png_struct = make_png();
+        let (mut png, mut fm) = start_file(&png_struct, r"tests/s03n3p01.png");
+
+        let chunk_data = vec![
+            (13  , "IHDR", 0x6ce627fc),
+            (4   , "gAMA", 0x31e8965f),
+            (3   , "sBIT", 0x77f8b5a3),
+            (6   , "PLTE", 0xb1e5a59f),
+            (14  , "IDAT", 0x39310c4b),
+            (0   , "IEND", 0xae426082)
+        ];
+
+        validate_chunks(&mut png, &mut fm, chunk_data);
+    }
+
+    #[test]
+    fn chunks_tbbn0g04() {
+
+        let png_struct = make_png();
+        let (mut png, mut fm) = start_file(&png_struct, r"tests/tbbn0g04.png");
+
+        let chunk_data = vec![
+            (13  , "IHDR", 0x93e1c829),
+            (4   , "gAMA", 0x31e8965f),
+            (2   , "tRNS", 0xe62cd0a9),
+            (2   , "bKGD", 0xaa8d2332),
+            (328 , "IDAT", 0x5b2a4df7),
+            (0   , "IEND", 0xae426082)
+        ];
+
+        validate_chunks(&mut png, &mut fm, chunk_data);
+    }
+
+    #[test]
+    fn chunks_ch1n3p04() {
+
+        let png_struct = make_png();
+        let (mut png, mut fm) = start_file(&png_struct, r"tests/ch1n3p04.png");
+
+        let chunk_data = vec![
+            (13  , "IHDR", 0x815467c7),
+            (4   , "gAMA", 0x31e8965f),
+            (3   , "sBIT", 0x77f8b5a3),
+            (45  , "PLTE", 0xd2b049bd),
+            (30  , "hIST", 0x48995941),
+            (71  , "IDAT", 0x0f82057d),
+            (0   , "IEND", 0xae426082)
+        ];
+
+        validate_chunks(&mut png, &mut fm, chunk_data);
+    }
+
+    #[test]
+    fn chunks_cm9n0g04() {
+
+        let png_struct = make_png();
+        let (mut png, mut fm) = start_file(&png_struct, r"tests/cm9n0g04.png");
+
+        let chunk_data = vec![
+            (13  , "IHDR", 0x93e1c829),
+            (4   , "gAMA", 0x31e8965f),
+            (7   , "tIME", 0x75301fe0),
+            (200 , "IDAT", 0xf8ff896b),
+            (0   , "IEND", 0xae426082)
+        ];
+
+        validate_chunks(&mut png, &mut fm, chunk_data);
+    }
+
+    #[test]
+    fn ihdr_ps2n0g08() {
+
+        let png_struct = make_png();
+        let ( mut png, mut fm) = start_file(&png_struct, r"tests/ps2n0g08.png");
+
+        let ihdr = PngIhdr {
+            width: 32,
+            height: 32,
+            bit_depth: 8,
+            color_type: 0,
+            compression_method: 0,
+            filter_method: 0,
+            interlace_method: 0   
+        };
+
+        validate_ihdr(&mut png, &mut fm, 0, ihdr);
+    }
+
+    #[test]
+    fn ihdr_s03n3p01() {
+
+        let png_struct = make_png();
+        let ( mut png, mut fm) = start_file(&png_struct, r"tests/s03n3p01.png");
+
+        let ihdr = PngIhdr {
+            width: 3,
+            height: 3,
+            bit_depth: 1,
+            color_type: 3,
+            compression_method: 0,
+            filter_method: 0,
+            interlace_method: 0   
+        };
+
+        validate_ihdr(&mut png, &mut fm, 0, ihdr);
+    }
+
+    #[test]
+    fn ihdr_tbbn0g04() {
+
+        let png_struct = make_png();
+        let ( mut png, mut fm) = start_file(&png_struct, r"tests/tbbn0g04.png");
+
+        let ihdr = PngIhdr {
+            width: 32,
+            height: 32,
+            bit_depth: 4,
+            color_type: 0,
+            compression_method: 0,
+            filter_method: 0,
+            interlace_method: 0   
+        };
+
+        validate_ihdr(&mut png, &mut fm, 0, ihdr);
+    }
+
+    #[test]
+    fn ihdr_ch1n3p04() {
+
+        let png_struct = make_png();
+        let ( mut png, mut fm) = start_file(&png_struct, r"tests/ch1n3p04.png");
+
+        let ihdr = PngIhdr {
+            width: 32,
+            height: 32,
+            bit_depth: 4,
+            color_type: 3,
+            compression_method: 0,
+            filter_method: 0,
+            interlace_method: 0   
+        };
+
+        validate_ihdr(&mut png, &mut fm, 0, ihdr);
+    }
+
+    #[test]
+    fn plte_s03n3p01() {
+
+        let png_struct = make_png();
+        let (mut png, mut fm) = start_file(&png_struct, r"tests/s03n3p01.png");
+
+        let rgb = vec![
+            (0, 255, 0),
+            (255, 119, 0)
+        ];
+
+        validate_plte(&mut png, &mut fm, 3, rgb);
+    }
+
+    #[test]
+    fn plte_ch1n3p04() {
+
+        let png_struct = make_png();
+        let (mut png, mut fm) = start_file(&png_struct, r"tests/ch1n3p04.png");
+
+        let rgb = vec![
+            (34, 0, 255),
+            (0, 255, 255),
+            (136, 0, 255),
+            (34, 255, 0),
+            (0, 153, 255),
+            (255, 102, 0),
+            (221, 0, 255),
+            (119, 255, 0),
+            (255, 0, 0),
+            (0, 255, 153),
+            (221, 255, 0),
+            (255, 0, 187),
+            (255, 187, 0),
+            (0, 68, 255),
+            (0, 255, 68),
+        ];
+
+        validate_plte(&mut png, &mut fm, 3, rgb);
+    }
+
+    #[test]
+    fn trns_tbbn0g04() {
+
+        let png_struct = make_png();
+        let (mut png, mut fm) = start_file(&png_struct, r"tests/tbbn0g04.png");
+
+        validate_trns(&mut png, &mut fm, 2, PngTrns::Gray(15));
+
+    }
+
+    #[test]
+    fn gama_ps2n0g08() {
+
+        let png_struct = make_png();
+        let (mut png, mut fm) = start_file(&png_struct, r"tests/ps2n0g08.png");
+
+        validate_gama(&mut png, &mut fm, 1, 100000);
+
+    }
+
+    #[test]
+    fn gama_s03n3p01() {
+
+        let png_struct = make_png();
+        let (mut png, mut fm) = start_file(&png_struct, r"tests/s03n3p01.png");
+
+        validate_gama(&mut png, &mut fm, 1, 100000);
+
+    }
+
+    #[test]
+    fn gama_tbbn0g04() {
+
+        let png_struct = make_png();
+        let (mut png, mut fm) = start_file(&png_struct, r"tests/tbbn0g04.png");
+
+        validate_gama(&mut png, &mut fm, 1, 100000);
+
+    }
+
+    #[test]
+    fn gama_ch1n3p04() {
+
+        let png_struct = make_png();
+        let (mut png, mut fm) = start_file(&png_struct, r"tests/ch1n3p04.png");
+
+        validate_gama(&mut png, &mut fm, 1, 100000);
+
+    }
+
+    #[test]
+    fn gama_cm9n0g04() {
+
+        let png_struct = make_png();
+        let (mut png, mut fm) = start_file(&png_struct, r"tests/cm9n0g04.png");
+
+        validate_gama(&mut png, &mut fm, 1, 100000);
+
+    }
+
+    #[test]
+    fn sbit_s03n3p01() {
+
+        let png_struct = make_png();
+        let (mut png, mut fm) = start_file(&png_struct, r"tests/s03n3p01.png");
+
+        let sbit = PngSbit::Rgb(4, 4, 4);
+
+        validate_sbit(&mut png, &mut fm, 2, sbit);
+
+    }
+
+    #[test]
+    fn sbit_ch1n3p04() {
+
+        let png_struct = make_png();
+        let (mut png, mut fm) = start_file(&png_struct, r"tests/ch1n3p04.png");
+
+        let sbit = PngSbit::Rgb(4, 4, 4);
+
+        validate_sbit(&mut png, &mut fm, 2, sbit);
+
+    }
+
+    #[test]
+    fn bkgd_tbbn0g04() {
+
+        let png_struct = make_png();
+        let (mut png, mut fm) = start_file(&png_struct, r"tests/tbbn0g04.png");
+
+        validate_bkgd(&mut png, &mut fm, 3, PngBkgd::Gray(0));
+
+    }
+
+    #[test]
+    fn splt_ps2n0g08() {
+
+        let png_struct = make_png();
+        let ( mut png, mut fm) = start_file(&png_struct, r"tests/ps2n0g08.png");
+
+        let mut rgbaf = vec![];
+
+        for r in 0..6 {
+            for g in 0..6 {
+                for b in 0..6 {
+                    rgbaf.push((r * 51, g * 51, b * 51, 255, 0));
+                }
+            }
+        }
+
+        validate_splt(&mut png, &mut fm, 2, "six-cube", 16, rgbaf);
+
+    }
+
+    #[test]
+    fn hist_ch1n3p04() {
+
+        let png_struct = make_png();
+        let (mut png, mut fm) = start_file(&png_struct, r"tests/ch1n3p04.png");
+
+        let freqs = vec![
+            64, 112, 48, 96, 96, 32, 32,
+            80, 16, 128, 64, 16, 48, 80,
+            112, 
+        ];
+
+        validate_hist(&mut png, &mut fm, 4, freqs);
+
+    }
+
+    #[test]
+    fn time_cm9n0g04() {
+
+        let png_struct = make_png();
+        let (mut png, mut fm) = start_file(&png_struct, r"tests/cm9n0g04.png");
+
+        let time = PngTime {
+            year: 1999,
+            month: 12,
+            day: 31,
+            hour: 23,
+            minute: 59,
+            second: 59
+        };
+
+        validate_time(&mut png, &mut fm, 2, time);
 
     }
 }
-
 
 pub fn parse_xml(input: &str) -> Result<Structure, ParseXmlError> {
     let mut objects = Vec::<XmlObject>::new();
@@ -5596,15 +6433,15 @@ pub fn parse_xml(input: &str) -> Result<Structure, ParseXmlError> {
                 // }
             },
             Ok(Token::ElementStart{local, ..}) => {
-                println!("Element Start: {}", local);
+                info!("Element Start: {}", local);
                 current_elem = Some(local);
             },
             Ok(Token::Attribute{local, value, ..}) => {
                 attr_map.insert(local.as_str(), value);
-                println!("\t{} = {}", local, value);
+                info!("\t{} = {}", local, value);
             },
             Ok(Token::ElementEnd{end, ..}) => {
-                println!("Element End: {:?}", end);
+                info!("Element End: {:?}", end);
                 
 
                 match end {
@@ -5697,7 +6534,7 @@ pub fn parse_xml(input: &str) -> Result<Structure, ParseXmlError> {
                 }
             },
             Ok(Token::Text{text}) => {
-                println!("Text: {}", text);
+                info!("Text: {}", text);
                 current_text.push(text.as_str());
                 let n = node_stack.len();
                 // if n == 0 {
@@ -5707,7 +6544,7 @@ pub fn parse_xml(input: &str) -> Result<Structure, ParseXmlError> {
                 // }
             },
             Ok(Token::Comment{text, ..}) => {
-                println!("Comment: {}", text);
+                info!("Comment: {}", text);
             },
             Err(err) => {
                 // match err {
