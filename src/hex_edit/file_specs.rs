@@ -2427,7 +2427,9 @@ impl<'a> PartiallyResolvedStructure<'a> {
                 for name in &content.exports {
                     import_monikers.insert(name.clone(), None);
                 }
-                let pss = PartiallyResolvedStructure::new_indexed(content.clone(), parent_id.clone(), index.clone(), prs_map);
+                let mut child_index = index.clone();
+                child_index.push(0);
+                let pss = PartiallyResolvedStructure::new_indexed(content.clone(), parent_id.clone(), child_index, prs_map);
                 PartiallyResolvedStructureType::Addressed{position: position.clone(), pss}
             },
             StructureType::Sequence(seq) => {
@@ -2437,7 +2439,12 @@ impl<'a> PartiallyResolvedStructure<'a> {
                     }
                 }
                 
-                PartiallyResolvedStructureType::Sequence(seq.iter().map(|s| PartiallyResolvedStructure::new_indexed(s.clone(), id.clone(), index.clone(), prs_map)).collect())
+                PartiallyResolvedStructureType::Sequence(seq.iter().enumerate().map(
+                    |(i, s)| {
+                        let mut child_index = index.clone();
+                        child_index.push(i);
+                        PartiallyResolvedStructure::new_indexed(s.clone(), id.clone(), child_index, prs_map)
+                    }).collect())
             },
             StructureType::Switch{value, cases, default} => {
                 for (_, structure) in cases {
@@ -3648,7 +3655,9 @@ impl<'a> PartiallyResolvedStructure<'a> {
                 let child_monikers = self.monikers_for_child();
                 match self.stype.as_mut() {
                     PartiallyResolvedStructureType::Switch{cases, ref mut pss, ..} => {
-                        let mut prs = PartiallyResolvedStructure::new_indexed(cases[i].1.clone(), self.id.clone(), self.index_path.clone(), prs_map);
+                        let mut child_index = self.index_path.clone();
+                        child_index.push(0); // Always 0 since switch only has one child
+                        let mut prs = PartiallyResolvedStructure::new_indexed(cases[i].1.clone(), self.id.clone(), child_index, prs_map);
                         prs.borrow_mut().initialize_inherited_monikers(prs_map, child_monikers);
                         *pss = Some(prs);
                     },
@@ -3664,7 +3673,9 @@ impl<'a> PartiallyResolvedStructure<'a> {
         let child_monikers = self.monikers_for_child();
         match self.stype.as_mut() {
             PartiallyResolvedStructureType::Switch{default, ref mut pss, ..} => {
-                let prs = PartiallyResolvedStructure::new_indexed(default.clone(), self.id.clone(), self.index_path.clone(), prs_map);
+                let mut child_index = self.index_path.clone();
+                child_index.push(0); // Always 0 since switch only has one child
+                let prs = PartiallyResolvedStructure::new_indexed(default.clone(), self.id.clone(), child_index, prs_map);
                 prs.borrow_mut().initialize_inherited_monikers(prs_map, child_monikers);
                 *pss = Some(prs);
             },
@@ -5721,17 +5732,17 @@ mod png_tests {
 
     fn validate_chunks(png: &mut FileMap, fm: &mut crate::FileManager, chunks: Vec<(u32, &str, u32)>) {
 
-        let png_chunks = StructureIdent::new_indexed("png_chunks".to_string(), vec![]);
+        let png_chunks = StructureIdent::new_indexed("png_chunks".to_string(), vec![1]);
         let png_chunks_reps = png_chunks.get_attr_ident(StructureAttrType::Repetitions);
 
         let mut targets = vec![png_chunks_reps.to_abstract()];
         let mut results = vec![ExprValue::Integer(chunks.len() as i64)];
 
         for (i, chunk) in chunks.iter().enumerate() {
-            let chunk_header = StructureIdent::new_indexed("chunk_header".to_string(), vec![i]);
+            let chunk_header = StructureIdent::new_indexed("chunk_header".to_string(), vec![1, i, 0]);
             let chunk_length = chunk_header.clone().get_field_ident("chunk_length".to_string());
             let chunk_type = chunk_header.clone().get_field_ident("chunk_type".to_string());
-            let chunk_footer = StructureIdent::new_indexed("chunk_footer".to_string(), vec![i]);
+            let chunk_footer = StructureIdent::new_indexed("chunk_footer".to_string(), vec![1, i, 2]);
             let chunk_crc = chunk_footer.clone().get_field_ident("chunk_crc".to_string());
             targets.push(chunk_length.to_abstract());
             results.push(ExprValue::Integer(chunk.0 as i64));
@@ -5750,7 +5761,7 @@ mod png_tests {
 
     fn validate_ihdr(png: &mut FileMap, fm: &mut crate::FileManager, index: usize, ihdr: PngIhdr) {
 
-        let ihdr_struct = StructureIdent::new_indexed("ihdr_body".to_string(), vec![index]);
+        let ihdr_struct = StructureIdent::new_indexed("ihdr_body".to_string(), vec![1, index, 1, 0]);
         let ihdr_width = ihdr_struct.clone().get_field_ident("ihdr_width".to_string()).to_abstract();
         let ihdr_height = ihdr_struct.clone().get_field_ident("ihdr_height".to_string()).to_abstract();
         let ihdr_bit_depth = ihdr_struct.clone().get_field_ident("ihdr_bit_depth".to_string()).to_abstract();
@@ -5783,7 +5794,7 @@ mod png_tests {
 
     fn validate_plte(png: &mut FileMap, fm: &mut crate::FileManager, index: usize, rgb: Vec<(u8, u8, u8)>) {
 
-        let plte_body = StructureIdent::new_indexed("plte_body".to_string(), vec![index]);
+        let plte_body = StructureIdent::new_indexed("plte_body".to_string(), vec![1, index, 1, 0]);
         let plte_reps = plte_body.get_attr_ident(StructureAttrType::Repetitions).to_abstract();
 
         let targets = vec![
@@ -5796,7 +5807,7 @@ mod png_tests {
 
         let mut targets = vec![];
         for i in 0..rgb.len() {
-            let plte_pallette = StructureIdent::new_indexed("plte_pallette".to_string(), vec![index, i]);
+            let plte_pallette = StructureIdent::new_indexed("plte_pallette".to_string(), vec![1, index, 1, 0, i]);
             targets.push(plte_pallette.clone().get_field_ident("plte_red".to_string()).to_abstract());
             targets.push(plte_pallette.clone().get_field_ident("plte_green".to_string()).to_abstract());
             targets.push(plte_pallette.clone().get_field_ident("plte_blue".to_string()).to_abstract());
@@ -5817,7 +5828,7 @@ mod png_tests {
     fn validate_trns(png: &mut FileMap, fm: &mut crate::FileManager, index: usize, trns: PngTrns) {
         match trns {
             PngTrns::Gray(k) => {
-                let trns_struct = StructureIdent::new_indexed("trns_body_gray".to_string(), vec![index]);
+                let trns_struct = StructureIdent::new_indexed("trns_body_gray".to_string(), vec![1, index, 1, 0, 0]);
                 let trns_gray = trns_struct.clone().get_field_ident("trns_gray".to_string()).to_abstract();
 
                 let targets = vec![
@@ -5829,7 +5840,7 @@ mod png_tests {
                 assert_eq!(png.value_dict.lookup_any(&trns_gray).unwrap(), ExprValue::Integer(k as i64));
             },
             PngTrns::Rgb(r, g, b) => {
-                let trns_struct = StructureIdent::new_indexed("trns_body_rgb".to_string(), vec![index]);
+                let trns_struct = StructureIdent::new_indexed("trns_body_rgb".to_string(), vec![1, index, 1, 0, 0]);
                 let trns_red = trns_struct.clone().get_field_ident("trns_red".to_string()).to_abstract();
                 let trns_green = trns_struct.clone().get_field_ident("trns_green".to_string()).to_abstract();
                 let trns_blue = trns_struct.clone().get_field_ident("trns_blue".to_string()).to_abstract();
@@ -5847,7 +5858,7 @@ mod png_tests {
                 assert_eq!(png.value_dict.lookup_any(&trns_blue).unwrap(), ExprValue::Integer(b as i64));
             },
             PngTrns::Indexed(v) => {
-                let trns_body = StructureIdent::new_indexed("trns_body_indexed".to_string(), vec![index]);
+                let trns_body = StructureIdent::new_indexed("trns_body_indexed".to_string(), vec![1, index, 1, 0, 0]);
                 let trns_reps = trns_body.get_attr_ident(StructureAttrType::Repetitions).to_abstract();
 
                 let targets = vec![
@@ -5860,7 +5871,7 @@ mod png_tests {
 
                 let mut targets = vec![];
                 for i in 0..v.len() {
-                    let trns_pallette = StructureIdent::new_indexed("trns_pallette".to_string(), vec![index, i]);
+                    let trns_pallette = StructureIdent::new_indexed("trns_pallette".to_string(), vec![1, index, 1, 0, 0, i]);
                     let trns_alpha = trns_pallette.get_field_ident("trns_alpha".to_string()).to_abstract();
                     targets.push(trns_alpha)
                 }
@@ -5875,7 +5886,7 @@ mod png_tests {
     }
 
     fn validate_gama(png: &mut FileMap, fm: &mut crate::FileManager, index: usize, gamma: u32) {
-        let gama_struct = StructureIdent::new_indexed("gama_body".to_string(), vec![index]);
+        let gama_struct = StructureIdent::new_indexed("gama_body".to_string(), vec![1, index, 1, 0]);
         let gama_gamma = gama_struct.clone().get_field_ident("gama_gamma".to_string()).to_abstract();
 
         let targets = vec![
@@ -5890,7 +5901,7 @@ mod png_tests {
     fn validate_sbit(png: &mut FileMap, fm: &mut crate::FileManager, index: usize, sbit: PngSbit) {
         match sbit {
             PngSbit::Gray(k) => {
-                let sbit_struct = StructureIdent::new_indexed("sbit_body_gray".to_string(), vec![index]);
+                let sbit_struct = StructureIdent::new_indexed("sbit_body_gray".to_string(), vec![1, index, 1, 0, 0]);
                 let sbit_gray = sbit_struct.clone().get_field_ident("sbit_gray".to_string()).to_abstract();
 
                 let targets = vec![
@@ -5902,7 +5913,7 @@ mod png_tests {
                 assert_eq!(png.value_dict.lookup_any(&sbit_gray).unwrap(), ExprValue::Integer(k as i64));
             },
             PngSbit::Rgb(r, g, b) => {
-                let sbit_struct = StructureIdent::new_indexed("sbit_body_rgb".to_string(), vec![index]);
+                let sbit_struct = StructureIdent::new_indexed("sbit_body_rgb".to_string(), vec![1, index, 1, 0, 0]);
                 let sbit_red = sbit_struct.clone().get_field_ident("sbit_red".to_string()).to_abstract();
                 let sbit_green = sbit_struct.clone().get_field_ident("sbit_green".to_string()).to_abstract();
                 let sbit_blue = sbit_struct.clone().get_field_ident("sbit_blue".to_string()).to_abstract();
@@ -5920,7 +5931,7 @@ mod png_tests {
                 assert_eq!(png.value_dict.lookup_any(&sbit_blue).unwrap(), ExprValue::Integer(b as i64));
             },
             PngSbit::GrayAlpha(k, a) => {
-                let sbit_struct = StructureIdent::new_indexed("sbit_body_ga".to_string(), vec![index]);
+                let sbit_struct = StructureIdent::new_indexed("sbit_body_ga".to_string(), vec![1, index, 1, 0, 0]);
                 let sbit_gray = sbit_struct.clone().get_field_ident("sbit_gray".to_string()).to_abstract();
                 let sbit_alpha = sbit_struct.clone().get_field_ident("sbit_alpha".to_string()).to_abstract();
 
@@ -5935,7 +5946,7 @@ mod png_tests {
                 assert_eq!(png.value_dict.lookup_any(&sbit_alpha).unwrap(), ExprValue::Integer(a as i64));
             },
             PngSbit::Rgba(r, g, b, a) => {
-                let sbit_struct = StructureIdent::new_indexed("sbit_body_rgba".to_string(), vec![index]);
+                let sbit_struct = StructureIdent::new_indexed("sbit_body_rgba".to_string(), vec![1, index, 1, 0, 0]);
                 let sbit_red = sbit_struct.clone().get_field_ident("sbit_red".to_string()).to_abstract();
                 let sbit_green = sbit_struct.clone().get_field_ident("sbit_green".to_string()).to_abstract();
                 let sbit_blue = sbit_struct.clone().get_field_ident("sbit_blue".to_string()).to_abstract();
@@ -5961,7 +5972,7 @@ mod png_tests {
     fn validate_bkgd(png: &mut FileMap, fm: &mut crate::FileManager, index: usize, bkgd: PngBkgd) {
         match bkgd {
             PngBkgd::Gray(k) => {
-                let bkgd_struct = StructureIdent::new_indexed("bkgd_body_gray".to_string(), vec![index]);
+                let bkgd_struct = StructureIdent::new_indexed("bkgd_body_gray".to_string(), vec![1, index, 1, 0, 0]);
                 let bkgd_gray = bkgd_struct.clone().get_field_ident("bkgd_gray".to_string()).to_abstract();
 
                 let targets = vec![
@@ -5973,7 +5984,7 @@ mod png_tests {
                 assert_eq!(png.value_dict.lookup_any(&bkgd_gray).unwrap(), ExprValue::Integer(k as i64));
             },
             PngBkgd::Rgb(r, g, b) => {
-                let bkgd_struct = StructureIdent::new_indexed("bkgd_body_rgb".to_string(), vec![index]);
+                let bkgd_struct = StructureIdent::new_indexed("bkgd_body_rgb".to_string(), vec![1, index, 1, 0, 0]);
                 let bkgd_red = bkgd_struct.clone().get_field_ident("bkgd_red".to_string()).to_abstract();
                 let bkgd_green = bkgd_struct.clone().get_field_ident("bkgd_green".to_string()).to_abstract();
                 let bkgd_blue = bkgd_struct.clone().get_field_ident("bkgd_blue".to_string()).to_abstract();
@@ -5991,7 +6002,7 @@ mod png_tests {
                 assert_eq!(png.value_dict.lookup_any(&bkgd_blue).unwrap(), ExprValue::Integer(b as i64));
             },
             PngBkgd::Indexed(a) => {
-                let bkgd_struct = StructureIdent::new_indexed("bkgd_body_indexed".to_string(), vec![index]);
+                let bkgd_struct = StructureIdent::new_indexed("bkgd_body_indexed".to_string(), vec![1, index, 1, 0, 0]);
                 let bkgd_alpha = bkgd_struct.clone().get_field_ident("bkgd_alpha".to_string()).to_abstract();
 
                 let targets = vec![
@@ -6006,10 +6017,10 @@ mod png_tests {
     }
 
     fn validate_splt(png: &mut FileMap, fm: &mut crate::FileManager, index: usize, name: &str, depth: u8, rgbaf: Vec<(u16, u16, u16, u16, u16)>) {
-        let splt_header = StructureIdent::new_indexed("splt_header".to_string(), vec![index]);
+        let splt_header = StructureIdent::new_indexed("splt_header".to_string(), vec![1, index, 1, 0, 0]);
         let splt_name = splt_header.clone().get_field_ident("splt_name".to_string()).to_abstract();
         let splt_depth = splt_header.clone().get_field_ident("splt_sample_depth".to_string()).to_abstract();
-        let splt_body = StructureIdent::new_indexed("splt_body".to_string(), vec![index]);
+        let splt_body = StructureIdent::new_indexed("splt_body".to_string(), vec![1, index, 1, 0, 1, 0]);
         let splt_reps = splt_body.get_attr_ident(StructureAttrType::Repetitions).to_abstract();
 
         let targets = vec![
@@ -6026,7 +6037,7 @@ mod png_tests {
 
         let mut targets = vec![];
         for i in 0..rgbaf.len() {
-            let splt_pallette = StructureIdent::new_indexed("splt_pallette".to_string(), vec![index, i]);
+            let splt_pallette = StructureIdent::new_indexed("splt_pallette".to_string(), vec![1, index, 1, 0, 1, 0, i]);
             targets.push(splt_pallette.clone().get_field_ident("splt_red".to_string()).to_abstract());
             targets.push(splt_pallette.clone().get_field_ident("splt_green".to_string()).to_abstract());
             targets.push(splt_pallette.clone().get_field_ident("splt_blue".to_string()).to_abstract());
@@ -6049,7 +6060,7 @@ mod png_tests {
 
     fn validate_hist(png: &mut FileMap, fm: &mut crate::FileManager, index: usize, freqs: Vec<u16>) {
 
-        let hist_body = StructureIdent::new_indexed("hist_body".to_string(), vec![index]);
+        let hist_body = StructureIdent::new_indexed("hist_body".to_string(), vec![1, index, 1, 0]);
         let hist_reps = hist_body.get_attr_ident(StructureAttrType::Repetitions).to_abstract();
 
         let targets = vec![
@@ -6062,7 +6073,7 @@ mod png_tests {
 
         let mut targets = vec![];
         for i in 0..freqs.len() {
-            let hist_entry = StructureIdent::new_indexed("hist_entry".to_string(), vec![index, i]);
+            let hist_entry = StructureIdent::new_indexed("hist_entry".to_string(), vec![1, index, 1, 0, i]);
             targets.push(hist_entry.get_field_ident("hist_freq".to_string()).to_abstract());
         }
 
@@ -6076,7 +6087,7 @@ mod png_tests {
 
     fn validate_time(png: &mut FileMap, fm: &mut crate::FileManager, index: usize, time: PngTime) {
 
-        let time_struct = StructureIdent::new_indexed("time_body".to_string(), vec![index]);
+        let time_struct = StructureIdent::new_indexed("time_body".to_string(), vec![1, index, 1, 0]);
         let time_year = time_struct.clone().get_field_ident("time_year".to_string()).to_abstract();
         let time_month = time_struct.clone().get_field_ident("time_month".to_string()).to_abstract();
         let time_day = time_struct.clone().get_field_ident("time_day".to_string()).to_abstract();
