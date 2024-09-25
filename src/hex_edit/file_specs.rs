@@ -4733,6 +4733,40 @@ pub struct Structure {
 
 impl Structure {
 
+    /// Returns the first child (or self) that has an id that matches the string supplied if
+    /// one exists. Returns None otherwise
+    fn get_child_by_id(self: &Rc<Self>, id: &str) -> Option<Rc<Structure>> {
+        if self.id == id {
+            Some(self.clone())
+        } else {
+            match &self.stype {
+                StructureType::Section(_) => None,
+                StructureType::Addressed{content, ..} => content.get_child_by_id(id),
+                StructureType::Sequence(seq) => {
+                    for s in seq {
+                        let res = s.get_child_by_id(id);
+                        if res.is_some() {
+                            return res
+                        }
+                    }
+                    None
+                },
+                StructureType::Switch{cases, default, ..} => {
+                    for (_, s) in cases {
+                        let res = s.get_child_by_id(id);
+                        if res.is_some() {
+                            return res
+                        }
+                    }
+                    default.get_child_by_id(id)
+                },
+                StructureType::Repeat{structure, ..} | StructureType::RepeatUntil{structure, ..} | StructureType::Chain{structure, ..} => {
+                    structure.get_child_by_id(id)
+                }
+            }
+        }
+    }
+
     fn wrap_addressed(inner: Rc<Structure>, position: Expr) -> Structure {
         let id = inner.id.clone() + "#wrapper";
         let name = inner.name.clone();
@@ -4758,6 +4792,22 @@ impl Structure {
     }
 
     fn from_xml_object(mut obj: XmlObject) -> Result<Structure, ParseXmlError> {
+        if obj.element.as_str() == "use" {
+            let url = convert_xml_symbols(obj.attrs.remove("url").unwrap().as_str());
+            if let Some((fname, struct_id)) = url.split_once("#") {
+                let text = std::fs::read_to_string(fname).unwrap();
+                let s = Rc::new(parse_xml(&text).unwrap());
+                if let Some(child) = s.get_child_by_id(struct_id) {
+                    std::mem::drop(s);
+                    return Ok(Rc::into_inner(child).unwrap())
+                } else {
+                    panic!("Structure does not contain id '{}'", struct_id)
+                }
+            } else {
+                panic!("Unrecognized url format: '{}'", url)
+            }
+        }
+
         let length = match obj.attrs.remove("length-policy") {
             None => match obj.attrs.remove("length") {
                 None => LengthPolicy::FitContents,
