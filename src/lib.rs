@@ -202,13 +202,13 @@ impl<'a> EditorStack<'a> {
         }
     }
 
-    fn push(&mut self, filename: String, file_manager_type: FileManagerType, extract: bool, file_spec: Option<&'a Structure>) -> std::io::Result<usize> {
+    fn push(&mut self, filename: String, file_manager_type: FileManagerType, extract: bool, file_spec: Option<Rc<Structure>>) -> std::io::Result<usize> {
         let fm = FileManager::new(filename, file_manager_type, extract)?;
         let mut hex_edit = HexEdit::new(fm, self.x, self.y, self.width, self.height,
             16, self.show_filename, self.show_hex, self.show_ascii, // Line Length, Show filename, Show Hex, Show ASCII
             '.', "  ".to_string(), self.caps);
         if let Some(s) = file_spec {
-            hex_edit.set_file_spec(&s);
+            hex_edit.set_file_spec(s);
         }
         
         self.editors.push(HexEditManager {
@@ -961,12 +961,12 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
 
     init_colors();
 
-    let png = make_png();
+    let png = Rc::new(make_png());
 
     let mut current_keystroke = Vec::<char>::new();
 
     let mut editors = EditorStack::new(0, 0, window.get_max_x() as usize - 1, window.get_max_y()as usize - 1);
-    if let Err(msg) = editors.push(filename, file_manager_type, extract, Some(&png)) {
+    if let Err(msg) = editors.push(filename, file_manager_type, extract, Some(png)) {
         eprintln!("{}", msg);
         std::process::exit(1);
     };

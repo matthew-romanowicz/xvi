@@ -1014,8 +1014,10 @@ impl<'a> HexEdit<'a> {
         ActionResult::no_error(UpdateDescription::NoUpdate) // TODO: Make this return an action
     }
 
-    pub fn set_file_spec(&mut self, fs: &'a Structure) {
-        self.file_spec = Some(FileMap::new(fs))
+    pub fn set_file_spec(&mut self, fs: Rc<Structure>) {
+        let mut fs = FileMap::new(fs);
+        fs.initialize(&mut self.file_manager);
+        self.file_spec = Some(fs)
     }
 
     pub fn get_cursor_pos(&self) -> usize {

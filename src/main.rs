@@ -64,8 +64,8 @@ options:
     // let fname = r"C:\Users\Matthew\Documents\Rust\xvi\tests\tbbn0g04.png".to_string();
     // let fname = r"C:\Users\Matthew\Documents\Rust\xvi\tests\ch1n3p04.png".to_string();
     // let fname = r"C:\Users\Matthew\Documents\Rust\xvi\tests\cm9n0g04.png".to_string();
-    let fname = r"C:\Users\Matthew\Documents\Rust\xvi\tests\ccwn3p08.png".to_string();
-    // let fname = r"C:\Users\Matthew\Documents\Rust\xvi\tests\exif2c08.png".to_string();
+    // let fname = r"C:\Users\Matthew\Documents\Rust\xvi\tests\ccwn3p08.png".to_string();
+    let fname = r"C:\Users\Matthew\Documents\Rust\xvi\tests\exif2c08.png".to_string();
     match run(fname, file_manager_type, extract) {
         Ok(_) => {
             std::process::exit(0);
