@@ -447,10 +447,10 @@ impl ExprOp {
                 Ok(args_iter.fold(init, |a, b| (&a - b)))
             },
             ExprOp::Mult => {
-                // let mut args_iter = args.iter();
-                // let init = args_iter.next().unwrap().clone();
-                // Ok(args_iter.fold(init, |a, b| (a * b)))
-                todo!()
+                let mut args_iter = args.iter();
+                let init = args_iter.next().unwrap().clone();
+                Ok(args_iter.fold(init, |a, b| (&a * b)))
+                // todo!()
             },
             ExprOp::Div => {
                 // let mut args_iter = args.iter();
@@ -652,6 +652,24 @@ impl std::ops::Sub<ExprValue> for ExprValue {
     }
 }
 
+impl std::ops::Mul<ExprValue> for ExprValue {
+    type Output = ExprValue;
+    fn mul(self, rhs: ExprValue) -> Self::Output {
+        match (self, rhs) {
+            (ExprValue::Integer(left), ExprValue::Integer(right)) => {
+                ExprValue::Integer(left * right)
+            },
+            (ExprValue::Position(left), ExprValue::Integer(right)) => {
+                ExprValue::Position(left * (right as i128))
+            },
+            (ExprValue::Integer(left), ExprValue::Position(right)) => {
+                ExprValue::Position(right * (left as i128))
+            },
+            _ => todo!()
+        }
+    }
+}
+
 impl<'a, 'b> std::ops::Add<&'a ExprValue> for &'b ExprValue {
     type Output = ExprValue;
     fn add(self, rhs: &'a ExprValue) -> Self::Output {
@@ -664,6 +682,14 @@ impl<'a, 'b> std::ops::Sub<&'a ExprValue> for &'b ExprValue {
     type Output = ExprValue;
     fn sub(self, rhs: &'a ExprValue) -> Self::Output {
         self.clone() - rhs.clone()
+        
+    }
+}
+
+impl<'a, 'b> std::ops::Mul<&'a ExprValue> for &'b ExprValue {
+    type Output = ExprValue;
+    fn mul(self, rhs: &'a ExprValue) -> Self::Output {
+        self.clone() * rhs.clone()
         
     }
 }
@@ -1630,7 +1656,13 @@ impl IntegerEnum {
         for mut child in obj.children {
             match child.element.as_str() {
                 "enum-case" => {
-                    let i = i64::from_str(child.attrs.remove("index").unwrap().as_str()).unwrap();
+                    let s = child.attrs.remove("index").unwrap().as_str();
+                    let i: i64;
+                    if let Some(s) = s.strip_prefix("0x") {
+                        i = i64::from_str_radix(s, 16).unwrap()
+                    } else {
+                        i = i64::from_str(s).unwrap();
+                    }
                     let value = child.attrs.remove("value").unwrap().as_str().to_string();
                     cases.push((i, value));
                 },
@@ -2374,81 +2406,8 @@ struct PartiallyResolvedStructure<'a> {
 impl<'a> PartiallyResolvedStructure<'a> {
 
     fn new(original: Rc<Structure>, parent_id: StructureIdent, 
-            prs_map: &mut HashMap<StructureIdent, Rc<RefCell<PartiallyResolvedStructure<'a>>>>) -> Rc<RefCell<PartiallyResolvedStructure<'a>>> {
-        
-        let id = StructureIdent::new(original.id.clone());
-
-        let mut import_monikers = HashMap::new();
-        let stype = match &original.stype {
-            StructureType::Section(section) => {
-                PartiallyResolvedStructureType::UnresolvedSection{initial: section.clone()}
-            },
-            StructureType::Addressed{position, content} => {
-                for name in &content.exports {
-                    import_monikers.insert(name.clone(), None);
-                }
-                let pss = PartiallyResolvedStructure::new(content.clone(), parent_id.clone(), prs_map);
-                PartiallyResolvedStructureType::Addressed{position: position.clone(), pss}
-            },
-            StructureType::Sequence(seq) => {
-                for structure in seq {
-                    for name in &structure.exports {
-                        import_monikers.insert(name.clone(), None);
-                    }
-                }
-                
-                PartiallyResolvedStructureType::Sequence(seq.iter().map(|s| PartiallyResolvedStructure::new(s.clone(), id.clone(), prs_map)).collect())
-            },
-            StructureType::Switch{value, cases, default} => {
-                for (_, structure) in cases {
-                    for name in &structure.exports {
-                        import_monikers.insert(name.clone(), None);
-                    }
-                }
-                for name in &default.exports {
-                    import_monikers.insert(name.clone(), None);
-                }
-                PartiallyResolvedStructureType::Switch{value: value.clone(), cases: cases.iter().map(|(e, c)| (e.clone(), c.clone())).collect(), default: default.clone(), pss: None}
-            },
-            StructureType::Repeat{n, structure} => {
-                for name in &structure.exports {
-                    import_monikers.insert(name.clone(), None);
-                }
-                PartiallyResolvedStructureType::Repeat{n: n.clone(), structure: structure.clone(), seq: Vec::new(), finalized: false}
-            },
-            StructureType::RepeatUntil{end, structure} => {
-                for name in &structure.exports {
-                    import_monikers.insert(name.clone(), None);
-                }
-                PartiallyResolvedStructureType::RepeatUntil{end: end.clone(), structure: structure.clone(), seq: Vec::new(), finalized: false}
-            },
-            StructureType::Chain{next, structure} => {
-                for name in &structure.exports {
-                    import_monikers.insert(name.clone(), None);
-                }
-                let prs = PartiallyResolvedStructure::new_indexed(structure.clone(), id.clone(), vec![0], prs_map);
-                let structure = Structure::wrap_addressed(structure.clone(), Expr::Value(ExprValue::Bool(false))); // The "address" put in here 
-                // must never be used, hence why it's a boolean
-                PartiallyResolvedStructureType::Chain{next: next.clone(), structure: Rc::new(structure), prs, seq: Vec::new(), finalized: false}
-            }
-        };
-
-        let prs = Rc::new(RefCell::new(PartiallyResolvedStructure {
-            id: id.clone(),
-            original: original.clone(),
-            parent_id,
-            alignment: original.alignment.clone(),
-            alignment_base: original.alignment_base.clone(),
-            length: original.length.clone(),
-            stype: Box::new(stype),
-            import_monikers,
-            exports: original.exports.clone(),
-            inherited_monikers: HashMap::new(),
-            index_path: Vec::new()
-        }));
-
-        prs_map.insert(id.clone(), prs.clone());
-        prs
+        prs_map: &mut HashMap<StructureIdent, Rc<RefCell<PartiallyResolvedStructure<'a>>>>) -> Rc<RefCell<PartiallyResolvedStructure<'a>>> {
+        PartiallyResolvedStructure::new_indexed(original, parent_id, vec![], prs_map)
     }
 
     fn new_indexed(original: Rc<Structure>, parent_id: StructureIdent, index: Vec<usize>, prs_map: &mut HashMap<StructureIdent, Rc<RefCell<PartiallyResolvedStructure<'a>>>>) -> Rc<RefCell<PartiallyResolvedStructure<'a>>> {
