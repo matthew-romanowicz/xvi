@@ -5836,6 +5836,66 @@ enum PngBkgd {
     Indexed(u8)
 }
 
+#[cfg(test)]
+enum ExifIfdData {
+    UByte(Vec<u8>),
+    String(String),
+    UShort(Vec<u16>),
+    ULong(Vec<u32>),
+    URat(Vec<(u32, u32)>),
+    SByte(Vec<i8>),
+    Undefined(Vec<u8>),
+    SShort(Vec<i16>),
+    SLong(Vec<i32>),
+    SRat(Vec<(i32, i32)>),
+    Float(Vec<f32>),
+    Double(Vec<f64>)
+}
+
+#[cfg(test)]
+impl ExifIfdData {
+    fn format(&self) -> u16 {
+        match self {
+            ExifIfdData::UByte(_) => 1,
+            ExifIfdData::String(_) => 2,
+            ExifIfdData::UShort(_) => 3,
+            ExifIfdData::ULong(_) => 4,
+            ExifIfdData::URat(_) => 5,
+            ExifIfdData::SByte(_) => 6,
+            ExifIfdData::Undefined(_) => 7,
+            ExifIfdData::SShort(_) => 8,
+            ExifIfdData::SLong(_) => 9,
+            ExifIfdData::SRat(_) => 10,
+            ExifIfdData::Float(_) => 11,
+            ExifIfdData::Double(_) => 12
+        }
+    }
+
+    fn num(&self) -> usize {
+        match self {
+            ExifIfdData::UByte(v) => v.len(),
+            ExifIfdData::String(s) => s.len(),
+            ExifIfdData::UShort(v) => v.len(),
+            ExifIfdData::ULong(v) => v.len(),
+            ExifIfdData::URat(v) => v.len(),
+            ExifIfdData::SByte(v) => v.len(),
+            ExifIfdData::Undefined(v) => v.len(),
+            ExifIfdData::SShort(v) => v.len(),
+            ExifIfdData::SLong(v) => v.len(),
+            ExifIfdData::SRat(v) => v.len(),
+            ExifIfdData::Float(v) => v.len(),
+            ExifIfdData::Double(v) => v.len()
+        }
+    }
+}
+
+#[cfg(test)]
+struct ExifIfdEntry {
+    tag: u32,
+    address: Option<u32>,
+    data: ExifIfdData
+}
+
 
 #[cfg(test)]
 mod png_tests {
@@ -6235,6 +6295,75 @@ mod png_tests {
 
     }
 
+    fn validate_exif(png: &mut FileMap, fm: &mut crate::FileManager, index: usize, ifd0: Vec<ExifIfdEntry>) {
+        let ifd0_struct = StructureIdent::new_indexed("exif_ifd_entries".to_string(), vec![1, index, 1, 0, 1, 0, 1]);
+        let ifd0_reps = ifd0_struct.get_attr_ident(StructureAttrType::Repetitions).to_abstract();
+
+        let targets = vec![ifd0_reps.clone()];
+
+        png.get_data(targets.clone(), fm);
+
+        assert_eq!(png.value_dict.lookup_any(&ifd0_reps).unwrap(), ExprValue::Integer(ifd0.len() as i64));
+
+
+        for (i, ifd) in ifd0.iter().enumerate() {
+
+            let ifd_entry_header = StructureIdent::new_indexed("exif_ifd_entry_header".to_string(), vec![1, index, 1, 0, 1, 0, 1, i, 0]);
+            let ifd_tag = ifd_entry_header.get_field_ident("exif_ifd_tag".to_string()).to_abstract();
+            let ifd_format = ifd_entry_header.get_field_ident("exif_ifd_format".to_string()).to_abstract();
+            let ifd_num = ifd_entry_header.get_field_ident("exif_ifd_num".to_string()).to_abstract();
+            let targets = vec![
+                ifd_tag.clone(),
+                ifd_format.clone(),
+                ifd_num.clone()
+            ];
+            png.get_data(targets.clone(), fm);
+            assert_eq!(png.value_dict.lookup_any(&ifd_tag).unwrap(), ExprValue::Integer(ifd.tag as i64));
+            assert_eq!(png.value_dict.lookup_any(&ifd_format).unwrap(), ExprValue::Integer(ifd.data.format() as i64));
+            assert_eq!(png.value_dict.lookup_any(&ifd_num).unwrap(), ExprValue::Integer(ifd.data.num() as i64));
+
+            let mut targets = vec![];
+
+            match &ifd.data {
+                ExifIfdData::String(s) => {
+                    if let Some(addr) = ifd.address {
+                        let ifd_entry_addr_body = StructureIdent::new_indexed("exif_ifd_address_ascii_section".to_string(), vec![1, index, 1, 0, 1, 0, 1, i, 1, 0, 0, 0]);
+                        let ifd_entry_addr = ifd_entry_addr_body.get_field_ident("exif_ifd_address_ascii".to_string()).to_abstract();
+                        let ifd_entry_body = StructureIdent::new_indexed("exif_ifd_ascii_body_addressed".to_string(), vec![1, index, 1, 0, 1, 0, 1, i, 1, 0, 0, 1, 0]);
+                        let ifd_entry_value = ifd_entry_body.get_field_ident("exif_ifd_ascii".to_string()).to_abstract();
+                        targets.push(ifd_entry_addr.clone());
+                        targets.push(ifd_entry_value.clone());
+                        png.get_data(targets.clone(), fm);
+                        assert_eq!(png.value_dict.lookup_any(&ifd_entry_addr).unwrap(), ExprValue::Integer(addr as i64));
+                        assert_eq!(png.value_dict.lookup_any(&ifd_entry_value).unwrap(), ExprValue::String(s.clone()));
+                    } else {
+                        let ifd_entry_body = StructureIdent::new_indexed("exif_ifd_ascii_body".to_string(), vec![1, index, 1, 0, 1, 0, 1, i, 1, 0, 0]);
+                        targets.push(ifd_entry_body.get_field_ident("exif_ifd_ascii".to_string()).to_abstract());
+                        png.get_data(targets.clone(), fm);
+                        assert_eq!(png.value_dict.lookup_any(&targets[0]).unwrap(), ExprValue::String(s.clone()));
+                    }
+                },
+                ExifIfdData::UShort(v) => {
+                    if let Some(addr) = ifd.address {
+                        todo!()
+                    } else {
+                        for (j, x) in v.iter().enumerate() {
+                            let ifd_entry_body = StructureIdent::new_indexed("exif_ifd_u16_body".to_string(), vec![1, index, 1, 0, 1, 0, 1, i, 1, 0, 0, 0, j]);
+                            targets.push(ifd_entry_body.get_field_ident("exif_ifd_u16".to_string()).to_abstract());
+                        }
+                        png.get_data(targets.clone(), fm);
+                        for (target, x) in targets.iter().zip(v.iter()) {
+                            assert_eq!(png.value_dict.lookup_any(&target).unwrap(), ExprValue::Integer(*x as i64));
+                        }
+                    }
+                },
+                _ => {}
+            }
+            
+            
+        }
+    }
+
     #[test]
     fn chunks_ps2n0g08() {
 
@@ -6320,6 +6449,21 @@ mod png_tests {
     }
 
     #[test]
+    fn chunks_exif2c08() {
+
+        let (mut png, mut fm) = start_file(r"tests/exif2c08.png");
+
+        let chunk_data = vec![
+            (13  , "IHDR", 0xfc18eda3),
+            (978 , "eXIf", 0xba88aa83),
+            (741 , "IDAT", 0xe63d2b24),
+            (0   , "IEND", 0xae426082)
+        ];
+
+        validate_chunks(&mut png, &mut fm, chunk_data);
+    }
+
+    #[test]
     fn ihdr_ps2n0g08() {
 
         let ( mut png, mut fm) = start_file(r"tests/ps2n0g08.png");
@@ -6383,6 +6527,24 @@ mod png_tests {
             height: 32,
             bit_depth: 4,
             color_type: 3,
+            compression_method: 0,
+            filter_method: 0,
+            interlace_method: 0   
+        };
+
+        validate_ihdr(&mut png, &mut fm, 0, ihdr);
+    }
+
+    #[test]
+    fn ihdr_exif2c08() {
+
+        let ( mut png, mut fm) = start_file(r"tests/exif2c08.png");
+
+        let ihdr = PngIhdr {
+            width: 32,
+            height: 32,
+            bit_depth: 8,
+            color_type: 2,
             compression_method: 0,
             filter_method: 0,
             interlace_method: 0   
@@ -6565,6 +6727,24 @@ mod png_tests {
 
         validate_time(&mut png, &mut fm, 2, time);
 
+    }
+
+    #[test]
+    fn exif_exif2c08() {
+
+        let ( mut png, mut fm) = start_file(r"tests/exif2c08.png");
+
+        let ifd0 = vec![
+            ExifIfdEntry {tag: 0x0112, address: None, data: ExifIfdData::UShort(vec![1])},
+            ExifIfdEntry {tag: 0x011a, address: Some(98), data: ExifIfdData::URat(vec![(72, 1)])},
+            ExifIfdEntry {tag: 0x011b, address: Some(106), data: ExifIfdData::URat(vec![(72, 1)])},
+            ExifIfdEntry {tag: 0x0128, address: None, data: ExifIfdData::UShort(vec![2])},
+            ExifIfdEntry {tag: 0x0213, address: None, data: ExifIfdData::UShort(vec![1])},
+            ExifIfdEntry {tag: 0x8298, address: Some(114), data: ExifIfdData::String("2017 Willem van Schaik\x00".to_string())},
+            ExifIfdEntry {tag: 0x8769, address: None, data: ExifIfdData::ULong(vec![138])},
+        ];
+
+        validate_exif(&mut png, &mut fm, 1, ifd0);
     }
 }
 
