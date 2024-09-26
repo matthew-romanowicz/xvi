@@ -923,6 +923,7 @@ impl Expr {
                     eval_args.push(arg.evaluate_with_args(arguments, lookup)?)
                 }
                 Ok(op.apply(eval_args).unwrap())
+                
             },
             Expr::Value(v) => Ok(v.clone()),
             Expr::Var(s) => match lookup(s) {
@@ -2424,7 +2425,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
                 PartiallyResolvedStructureType::UnresolvedSection{initial: section.clone()}
             },
             StructureType::Addressed{position, content} => {
-                for name in &content.exports {
+                for name in content.exports.keys() {
                     import_monikers.insert(name.clone(), None);
                 }
                 let mut child_index = index.clone();
@@ -2434,7 +2435,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
             },
             StructureType::Sequence(seq) => {
                 for structure in seq {
-                    for name in &structure.exports {
+                    for name in structure.exports.keys() {
                         import_monikers.insert(name.clone(), None);
                     }
                 }
@@ -2448,29 +2449,29 @@ impl<'a> PartiallyResolvedStructure<'a> {
             },
             StructureType::Switch{value, cases, default} => {
                 for (_, structure) in cases {
-                    for name in &structure.exports {
+                    for name in structure.exports.keys() {
                         import_monikers.insert(name.clone(), None);
                     }
                 }
-                for name in &default.exports {
+                for name in default.exports.keys() {
                     import_monikers.insert(name.clone(), None);
                 }
                 PartiallyResolvedStructureType::Switch{value: value.clone(), cases: cases.iter().map(|(e, c)| (e.clone(), c.clone())).collect(), default: default.clone(), pss: None}
             },
             StructureType::Repeat{n, structure} => {
-                for name in &structure.exports {
+                for name in structure.exports.keys() {
                     import_monikers.insert(name.clone(), None);
                 }
                 PartiallyResolvedStructureType::Repeat{n: n.clone(), structure: structure.clone(), seq: Vec::new(), finalized: false}
             },
             StructureType::RepeatUntil{end, structure} => {
-                for name in &structure.exports {
+                for name in structure.exports.keys() {
                     import_monikers.insert(name.clone(), None);
                 }
                 PartiallyResolvedStructureType::RepeatUntil{end: end.clone(), structure: structure.clone(), seq: Vec::new(), finalized: false}
             },
             StructureType::Chain{next, structure} => {
-                for name in &structure.exports {
+                for name in structure.exports.keys() {
                     import_monikers.insert(name.clone(), None);
                 }
                 let mut prs_index = index.clone();
@@ -2491,7 +2492,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
             length: original.length.clone(),
             stype: Box::new(stype),
             import_monikers,
-            exports: original.exports.clone(),
+            exports: original.exports.keys().map(|v| v.to_string()).collect(),
             inherited_monikers: HashMap::new(),
             index_path: index
         }));
@@ -2743,8 +2744,27 @@ impl<'a> PartiallyResolvedStructure<'a> {
                             let mut new_dr = DependencyReport::might_exist(vars);
                             new_dr.parents_children.extend(dr.parents_children);
                             Ok(new_dr)
+                        },
+                        DepResult::DoesNotExist => {
+                            // Import source doesn't exist, use default value if available
+                            if let Some(default) = self.original.exports.get(&field_id.id).expect("PRS has export that isn't in original structure?") {
+                                // panic!("DEFAULT!!!");
+                                let lookup = self.get_lookup_fn(vd);
+                                match default.evaluate(&lookup) {
+                                    Ok(value) => {
+                                        let mut dr = DependencyReport::success(DataSource::Given(value));
+                                        dr.add_pc_pairs(self.convert_expr_vars(default.vars())?, HashSet::from([field_id.to_abstract()]));
+                                        Ok(dr)
+                                    },
+                                    Err(ExprEvalError::LookupError{..}) => Ok(DependencyReport::incomplete(self.convert_expr_vars(default.vars())?)),
+                                    Err(err) => Err(err)
+                                }
+                            } else {
+                                Ok(DependencyReport::does_not_exist())
+                            }
+                            
                         }
-                        _ => todo!()
+                        // _ => todo!()
                     }
 
                 }
@@ -4193,13 +4213,13 @@ impl<'a> PartiallyResolvedStructure<'a> {
 
                 } else {
                     
-                    if default.exports.contains(&key) {
+                    if default.exports.contains_key(&key) {
                         let switch_index_id = self.id.get_attr_ident(StructureAttrType::SwitchIndex).to_abstract();
                         return Ok(DependencyReport::might_exist(HashSet::from([switch_index_id])))
                     }
 
                     for (check, case) in cases {
-                        if case.exports.contains(&key) {
+                        if case.exports.contains_key(&key) {
                             let switch_index_id = self.id.get_attr_ident(StructureAttrType::SwitchIndex).to_abstract();
                             return Ok(DependencyReport::might_exist(HashSet::from([switch_index_id])))
                         }
@@ -4212,7 +4232,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
             PartiallyResolvedStructureType::Repeat{structure, seq, finalized, ..} | PartiallyResolvedStructureType::RepeatUntil{structure, seq, finalized, ..} => {
                 let mut current_best;
 
-                if structure.exports.contains(&key) {
+                if structure.exports.contains_key(&key) {
                     if *finalized {
                         info!("Current best is DNE");
                         current_best = DependencyReport::does_not_exist()
@@ -4242,7 +4262,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
             PartiallyResolvedStructureType::Chain{structure, prs, seq, finalized, ..} => {
                 let mut current_best;
 
-                if structure.exports.contains(&key) {
+                if structure.exports.contains_key(&key) {
                     if *finalized {
                         info!("Current best is DNE");
                         current_best = DependencyReport::does_not_exist()
@@ -4402,7 +4422,9 @@ impl<'a> PartiallyResolvedStructure<'a> {
                     dr.add_pc_pairs(parents, HashSet::from([contents_length_id]));
                     return Ok(dr)
                 } else {
-                    todo!()
+                    // todo!()
+                    let switch_value_id = self.id.get_attr_ident(StructureAttrType::SwitchValue).to_abstract();
+                    return Ok(DependencyReport::incomplete(HashSet::from([switch_value_id])))
                 }
 
             },
@@ -4725,7 +4747,7 @@ pub struct Structure {
     alignment: Expr,
     alignment_base: Expr,
     length: LengthPolicy,
-    exports: HashSet<String>,
+    exports: HashMap<String, Option<Expr>>,
     def_fields: HashMap<String, DefField>,
     breaks: Vec<Break>,
     stype: StructureType
@@ -4823,8 +4845,14 @@ impl Structure {
                 _ => panic!("Unrecognized length policy")
             }
         };
-        let id = convert_xml_symbols(obj.attrs.remove("id").unwrap().as_str());
-        let name = convert_xml_symbols(obj.attrs.remove("name").unwrap().as_str());
+        let id = match obj.attrs.remove("id") {
+            Some(s) => convert_xml_symbols(s.as_str()),
+            None => String::new()
+        };
+        let name = match obj.attrs.remove("name") {
+            Some(s) => convert_xml_symbols(s.as_str()),
+            None => String::new()
+        };
         let alignment = match obj.attrs.remove("align") {
             Some(s) => Expr::from_str(&convert_xml_symbols(s.as_str()))?,
             None => Expr::Value(ExprValue::Position(BitIndex::bytes(1)))
@@ -4834,7 +4862,7 @@ impl Structure {
             None => Expr::Value(ExprValue::Position(BitIndex::zero()))
         };
 
-        let mut exports = HashSet::new();
+        let mut exports = HashMap::new();
         let mut def_fields = HashMap::new();
         let mut breaks = Vec::new();
         let stype: StructureType;
@@ -4854,7 +4882,14 @@ impl Structure {
                 for mut child in obj.children {
                     match child.element.as_str() {
                         "export" => {
-                            exports.insert(convert_xml_symbols(child.attrs.remove("source").unwrap().as_str()));
+                            let export_source = convert_xml_symbols(child.attrs.remove("source").unwrap().as_str());
+                            let export_default = match obj.attrs.remove("default") {
+                                None => None,
+                                Some(expr)=> {
+                                    Some(Expr::from_str(&convert_xml_symbols(expr.as_str()))?)
+                                }
+                            };
+                            exports.insert(export_source, export_default);
                             if !child.children.is_empty() {
                                 panic!("'export' should not have children!")
                             }
@@ -4889,7 +4924,14 @@ impl Structure {
                 for mut child in obj.children {
                     match child.element.as_str() {
                         "export" => {
-                            exports.insert(convert_xml_symbols(child.attrs.remove("source").unwrap().as_str()));
+                            let export_source = convert_xml_symbols(child.attrs.remove("source").unwrap().as_str());
+                            let export_default = match obj.attrs.remove("default") {
+                                None => None,
+                                Some(expr)=> {
+                                    Some(Expr::from_str(&convert_xml_symbols(expr.as_str()))?)
+                                }
+                            };
+                            exports.insert(export_source, export_default);
                             if !child.children.is_empty() {
                                 panic!("'export' should not have children!")
                             }
@@ -4926,7 +4968,14 @@ impl Structure {
                 for mut child in obj.children {
                     match child.element.as_str() {
                         "export" => {
-                            exports.insert(convert_xml_symbols(child.attrs.remove("source").unwrap().as_str()));
+                            let export_source = convert_xml_symbols(child.attrs.remove("source").unwrap().as_str());
+                            let export_default = match obj.attrs.remove("default") {
+                                None => None,
+                                Some(expr)=> {
+                                    Some(Expr::from_str(&convert_xml_symbols(expr.as_str()))?)
+                                }
+                            };
+                            exports.insert(export_source, export_default);
                             if !child.children.is_empty() {
                                 panic!("'export' should not have children!")
                             }
@@ -4950,7 +4999,14 @@ impl Structure {
                 for mut child in obj.children {
                     match child.element.as_str() {
                         "export" => {
-                            exports.insert(convert_xml_symbols(child.attrs.remove("source").unwrap().as_str()));
+                            let export_source = convert_xml_symbols(child.attrs.remove("source").unwrap().as_str());
+                            let export_default = match obj.attrs.remove("default") {
+                                None => None,
+                                Some(expr)=> {
+                                    Some(Expr::from_str(&convert_xml_symbols(expr.as_str()))?)
+                                }
+                            };
+                            exports.insert(export_source, export_default);
                             if !child.children.is_empty() {
                                 panic!("'export' should not have children!")
                             }
@@ -4991,7 +5047,14 @@ impl Structure {
                 for mut child in obj.children {
                     match child.element.as_str() {
                         "export" => {
-                            exports.insert(convert_xml_symbols(child.attrs.remove("source").unwrap().as_str()));
+                            let export_source = convert_xml_symbols(child.attrs.remove("source").unwrap().as_str());
+                            let export_default = match obj.attrs.remove("default") {
+                                None => None,
+                                Some(expr)=> {
+                                    Some(Expr::from_str(&convert_xml_symbols(expr.as_str()))?)
+                                }
+                            };
+                            exports.insert(export_source, export_default);
                             if !child.children.is_empty() {
                                 panic!("'export' should not have children!")
                             }
@@ -5037,7 +5100,14 @@ impl Structure {
                 for mut child in obj.children {
                     match child.element.as_str() {
                         "export" => {
-                            exports.insert(convert_xml_symbols(child.attrs.remove("source").unwrap().as_str()));
+                            let export_source = convert_xml_symbols(child.attrs.remove("source").unwrap().as_str());
+                            let export_default = match obj.attrs.remove("default") {
+                                None => None,
+                                Some(expr)=> {
+                                    Some(Expr::from_str(&convert_xml_symbols(expr.as_str()))?)
+                                }
+                            };
+                            exports.insert(export_source, export_default);
                             if !child.children.is_empty() {
                                 panic!("'export' should not have children!")
                             }
