@@ -522,7 +522,8 @@ pub enum ExprValue {
     Integer(i64),
     Position(BitIndex),
     Bool(bool),
-    String(String)
+    String(String),
+    Bytes(BitField)
 }
 
 impl ExprValue {
@@ -531,7 +532,8 @@ impl ExprValue {
             ExprValue::Integer(_) => "Integer".to_string(),
             ExprValue::Position(_) => "Position".to_string(),
             ExprValue::Bool(_) => "Boolean".to_string(),
-            ExprValue::String(_) => "String".to_string()
+            ExprValue::String(_) => "String".to_string(),
+            ExprValue::Bytes(_) => "Bytes".to_string()
         }
     }
 
@@ -579,6 +581,9 @@ impl std::cmp::PartialEq<ExprValue> for &ExprValue {
             (ExprValue::String(left), ExprValue::String(right)) => {
                 *left == *right
             },
+            (ExprValue::Bytes(left), ExprValue::Bytes(right)) => {
+                *left == *right
+            },
             _ => todo!()
         }
     }
@@ -617,7 +622,7 @@ impl std::ops::Neg for ExprValue {
             ExprValue::Bool(v) => {
                 ExprValue::Bool(!v)
             },
-            ExprValue::String(v) => todo!()
+            _ => todo!(),
         }
     }
 }
@@ -1597,7 +1602,8 @@ impl UnparsedBinaryField {
                 return Ok(ExprValue::Integer(uint as i64))
             },
             "B" => {
-                Ok(ExprValue::Integer(0))
+                Ok(ExprValue::Bytes(bf))
+                // Ok(ExprValue::Integer(0))
             }
             _ => todo!("Datatype not supported: {}", self.dtype)
         }
@@ -1721,7 +1727,8 @@ impl FieldSpec {
                 } else {
                     "false".to_string()
                 }
-            }
+            },
+            ExprValue::Bytes(bf) => format!("{:?}", bf).to_string() // TODO
         }
     }
 
@@ -2122,6 +2129,12 @@ impl StructureIdent {
 
     fn unindexed(&self) -> StructureIdent {
         StructureIdent::new(self.id.clone())
+    }
+
+    fn get_child_ident(&self, child_id: String, rel_index: Vec<usize>) -> StructureIdent {
+        let mut child_index = self.index.clone();
+        child_index.extend(rel_index);
+        StructureIdent::new_indexed(child_id, child_index)
     }
 
     fn get_field_ident(&self, field_id: String) -> FieldIdent {
@@ -6295,9 +6308,10 @@ mod png_tests {
 
     }
 
-    fn validate_exif(png: &mut FileMap, fm: &mut crate::FileManager, index: usize, ifd0: Vec<ExifIfdEntry>) {
-        let ifd0_struct = StructureIdent::new_indexed("exif_ifd_entries".to_string(), vec![1, index, 1, 0, 1, 0, 1]);
-        let ifd0_reps = ifd0_struct.get_attr_ident(StructureAttrType::Repetitions).to_abstract();
+    fn validate_ifd(png: &mut FileMap, fm: &mut crate::FileManager, struct_id: StructureIdent, ifd0: Vec<ExifIfdEntry>) {
+        // let ifd_struct = StructureIdent::new_indexed("exif_ifd_entries".to_string(), vec![1, index, 1, 0, 1, 0, 1]);
+        let ifd_struct = struct_id.get_child_ident("exif_ifd_entries".to_string(), vec![1]);
+        let ifd0_reps = ifd_struct.get_attr_ident(StructureAttrType::Repetitions).to_abstract();
 
         let targets = vec![ifd0_reps.clone()];
 
@@ -6308,7 +6322,8 @@ mod png_tests {
 
         for (i, ifd) in ifd0.iter().enumerate() {
 
-            let ifd_entry_header = StructureIdent::new_indexed("exif_ifd_entry_header".to_string(), vec![1, index, 1, 0, 1, 0, 1, i, 0]);
+            // let ifd_entry_header = StructureIdent::new_indexed("exif_ifd_entry_header".to_string(), vec![1, index, 1, 0, 1, 0, 1, i, 0]);
+            let ifd_entry_header = ifd_struct.get_child_ident("exif_ifd_entry_header".to_string(), vec![i, 0]);
             let ifd_tag = ifd_entry_header.get_field_ident("exif_ifd_tag".to_string()).to_abstract();
             let ifd_format = ifd_entry_header.get_field_ident("exif_ifd_format".to_string()).to_abstract();
             let ifd_num = ifd_entry_header.get_field_ident("exif_ifd_num".to_string()).to_abstract();
@@ -6322,34 +6337,55 @@ mod png_tests {
             assert_eq!(png.value_dict.lookup_any(&ifd_format).unwrap(), ExprValue::Integer(ifd.data.format() as i64));
             assert_eq!(png.value_dict.lookup_any(&ifd_num).unwrap(), ExprValue::Integer(ifd.data.num() as i64));
 
+            let ifd_entry_body = ifd_struct.get_child_ident("exif_ifd_entry_body".to_string(), vec![i, 1]);
+
             let mut targets = vec![];
 
             match &ifd.data {
                 ExifIfdData::String(s) => {
                     if let Some(addr) = ifd.address {
-                        let ifd_entry_addr_body = StructureIdent::new_indexed("exif_ifd_address_ascii_section".to_string(), vec![1, index, 1, 0, 1, 0, 1, i, 1, 0, 0, 0]);
-                        let ifd_entry_addr = ifd_entry_addr_body.get_field_ident("exif_ifd_address_ascii".to_string()).to_abstract();
-                        let ifd_entry_body = StructureIdent::new_indexed("exif_ifd_ascii_body_addressed".to_string(), vec![1, index, 1, 0, 1, 0, 1, i, 1, 0, 0, 1, 0]);
-                        let ifd_entry_value = ifd_entry_body.get_field_ident("exif_ifd_ascii".to_string()).to_abstract();
+                        // let ifd_entry_addr_section = StructureIdent::new_indexed("exif_ifd_address_ascii_section".to_string(), vec![1, index, 1, 0, 1, 0, 1, i, 1, 0, 0, 0]);
+                        let ifd_entry_addr_section = ifd_entry_body.get_child_ident("exif_ifd_address_ascii_section".to_string(), vec![0, 0, 0]);
+                        let ifd_entry_addr = ifd_entry_addr_section.get_field_ident("exif_ifd_address_ascii".to_string()).to_abstract();
+                        // let ifd_entry_data = StructureIdent::new_indexed("exif_ifd_ascii_body_addressed".to_string(), vec![1, index, 1, 0, 1, 0, 1, i, 1, 0, 0, 1, 0]);
+                        let ifd_entry_data = ifd_entry_body.get_child_ident("exif_ifd_ascii_body_addressed".to_string(), vec![0, 0, 1, 0]);
+                        let ifd_entry_value = ifd_entry_data.get_field_ident("exif_ifd_ascii".to_string()).to_abstract();
                         targets.push(ifd_entry_addr.clone());
                         targets.push(ifd_entry_value.clone());
                         png.get_data(targets.clone(), fm);
                         assert_eq!(png.value_dict.lookup_any(&ifd_entry_addr).unwrap(), ExprValue::Integer(addr as i64));
                         assert_eq!(png.value_dict.lookup_any(&ifd_entry_value).unwrap(), ExprValue::String(s.clone()));
                     } else {
-                        let ifd_entry_body = StructureIdent::new_indexed("exif_ifd_ascii_body".to_string(), vec![1, index, 1, 0, 1, 0, 1, i, 1, 0, 0]);
-                        targets.push(ifd_entry_body.get_field_ident("exif_ifd_ascii".to_string()).to_abstract());
+                        // let ifd_entry_data = StructureIdent::new_indexed("exif_ifd_ascii_body".to_string(), vec![1, index, 1, 0, 1, 0, 1, i, 1, 0, 0]);
+                        let ifd_entry_data = ifd_entry_body.get_child_ident("exif_ifd_ascii_body".to_string(), vec![0, 0]);
+                        targets.push(ifd_entry_data.get_field_ident("exif_ifd_ascii".to_string()).to_abstract());
                         png.get_data(targets.clone(), fm);
                         assert_eq!(png.value_dict.lookup_any(&targets[0]).unwrap(), ExprValue::String(s.clone()));
                     }
                 },
                 ExifIfdData::UShort(v) => {
                     if let Some(addr) = ifd.address {
-                        todo!()
+                        let ifd_entry_addr_section = ifd_entry_body.get_child_ident("exif_ifd_address_u16_section".to_string(), vec![0, 0, 0]);
+                        let ifd_entry_addr = ifd_entry_addr_section.get_field_ident("exif_ifd_address_u16".to_string()).to_abstract();
+                        targets.push(ifd_entry_addr);
+                        for (j, x) in v.iter().enumerate() {
+                            let ifd_entry_data = ifd_entry_body.get_child_ident("exif_ifd_u16_body_addressed".to_string(), vec![0, 0, 1, 0, j]);
+                            let ifd_entry_value = ifd_entry_data.get_field_ident("exif_ifd_u16".to_string()).to_abstract();
+                            targets.push(ifd_entry_value);
+                        }
+                        png.get_data(targets.clone(), fm);
+                        assert_eq!(png.value_dict.lookup_any(&targets[0]).unwrap(), ExprValue::Integer(addr as i64));
+                        for (target, x) in targets.iter().skip(1).zip(v.iter()) {
+                            assert_eq!(png.value_dict.lookup_any(&target).unwrap(), ExprValue::Integer(*x as i64));
+                        }
                     } else {
                         for (j, x) in v.iter().enumerate() {
-                            let ifd_entry_body = StructureIdent::new_indexed("exif_ifd_u16_body".to_string(), vec![1, index, 1, 0, 1, 0, 1, i, 1, 0, 0, 0, j]);
-                            targets.push(ifd_entry_body.get_field_ident("exif_ifd_u16".to_string()).to_abstract());
+                            let field_tag = match ifd.tag {
+                                259 => "exif_compression".to_string(),
+                                _ => "exif_ifd_u16".to_string()
+                            };
+                            let ifd_entry_data = ifd_entry_body.get_child_ident("exif_ifd_u16_body".to_string(), vec![0, 0, 0, j]);
+                            targets.push(ifd_entry_data.get_field_ident(field_tag).to_abstract());
                         }
                         png.get_data(targets.clone(), fm);
                         for (target, x) in targets.iter().zip(v.iter()) {
@@ -6357,11 +6393,114 @@ mod png_tests {
                         }
                     }
                 },
+                ExifIfdData::ULong(v) => {
+                    if let Some(addr) = ifd.address {
+                        // let ifd_entry_addr_section = StructureIdent::new_indexed("exif_ifd_address_u32_section".to_string(), vec![1, index, 1, 0, 1, 0, 1, i, 1, 0, 0, 0]);
+                        let ifd_entry_addr_section = ifd_entry_body.get_child_ident("exif_ifd_address_u32_section".to_string(), vec![0, 0, 0]);
+                        let ifd_entry_addr = ifd_entry_addr_section.get_field_ident("exif_ifd_address_u32".to_string()).to_abstract();
+                        targets.push(ifd_entry_addr);
+                        for (j, x) in v.iter().enumerate() {
+                            // let ifd_entry_data = StructureIdent::new_indexed("exif_ifd_u32_body_addressed".to_string(), vec![1, index, 1, 0, 1, 0, 1, i, 1, 0, 0, 1, 0, j]);
+                            let ifd_entry_data = ifd_entry_body.get_child_ident("exif_ifd_u32_body_addressed".to_string(), vec![0, 0, 1, 0, j]);
+                            let ifd_entry_value = ifd_entry_data.get_field_ident("exif_ifd_u32".to_string()).to_abstract();
+                            targets.push(ifd_entry_value);
+                        }
+                        png.get_data(targets.clone(), fm);
+                        assert_eq!(png.value_dict.lookup_any(&targets[0]).unwrap(), ExprValue::Integer(addr as i64));
+                        for (target, x) in targets.iter().skip(1).zip(v.iter()) {
+                            assert_eq!(png.value_dict.lookup_any(&target).unwrap(), ExprValue::Integer(*x as i64));
+                        }
+                    } else {
+                        for (j, x) in v.iter().enumerate() {
+                            let field_tag = match ifd.tag {
+                                513 => "exif_jpeg_offset".to_string(),
+                                514 => "exif_jpeg_byte_count".to_string(),
+                                34665 => "exif_subifd_offset".to_string(),
+                                _ => "exif_ifd_u32".to_string()
+                            };
+                            // let ifd_entry_data = StructureIdent::new_indexed("exif_ifd_u32_body".to_string(), vec![1, index, 1, 0, 1, 0, 1, i, 1, 0, 0, 0, j]);
+                            let ifd_entry_data = ifd_entry_body.get_child_ident("exif_ifd_u32_body".to_string(), vec![0, 0, 0, j]);
+                            targets.push(ifd_entry_data.get_field_ident(field_tag).to_abstract());
+                        }
+                        png.get_data(targets.clone(), fm);
+                        for (target, x) in targets.iter().zip(v.iter()) {
+                            assert_eq!(png.value_dict.lookup_any(&target).unwrap(), ExprValue::Integer(*x as i64));
+                        }
+                    }
+                },
+                ExifIfdData::URat(v) => {
+                    if let Some(addr) = ifd.address {
+                        // let ifd_entry_addr_section = StructureIdent::new_indexed("exif_ifd_address_urat_section".to_string(), vec![1, index, 1, 0, 1, 0, 1, i, 1, 0, 0, 0]);
+                        let ifd_entry_addr_section = ifd_entry_body.get_child_ident("exif_ifd_address_urat_section".to_string(), vec![0, 0, 0]);
+                        let ifd_entry_addr = ifd_entry_addr_section.get_field_ident("exif_ifd_address_urat".to_string()).to_abstract();
+                        targets.push(ifd_entry_addr);
+                        for (j, x) in v.iter().enumerate() {
+                            // let ifd_entry_data = StructureIdent::new_indexed("exif_ifd_urat_body_addressed".to_string(), vec![1, index, 1, 0, 1, 0, 1, i, 1, 0, 0, 1, 0, j]);
+                            let ifd_entry_data = ifd_entry_body.get_child_ident("exif_ifd_urat_body_addressed".to_string(), vec![0, 0, 1, 0, j]);
+                            let ifd_num_entry_value = ifd_entry_data.get_field_ident("exif_ifd_urat_num".to_string()).to_abstract();
+                            let ifd_den_entry_value = ifd_entry_data.get_field_ident("exif_ifd_urat_den".to_string()).to_abstract();
+                            targets.push(ifd_num_entry_value);
+                            targets.push(ifd_den_entry_value);
+                        }
+                        png.get_data(targets.clone(), fm);
+                        assert_eq!(png.value_dict.lookup_any(&targets[0]).unwrap(), ExprValue::Integer(addr as i64));
+                        for (target, (num, den)) in targets[1..].chunks(2).zip(v.iter()) {
+                            assert_eq!(png.value_dict.lookup_any(&target[0]).unwrap(), ExprValue::Integer(*num as i64));
+                            assert_eq!(png.value_dict.lookup_any(&target[1]).unwrap(), ExprValue::Integer(*den as i64));
+                        }
+                    } else {
+                        for (j, x) in v.iter().enumerate() {
+                            // let ifd_entry_data = StructureIdent::new_indexed("exif_ifd_urat_body".to_string(), vec![1, index, 1, 0, 1, 0, 1, i, 1, 0, 0, 0, j]);
+                            let ifd_entry_data = ifd_entry_body.get_child_ident("exif_ifd_urat_body".to_string(), vec![0, 0, 0, j]);
+                            targets.push(ifd_entry_data.get_field_ident("exif_ifd_urat_num".to_string()).to_abstract());
+                            targets.push(ifd_entry_data.get_field_ident("exif_ifd_urat_den".to_string()).to_abstract());
+                        }
+                        png.get_data(targets.clone(), fm);
+                        for (target, (num, den)) in targets.chunks(2).zip(v.iter()) {
+                            assert_eq!(png.value_dict.lookup_any(&target[0]).unwrap(), ExprValue::Integer(*num as i64));
+                            assert_eq!(png.value_dict.lookup_any(&target[1]).unwrap(), ExprValue::Integer(*den as i64));
+                        }
+                    }
+                },
+                ExifIfdData::Undefined(v) => {
+                    let bf = BitField::from_vec(v.clone());
+                    if let Some(addr) = ifd.address {
+                        let ifd_entry_addr_section = ifd_entry_body.get_child_ident("exif_ifd_address_unk_section".to_string(), vec![0, 0, 0]);
+                        let ifd_entry_addr = ifd_entry_addr_section.get_field_ident("exif_ifd_address_unk".to_string()).to_abstract();
+                        let ifd_entry_data = ifd_entry_body.get_child_ident("exif_ifd_unk_body_addressed".to_string(), vec![0, 0, 1, 0]);
+                        let ifd_entry_value = ifd_entry_data.get_field_ident("exif_ifd_unk".to_string()).to_abstract();
+                        targets.push(ifd_entry_addr.clone());
+                        targets.push(ifd_entry_value.clone());
+                        png.get_data(targets.clone(), fm);
+                        assert_eq!(png.value_dict.lookup_any(&ifd_entry_addr).unwrap(), ExprValue::Integer(addr as i64));
+                        assert_eq!(png.value_dict.lookup_any(&ifd_entry_value).unwrap(), ExprValue::Bytes(bf));
+                    } else {
+                        let ifd_entry_data = ifd_entry_body.get_child_ident("exif_ifd_unk_body".to_string(), vec![0, 0]);
+                        targets.push(ifd_entry_data.get_field_ident("exif_ifd_unk".to_string()).to_abstract());
+                        png.get_data(targets.clone(), fm);
+                        assert_eq!(png.value_dict.lookup_any(&targets[0]).unwrap(), ExprValue::Bytes(bf));
+                    }
+                },
                 _ => {}
             }
             
             
         }
+    }
+
+    fn validate_exif(png: &mut FileMap, fm: &mut crate::FileManager, index: usize, ifd_vec: Vec<Vec<ExifIfdEntry>>, subifd: Vec<ExifIfdEntry>) {
+
+        for (i, ifd) in ifd_vec.into_iter().enumerate() {
+            let ifd_struct = if i == 0 {
+                StructureIdent::new_indexed("exif_ifd".to_string(), vec![1, index, 1, 0, 1, 0])
+            } else {
+                StructureIdent::new_indexed("exif_ifd".to_string(), vec![1, index, 1, 0, 1, i, 0])
+            };
+            validate_ifd(png, fm, ifd_struct, ifd);
+        }
+
+        let subifd_struct = StructureIdent::new_indexed("exif_ifd".to_string(), vec![1, index, 1, 0, 2, 0, 0, 0]);
+        validate_ifd(png, fm, subifd_struct, subifd);
     }
 
     #[test]
@@ -6744,7 +6883,27 @@ mod png_tests {
             ExifIfdEntry {tag: 0x8769, address: None, data: ExifIfdData::ULong(vec![138])},
         ];
 
-        validate_exif(&mut png, &mut fm, 1, ifd0);
+        let subifd = vec![
+            ExifIfdEntry {tag: 0x9000, address: None, data: ExifIfdData::Undefined(vec![0x30, 0x32, 0x32, 0x30])},
+            ExifIfdEntry {tag: 0x9101, address: None, data: ExifIfdData::Undefined(vec![0x01, 0x02, 0x03, 0x00])},
+            ExifIfdEntry {tag: 0x9286, address: Some(204), data: ExifIfdData::Undefined(vec![
+                0x41, 0x53, 0x43, 0x49, 0x49, 0x00, 0x00, 0x00,
+                0x50, 0x6e, 0x67, 0x53, 0x75, 0x69, 0x74, 0x65
+            ])},
+            ExifIfdEntry {tag: 0xa000, address: None, data: ExifIfdData::Undefined(vec![0x30, 0x31, 0x30, 0x30])},
+            ExifIfdEntry {tag: 0xa001, address: None, data: ExifIfdData::UShort(vec![65535])}
+        ];
+
+        let ifd1 = vec![
+            ExifIfdEntry {tag: 0x0103, address: None, data: ExifIfdData::UShort(vec![6])},
+            ExifIfdEntry {tag: 0x011a, address: Some(298), data: ExifIfdData::URat(vec![(72, 1)])},
+            ExifIfdEntry {tag: 0x011b, address: Some(306), data: ExifIfdData::URat(vec![(72, 1)])},
+            ExifIfdEntry {tag: 0x0128, address: None, data: ExifIfdData::UShort(vec![2])},
+            ExifIfdEntry {tag: 0x0201, address: None, data: ExifIfdData::ULong(vec![314])},
+            ExifIfdEntry {tag: 0x0202, address: None, data: ExifIfdData::ULong(vec![663])},
+        ];
+
+        validate_exif(&mut png, &mut fm, 1, vec![ifd0, ifd1], subifd);
     }
 }
 

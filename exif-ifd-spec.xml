@@ -236,23 +236,23 @@
                                 <switch-case check="$0 == 259">
                                     <!-- TODO: Assert that exif_ifd_num == 1 -->
                                     <repeat n="exif_ifd_num">
-                                        <sequence>
-                                            <section-body id="exif_ifd_u16_body" name="eXIf U16">
-                                                <export source="exif_compression"/>
-                                                <field id="exif_compression" name="Compression" length="2B" dtype="U" endian="big">
-                                                    <enum>
-                                                        <enum-case index="1" value="No Compression"/>
-                                                        <enum-case index="6" value="JPEG"/>
-                                                        <enum-else value="Unknown"/>
-                                                    </enum>
-                                                </field>
-                                            </section-body>
-                                            <addressed pos="chunk_body_start + bytes(exif_jpeg_offset)">
+                                        <!-- <sequence> -->
+                                        <section-body id="exif_ifd_u16_body" name="eXIf U16">
+                                            <export source="exif_compression"/>
+                                            <field id="exif_compression" name="Compression" length="2B" dtype="U" endian="big">
+                                                <enum>
+                                                    <enum-case index="1" value="No Compression"/>
+                                                    <enum-case index="6" value="JPEG"/>
+                                                    <enum-else value="Unknown"/>
+                                                </enum>
+                                            </field>
+                                        </section-body>
+                                            <!-- <addressed pos="chunk_body_start + bytes(exif_jpeg_offset)">
                                                 <section id="exif_jpeg" name="EXIF JPEG">
                                                     <field id="exif_jpeg_data" name="EXIF JPEG Data" length="bytes(exif_jpeg_byte_count)" dtype="B"/>
                                                 </section>
                                             </addressed>
-                                        </sequence>
+                                        </sequence> -->
                                     </repeat>
                                 </switch-case>
 
@@ -534,6 +534,20 @@
                     <section-body id="exif_body_default" name="eXIf Payload">
                         <field id="exif_ifd_default" name="IFD Unknown" length="4B" dtype="B"/>
                     </section-body>
+                </switch-else>
+            </switch>
+
+            <switch id="hello" value="exif_ifd_tag" length="0B">
+                <switch-case check="$0 == 259"> <!-- Compression -->
+                    <addressed pos="chunk_body_start + bytes(exif_jpeg_offset)">
+                        <section id="exif_jpeg" name="EXIF JPEG">
+                            <field id="exif_jpeg_data" name="EXIF JPEG Data" length="bytes(exif_jpeg_byte_count)" dtype="B"/>
+                        </section>
+                    </addressed>
+                </switch-case>
+                <switch-else>
+                    <section length="0B">
+                    </section>
                 </switch-else>
             </switch>
         </sequence>
