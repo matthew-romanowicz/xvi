@@ -18,4 +18,4 @@ pub const HIGHLIGHT_COLOR: u8 = 3;
 pub const CURSOR_COLOR: u8 = 4;
 pub const BAD_ASCII_COLOR: u8 = 5;
 pub const EOF_COLOR: u8 = 6;
-pub const CURRENT_FIELD_COLOR: u8 = 7;
+pub const CURRENT_FIELD_COLOR: u8 = 8;

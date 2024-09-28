@@ -17,7 +17,7 @@ mod file_manager;
 pub use crate::hex_edit::file_manager::{FileManagerType, FileManager};
 
 mod file_specs;
-pub use crate::hex_edit::file_specs::{FileSpec, BinaryField, PngFileSpec, FileMap, FileRegion, Structure, make_png};
+pub use crate::hex_edit::file_specs::{BinaryField, FileMap, FileRegion, Structure, make_png};
 
 
 extern crate pancurses;
@@ -1013,6 +1013,23 @@ impl<'a> HexEdit<'a> {
     pub fn set_fill(&mut self, fill: FillType) -> ActionResult {
         self.fill = fill;
         ActionResult::no_error(UpdateDescription::NoUpdate) // TODO: Make this return an action
+    }
+
+    pub fn set_syntax(&mut self, syntax: Option<String>) -> ActionResult {
+        if let Some(syntax) = syntax {
+            let fname = format!("{}-spec.xml", syntax);
+            let xml = match std::fs::read_to_string(&fname) {
+                Ok(string) => string,
+                Err(err) => return ActionResult::error(format!("Could not read file '{}'", fname).to_string())
+            };
+            let s = Structure::from_xml(&xml).unwrap();
+            let mut fs = FileMap::new(Rc::new(s));
+            fs.initialize(&mut self.file_manager);
+            self.file_spec = Some(fs);
+        } else {
+            self.file_spec = None;
+        }
+        ActionResult::no_error(UpdateDescription::AttrsOnly)
     }
 
     pub fn set_file_spec(&mut self, fs: Rc<Structure>) {

@@ -503,6 +503,13 @@ fn execute_command(editor_stack: &mut EditorStack, command: Vec<char>) -> (Comma
                                     }
                                     (CommandInstruction::NoOp, ActionResult::empty())
                                 },
+                                (CommandToken::Keyword(CommandKeyword::Syntax), CommandToken::Word(word)) => {
+                                    let syntax: String = word.into_iter().collect();
+                                    (CommandInstruction::NoOp, editor_stack.editors[editor_stack.current].hex_edit.set_syntax(Some(syntax)))
+                                },
+                                (CommandToken::Keyword(CommandKeyword::Syntax), CommandToken::Keyword(CommandKeyword::Off)) => {
+                                    (CommandInstruction::NoOp, editor_stack.editors[editor_stack.current].hex_edit.set_syntax(None))
+                                },
                                 (CommandToken::Keyword(CommandKeyword::Fill), CommandToken::Register(n)) => {
                                     (CommandInstruction::NoOp, editor_stack.editors[editor_stack.current].hex_edit.set_fill(FillType::Register(*n as u8)))
                                 },
@@ -964,12 +971,12 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
 
     init_colors();
 
-    let png = Rc::new(make_png());
+    // let png = Rc::new(make_png());
 
     let mut current_keystroke = Vec::<char>::new();
 
     let mut editors = EditorStack::new(0, 0, window.get_max_x() as usize - 1, window.get_max_y()as usize - 1);
-    if let Err(msg) = editors.push(filename, file_manager_type, extract, Some(png)) {
+    if let Err(msg) = editors.push(filename, file_manager_type, extract, None) {
         eprintln!("{}", msg);
         std::process::exit(1);
     };

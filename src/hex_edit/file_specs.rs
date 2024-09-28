@@ -23,221 +23,6 @@ pub struct BinaryField {
     pub span: usize
 }
 
-pub trait FileSpec {
-    fn new(fm: &mut crate::hex_edit::FileManager) -> Self where Self: Sized;
-
-    fn field_at(self: &mut Self, index: usize, fm: &mut crate::hex_edit::FileManager) -> Option<BinaryField>;
-}
-
-pub struct PngFileSpec {
-    chunks: Vec<usize>,
-    chunk_types: Vec<[u8; 4]>
-}
-
-impl FileSpec for PngFileSpec {
-    fn new(fm: &mut crate::hex_edit::FileManager) -> Self {
-        let file_length = fm.len();
-        let mut buffer_32 = vec![0; 4];
-        let mut chunks = Vec::new();
-        let mut chunk_types = Vec::new();
-        let mut index = 8;
-        while index + 4 < file_length {
-            chunks.push(index);
-            fm.get_bytes(index, &mut buffer_32);
-            let chunk_length = u32::from_be_bytes([buffer_32[0], buffer_32[1], buffer_32[2], buffer_32[3]]) + 12;
-            fm.get_bytes(index + 4, &mut buffer_32);
-            chunk_types.push([buffer_32[0], buffer_32[1], buffer_32[2], buffer_32[3]]);
-            index += chunk_length as usize;
-        }
-        
-        PngFileSpec {
-            chunks,
-            chunk_types
-        }
-    }
-
-    fn field_at(self: &mut Self, index: usize, fm: &mut crate::hex_edit::FileManager) -> Option<BinaryField> {
-        if index < 8 {
-            Some(
-                BinaryField {
-                    name: "PNG File Signature".to_string(),
-                    value: None,
-                    start: 0,
-                    span: 8
-                }
-            )
-        } else {
-            let chunk = bisection::bisect_right(&self.chunks, &index) - 1;
-            let chunk_index = self.chunks[chunk];
-            let chunk_diff = self.chunks[chunk + 1] - chunk_index;
-            if index >= chunk_index {
-                match index - chunk_index {
-                    0..=3 => {
-                        let mut buffer_32 = vec![0; 4];
-                        fm.get_bytes(chunk_index, &mut buffer_32);
-                        let chunk_length = u32::from_be_bytes([buffer_32[0], buffer_32[1], buffer_32[2], buffer_32[3]]);
-                        Some(
-                            BinaryField {
-                                name: format!("Chunk #{} Length", chunk).to_string(),
-                                value: Some(format!("{} Bytes", chunk_length).to_string()),
-                                start: chunk_index,
-                                span: 4
-                            }
-                        )
-                    },
-                    4..=7 => {
-                        let mut buffer_32 = vec![0; 4];
-                        fm.get_bytes(chunk_index + 4, &mut buffer_32);
-                        let value = match String::from_utf8(buffer_32) {
-                            Ok(s) => Some(s),
-                            Err(_) => None
-                        };
-                        Some(
-                            BinaryField {
-                                name: format!("Chunk #{} Type", chunk).to_string(),
-                                value,
-                                start: chunk_index + 4,
-                                span: 4
-                            }
-                        )
-                    },
-                    i if i + 4 >= chunk_diff => {
-                        Some(
-                            BinaryField {
-                                name: format!("Chunk #{} CRC", chunk).to_string(),
-                                value: None,
-                                start: chunk_index + chunk_diff - 4,
-                                span: 4
-                            }
-                        )
-                    },
-                    i => {
-                        let data_start = chunk_index + 8;
-                        let i = i - 8;
-                        match self.chunk_types[chunk] {
-                            [b'I', b'H', b'D', b'R'] => {
-                                match i {
-                                    0..=3 => {
-                                        let mut buffer_32 = vec![0; 4];
-                                        fm.get_bytes(data_start, &mut buffer_32);
-                                        let value = u32::from_be_bytes([buffer_32[0], buffer_32[1], buffer_32[2], buffer_32[3]]);
-                                        Some(
-                                            BinaryField {
-                                                name: format!("IHDR Width").to_string(),
-                                                value: Some(format!("{}", value).to_string()),
-                                                start: data_start,
-                                                span: 4
-                                            }
-                                        )
-                                    },
-                                    4..=7 => {
-                                        let mut buffer_32 = vec![0; 4];
-                                        fm.get_bytes(data_start + 4, &mut buffer_32);
-                                        let value = u32::from_be_bytes([buffer_32[0], buffer_32[1], buffer_32[2], buffer_32[3]]);
-                                        Some(
-                                            BinaryField {
-                                                name: format!("IHDR Height").to_string(),
-                                                value: Some(format!("{}", value).to_string()),
-                                                start: data_start + 4,
-                                                span: 4
-                                            }
-                                        )
-                                    },
-                                    8 => {
-                                        let value = match fm.get_byte(data_start + 8) {
-                                            Some(v) => Some(format!("{}", v).to_string()),
-                                            None => None
-                                        };
-                                        Some(
-                                            BinaryField {
-                                                name: format!("IHDR Bit Depth").to_string(),
-                                                value,
-                                                start: data_start + 8,
-                                                span: 1
-                                            }
-                                        )
-                                    },
-                                    9 => {
-                                        let value = match fm.get_byte(data_start + 9) {
-                                            Some(0) => Some(format!("{} (Grayscale)", 0).to_string()),
-                                            Some(2) => Some(format!("{} (Truecolor)", 2).to_string()),
-                                            Some(3) => Some(format!("{} (Indexed)", 3).to_string()),
-                                            Some(4) => Some(format!("{} (Grayscale and Alpha)", 4).to_string()),
-                                            Some(6) => Some(format!("{} (Truecolor and Alpha)", 6).to_string()),
-                                            Some(v) => Some(format!("{} (Invalid)", v).to_string()),
-                                            None => None
-                                        };
-                                        Some(
-                                            BinaryField {
-                                                name: format!("IHDR Color Type").to_string(),
-                                                value,
-                                                start: data_start + 9,
-                                                span: 1
-                                            }
-                                        )
-                                    },
-                                    10 => {
-                                        let value = match fm.get_byte(data_start + 10) {
-                                            Some(0) => Some(format!("{}", 0).to_string()),
-                                            Some(v) => Some(format!("{} (Invalid)", v).to_string()),
-                                            None => None
-                                        };
-                                        Some(
-                                            BinaryField {
-                                                name: format!("IHDR Compression Method").to_string(),
-                                                value,
-                                                start: data_start + 10,
-                                                span: 1
-                                            }
-                                        )
-                                    },
-                                    11 => {
-                                        let value = match fm.get_byte(data_start + 11) {
-                                            Some(0) => Some(format!("{}", 0).to_string()),
-                                            Some(v) => Some(format!("{} (Invalid)", v).to_string()),
-                                            None => None
-                                        };
-                                        Some(
-                                            BinaryField {
-                                                name: format!("IHDR Filter Method").to_string(),
-                                                value,
-                                                start: data_start + 11,
-                                                span: 1
-                                            }
-                                        )
-                                    },
-                                    12 => {
-                                        let value = match fm.get_byte(data_start + 12) {
-                                            Some(0) => Some(format!("{} (No Interlace)", 0).to_string()),
-                                            Some(1) => Some(format!("{} (Adam7 Interlace)", 1).to_string()),
-                                            Some(v) => Some(format!("{} (Invalid)", v).to_string()),
-                                            None => None
-                                        };
-                                        Some(
-                                            BinaryField {
-                                                name: format!("IHDR Interlace Method").to_string(),
-                                                value,
-                                                start: data_start + 12,
-                                                span: 1
-                                            }
-                                        )
-                                    },
-                                    _ => None
-                                }
-                            },
-                            _ => None
-                        }
-                    }
-                }
-            } else {
-                panic!("Unexpected condition: {}, {}, {}", index, chunk_index, chunk)
-            }
-        }
-    }
-}
-
-
-
 use crate::expr::{MyStrSpan, ExprValue, Expr, ExprEvalError, ParseExprError};
 
 // impl From<ParseAbstractIdentError> for ExprEvalError {
@@ -677,78 +462,6 @@ impl SectionSpec {
         }
     }
 
-}
-
-#[cfg(test)]
-mod struct_tests {
-    use super::*;
-
-    fn lookup1(s: &str) -> Option<ExprValue> {
-        match s {
-            "var1" => Some(ExprValue::Position(BitIndex::new(4, 0))),
-            "var2" => Some(ExprValue::Position(BitIndex::new(2, 0))),
-            "var3" => Some(ExprValue::Position(BitIndex::new(8, 0))),
-            _ => None
-        }
-    }
-
-    // #[test]
-    // fn simple() {
-    //     let f1 = FieldSpec {
-    //         id: "f1".to_string(),
-    //         name: "Field 1".to_string(),
-    //         offset: Expr::Value(ExprValue::Position(BitIndex::new(0, 0))),
-    //         length: Expr::Value(ExprValue::Position(BitIndex::new(4, 0))),
-    //         alignment: Expr::Value(ExprValue::Position(BitIndex::new(1, 0))),
-    //         alignment_base: Expr::Value(ExprValue::Position(BitIndex::new(0, 0))),
-    //         dtype: "u32".to_string(),
-    //         endian: Endianness::Big
-    //     };
-
-    //     let f2 = FieldSpec {
-    //         id: "f2".to_string(),
-    //         name: "Field 2".to_string(),
-    //         offset: Expr::Value(ExprValue::Position(BitIndex::new(0, 0))),
-    //         length: Expr::Var("var1".to_string()),
-    //         alignment: Expr::Value(ExprValue::Position(BitIndex::new(1, 0))),
-    //         alignment_base: Expr::Value(ExprValue::Position(BitIndex::new(0, 0))),
-    //         dtype: "u32".to_string(),
-    //         endian: Endianness::Big
-    //     };
-
-    //     let f3 = FieldSpec {
-    //         id: "f3".to_string(),
-    //         name: "Field 3".to_string(),
-    //         offset: Expr::Var("var2".to_string()),
-    //         length: Expr::Var("var3".to_string()),
-    //         alignment: Expr::Value(ExprValue::Position(BitIndex::new(1, 0))),
-    //         alignment_base: Expr::Value(ExprValue::Position(BitIndex::new(0, 0))),
-    //         dtype: "u64".to_string(),
-    //         endian: Endianness::Big
-    //     };
-
-    //     let fields = vec![f1, f2, f3];
-
-    //     let mut id_map = HashMap::new();
-    //     id_map.insert("f1".to_string(), 0);
-    //     id_map.insert("f2".to_string(), 1);
-    //     id_map.insert("f3".to_string(), 2);
-
-    //     let ss = Rc::new(SectionSpec {
-    //         length: LengthPolicy::FitContents,
-    //         section_type: SectionType::Body,
-    //         fields,
-    //         id_map
-    //     });
-
-    //     let mut section = PositionedSectionSpec::new(BitIndex::new(10, 0),&ss);
-
-    //     // assert_eq!(section.try_resolve(&lookup1).unwrap(), 3);
-    //     // println!("{:?}", section.field_offsets);
-    //     // assert_eq!(section.try_get_field_address("f1").unwrap(), (BitIndex::new(10, 0), BitIndex::new(4, 0)));
-    //     // assert_eq!(section.try_get_field_address("f2").unwrap(), (BitIndex::new(14, 0), BitIndex::new(4, 0)));
-    //     // assert_eq!(section.try_get_field_address("f3").unwrap(), (BitIndex::new(20, 0), BitIndex::new(8, 0)));
-    // }
 }
 
 use std::rc::Rc;
@@ -3564,7 +3277,7 @@ impl Structure {
             let url = convert_xml_symbols(obj.attrs.remove("url").unwrap().as_str());
             if let Some((fname, struct_id)) = url.split_once("#") {
                 let text = std::fs::read_to_string(fname).unwrap();
-                let s = Rc::new(parse_xml(&text).unwrap());
+                let s = Rc::new(Structure::from_xml(&text).unwrap());
                 if let Some(child) = s.get_child_by_id(struct_id) {
                     std::mem::drop(s);
                     return Ok(Rc::into_inner(child).unwrap())
@@ -3905,6 +3618,196 @@ impl Structure {
                 stype
             }
         )
+    }
+
+    pub fn from_xml(input: &str) -> Result<Structure, ParseXmlError> {
+        let mut objects = Vec::<XmlObject>::new();
+        let mut node_stack = Vec::<(XmlObject, MyStrSpan)>::new();
+        let mut attr_map = HashMap::<&str, MyStrSpan>::new();
+        //let mut members_stack = Vec::<Vec<SvgElement>>::new();
+        let mut current_elem: Option<MyStrSpan> = None;
+        let mut current_text = Vec::<&str>::new();
+    
+        //members_stack.push(vec![]);
+        for token in Tokenizer::from(input) {
+            match token {
+                Ok(Token::Declaration{version, encoding, standalone, ..}) => {
+                    // svg.xml_version = Some(version.as_str());
+                    // if let Some(sspan) = encoding {
+                    //     svg.xml_encoding = Some(sspan.as_str());
+                    // }
+                    // if let Some(b) = standalone {
+                    //     svg.xml_standalone = Some(b);
+                    // }
+                },
+                Ok(Token::ElementStart{local, ..}) => {
+                    info!("Element Start: {}", local);
+                    current_elem = Some(MyStrSpan::new(local.start(), local.as_str()));
+                },
+                Ok(Token::Attribute{local, value, ..}) => {
+                    info!("\t{} = {}", local, value);
+                    attr_map.insert(local.as_str(), MyStrSpan::new(value.start(), value.as_str()));
+                },
+                Ok(Token::ElementEnd{end, ..}) => {
+                    info!("Element End: {:?}", end);
+                    
+    
+                    match end {
+                        ElementEnd::Open => {
+                            // let elem = XplNode::from_xml_dtypes(&current_elem.unwrap(), &mut attr_map/*, &self.parse_errors*/)?;
+                            // svg.register_element(elem.clone())?;
+                            // if !attr_map.is_empty() {
+                            //     let unrecognized_key = attr_map.keys().next().unwrap();
+                            //     let message = format!("Unrecognized attribute '{}' supplied for element '{}'", unrecognized_key, &current_elem.unwrap());
+                            //     //self.unrecognized_attributes.handle_error(ErrorAcceptanceLevel::Strict, message.as_str())?;
+                            //     println!("{}", message);
+                            //     attr_map.clear();
+                            // }
+                            //println!("NEW ELEMENT: {:?}", elem);
+    
+                            let obj = XmlObject{element: current_elem.clone().unwrap(), attrs: attr_map, children: vec![]};
+                            attr_map = HashMap::new();
+    
+                            node_stack.push((obj, current_elem.unwrap()));
+                            current_elem = None;
+                        },
+                        ElementEnd::Close(sspan1, sspan2) => {
+                            match node_stack.pop() {
+                                Some((elem, name)) if sspan2.as_str() != name.as_str() => {
+                                    // let (line_index, col_index) = get_line_char(input, sspan2.start());
+                                    // let message = format!("Element end '{}' does not match start '{}'", sspan2.as_str(), name);
+                                    // return Err(ParseXplError {
+                                    //     details: message.to_string(),
+                                    //     error_type: ParseXplErrorType::MalformedXml,
+                                    //     index: vec![(name.start(), name.end(), Some("Element start is here".to_string())), 
+                                    //                 (sspan2.start(), sspan2.end(), Some("Element end is here".to_string()))],
+                                    //     help_text: None
+                                    // });
+                                    //self.malformed_xml.handle_error(ErrorAcceptanceLevel::Compliant, message.as_str())?;
+                                    // panic!("{}", message);
+                                    panic!("Malformed XML")
+                                },
+                                Some((mut obj, _)) => {
+                                    let n = node_stack.len();
+                                    if n == 0 {
+                                        //svg.members.push(elem);
+                                        // svg.attempt_add_child(elem);
+                                        objects.push(obj);
+                                    } else {
+                                        //node_stack[n - 1].0.members.push(elem);
+                                        node_stack[n - 1].0.children.push(obj);
+                                    }
+                                },
+                                None => {
+                                    let (line_index, col_index) = get_line_char(input, sspan2.start());
+                                    let message = format!("Line {} column {}: Unexpected element end encountered: '{}'", 
+                                                            line_index + 1, col_index + 1, sspan2.as_str());
+                                    // self.malformed_xml.handle_error(ErrorAcceptanceLevel::Compliant, message.as_str())?;
+                                    panic!("{}", message);
+                                },
+                                _ => {}
+                            }
+                        },
+                        ElementEnd::Empty => {
+                            // let elem = XplNode::from_xml_dtypes(&current_elem.unwrap(), &mut attr_map/*, &self.parse_errors*/)?;
+                            // svg.register_element(elem.clone())?;
+                            // if !attr_map.is_empty() {
+                            //     let unrecognized_key = attr_map.keys().next().unwrap();
+                            //     let message = format!("Unrecognized attribute '{}' supplied for element '{}'", unrecognized_key, &current_elem.unwrap());
+                            //     //self.unrecognized_attributes.handle_error(ErrorAcceptanceLevel::Strict, message.as_str())?;
+                            //     panic!("{}", message);
+                            //     attr_map.clear();
+                            // }
+                            let obj = XmlObject{element: current_elem.unwrap(), attrs: attr_map, children: vec![]};
+                            attr_map = HashMap::new();
+                            //println!("NEW ELEMENT: {:?}", elem);
+                            let n = node_stack.len();
+                            if n == 0 {
+                                //svg.members.push(elem);
+                                // svg.attempt_add_child(elem);
+                                objects.push(obj);
+                            } else {
+                                //node_stack[n - 1].0.members.push(elem);
+                                // match node_stack[n - 1].0.attempt_add_child(elem) {
+                                //     Err(err) => return Err(InvalidChildError::new(err.details, node_stack[n - 1].1.clone(), current_elem.unwrap().clone()).into()),
+                                //     _ => {}
+                                // }
+                                node_stack[n - 1].0.children.push(obj);
+                            }
+                            //let n = members_stack.len();
+                            //members_stack[n - 1].push(elem);
+                            current_elem = None;
+                        }
+    
+                    }
+                },
+                Ok(Token::Text{text}) => {
+                    info!("Text: {}", text);
+                    current_text.push(text.as_str());
+                    let n = node_stack.len();
+                    // if n == 0 {
+                    //     svg.members.push(SvgNode::from_free_text(text.as_str()));
+                    // } else {
+                    //     node_stack[n - 1].0.members.push(SvgNode::from_free_text(text.as_str()));
+                    // }
+                },
+                Ok(Token::Comment{text, ..}) => {
+                    info!("Comment: {}", text);
+                },
+                Err(err) => {
+                    // match err {
+                    //     xmlparser::Error::InvalidAttribute(stream_err, pos) => {
+                    //         match stream_err {
+                    //             xmlparser::StreamError::InvalidSpace(c, pos) => {
+                    //                 let i = get_index_from_row_col(input, pos.row as usize, pos.col as usize);
+                    //                 return Err(ParseXplError {
+                    //                     details: format!("Encountered unexpected character: '{}' (expected space)", c as char).to_string(),
+                    //                     error_type: ParseXplErrorType::MalformedXml,
+                    //                     index: vec![(i, i+1, None)],
+                    //                     help_text: None
+                    //                 })
+                    //             },
+                    //             xmlparser::StreamError::InvalidChar(c1, c2, pos) => {
+                    //                 let i = get_index_from_row_col(input, pos.row as usize, pos.col as usize);
+                    //                 return Err(ParseXplError {
+                    //                     details: format!("Encountered unexpected character: '{}' (expected '{}')", c1 as char, c2 as char).to_string(),
+                    //                     error_type: ParseXplErrorType::MalformedXml,
+                    //                     index: vec![(i, i+1, None)],
+                    //                     help_text: None
+                    //                 })
+                    //             },
+                    //             _ => todo!("{:?}", stream_err)
+                    //         }
+                    //     },
+                    //     _ => todo!("{:?}", err)
+                    // }
+                    todo!("{:?}", err)
+                    // panic!("Malformed XML");
+                }
+                _ => panic!("Unrecognized Token: {:?}", token)
+            }
+        }
+        if !node_stack.is_empty() {
+            //self.malformed_xml.handle_error(ErrorAcceptanceLevel::Compliant, "Encountered EOF with unclosed elements")?;
+            // let mut index_vec = vec![];
+            // for (_, sspan) in node_stack {
+            //     index_vec.push((sspan.start(), sspan.end(), Some(format!("'{}' element opened here and never closed:", sspan.as_str()).to_string())));
+            // }
+            // return Err(ParseXplError {
+            //     details: format!("Encountered end of file with unclosed elements:").to_string(),
+            //     error_type: ParseXplErrorType::MalformedXml,
+            //     index: index_vec,
+            //     help_text: None
+            // })
+            panic!("Encountered EOF with unclosed elements");
+        }
+    
+        if objects.len() == 1 {
+            Structure::from_xml_object(objects.into_iter().nth(0).unwrap())
+        } else {
+            panic!("Wrong number of objects in XML!")
+        }
+        // Ok(svg)
     }
 }
 
@@ -4536,7 +4439,7 @@ impl<'a> FileMap<'a> {
 
 pub fn make_png() -> Structure {
     let s = std::fs::read_to_string("png-spec.xml").unwrap();
-    parse_xml(&s).unwrap()
+    Structure::from_xml(&s).unwrap()
 }
 
 #[cfg(test)]
@@ -5640,192 +5543,3 @@ mod png_tests {
     }
 }
 
-pub fn parse_xml(input: &str) -> Result<Structure, ParseXmlError> {
-    let mut objects = Vec::<XmlObject>::new();
-    let mut node_stack = Vec::<(XmlObject, MyStrSpan)>::new();
-    let mut attr_map = HashMap::<&str, MyStrSpan>::new();
-    //let mut members_stack = Vec::<Vec<SvgElement>>::new();
-    let mut current_elem: Option<MyStrSpan> = None;
-    let mut current_text = Vec::<&str>::new();
-
-    //members_stack.push(vec![]);
-    for token in Tokenizer::from(input) {
-        match token {
-            Ok(Token::Declaration{version, encoding, standalone, ..}) => {
-                // svg.xml_version = Some(version.as_str());
-                // if let Some(sspan) = encoding {
-                //     svg.xml_encoding = Some(sspan.as_str());
-                // }
-                // if let Some(b) = standalone {
-                //     svg.xml_standalone = Some(b);
-                // }
-            },
-            Ok(Token::ElementStart{local, ..}) => {
-                info!("Element Start: {}", local);
-                current_elem = Some(MyStrSpan::new(local.start(), local.as_str()));
-            },
-            Ok(Token::Attribute{local, value, ..}) => {
-                info!("\t{} = {}", local, value);
-                attr_map.insert(local.as_str(), MyStrSpan::new(value.start(), value.as_str()));
-            },
-            Ok(Token::ElementEnd{end, ..}) => {
-                info!("Element End: {:?}", end);
-                
-
-                match end {
-                    ElementEnd::Open => {
-                        // let elem = XplNode::from_xml_dtypes(&current_elem.unwrap(), &mut attr_map/*, &self.parse_errors*/)?;
-                        // svg.register_element(elem.clone())?;
-                        // if !attr_map.is_empty() {
-                        //     let unrecognized_key = attr_map.keys().next().unwrap();
-                        //     let message = format!("Unrecognized attribute '{}' supplied for element '{}'", unrecognized_key, &current_elem.unwrap());
-                        //     //self.unrecognized_attributes.handle_error(ErrorAcceptanceLevel::Strict, message.as_str())?;
-                        //     println!("{}", message);
-                        //     attr_map.clear();
-                        // }
-                        //println!("NEW ELEMENT: {:?}", elem);
-
-                        let obj = XmlObject{element: current_elem.clone().unwrap(), attrs: attr_map, children: vec![]};
-                        attr_map = HashMap::new();
-
-                        node_stack.push((obj, current_elem.unwrap()));
-                        current_elem = None;
-                    },
-                    ElementEnd::Close(sspan1, sspan2) => {
-                        match node_stack.pop() {
-                            Some((elem, name)) if sspan2.as_str() != name.as_str() => {
-                                // let (line_index, col_index) = get_line_char(input, sspan2.start());
-                                // let message = format!("Element end '{}' does not match start '{}'", sspan2.as_str(), name);
-                                // return Err(ParseXplError {
-                                //     details: message.to_string(),
-                                //     error_type: ParseXplErrorType::MalformedXml,
-                                //     index: vec![(name.start(), name.end(), Some("Element start is here".to_string())), 
-                                //                 (sspan2.start(), sspan2.end(), Some("Element end is here".to_string()))],
-                                //     help_text: None
-                                // });
-                                //self.malformed_xml.handle_error(ErrorAcceptanceLevel::Compliant, message.as_str())?;
-                                // panic!("{}", message);
-                                panic!("Malformed XML")
-                            },
-                            Some((mut obj, _)) => {
-                                let n = node_stack.len();
-                                if n == 0 {
-                                    //svg.members.push(elem);
-                                    // svg.attempt_add_child(elem);
-                                    objects.push(obj);
-                                } else {
-                                    //node_stack[n - 1].0.members.push(elem);
-                                    node_stack[n - 1].0.children.push(obj);
-                                }
-                            },
-                            None => {
-                                let (line_index, col_index) = get_line_char(input, sspan2.start());
-                                let message = format!("Line {} column {}: Unexpected element end encountered: '{}'", 
-                                                        line_index + 1, col_index + 1, sspan2.as_str());
-                                // self.malformed_xml.handle_error(ErrorAcceptanceLevel::Compliant, message.as_str())?;
-                                panic!("{}", message);
-                            },
-                            _ => {}
-                        }
-                    },
-                    ElementEnd::Empty => {
-                        // let elem = XplNode::from_xml_dtypes(&current_elem.unwrap(), &mut attr_map/*, &self.parse_errors*/)?;
-                        // svg.register_element(elem.clone())?;
-                        // if !attr_map.is_empty() {
-                        //     let unrecognized_key = attr_map.keys().next().unwrap();
-                        //     let message = format!("Unrecognized attribute '{}' supplied for element '{}'", unrecognized_key, &current_elem.unwrap());
-                        //     //self.unrecognized_attributes.handle_error(ErrorAcceptanceLevel::Strict, message.as_str())?;
-                        //     panic!("{}", message);
-                        //     attr_map.clear();
-                        // }
-                        let obj = XmlObject{element: current_elem.unwrap(), attrs: attr_map, children: vec![]};
-                        attr_map = HashMap::new();
-                        //println!("NEW ELEMENT: {:?}", elem);
-                        let n = node_stack.len();
-                        if n == 0 {
-                            //svg.members.push(elem);
-                            // svg.attempt_add_child(elem);
-                            objects.push(obj);
-                        } else {
-                            //node_stack[n - 1].0.members.push(elem);
-                            // match node_stack[n - 1].0.attempt_add_child(elem) {
-                            //     Err(err) => return Err(InvalidChildError::new(err.details, node_stack[n - 1].1.clone(), current_elem.unwrap().clone()).into()),
-                            //     _ => {}
-                            // }
-                            node_stack[n - 1].0.children.push(obj);
-                        }
-                        //let n = members_stack.len();
-                        //members_stack[n - 1].push(elem);
-                        current_elem = None;
-                    }
-
-                }
-            },
-            Ok(Token::Text{text}) => {
-                info!("Text: {}", text);
-                current_text.push(text.as_str());
-                let n = node_stack.len();
-                // if n == 0 {
-                //     svg.members.push(SvgNode::from_free_text(text.as_str()));
-                // } else {
-                //     node_stack[n - 1].0.members.push(SvgNode::from_free_text(text.as_str()));
-                // }
-            },
-            Ok(Token::Comment{text, ..}) => {
-                info!("Comment: {}", text);
-            },
-            Err(err) => {
-                // match err {
-                //     xmlparser::Error::InvalidAttribute(stream_err, pos) => {
-                //         match stream_err {
-                //             xmlparser::StreamError::InvalidSpace(c, pos) => {
-                //                 let i = get_index_from_row_col(input, pos.row as usize, pos.col as usize);
-                //                 return Err(ParseXplError {
-                //                     details: format!("Encountered unexpected character: '{}' (expected space)", c as char).to_string(),
-                //                     error_type: ParseXplErrorType::MalformedXml,
-                //                     index: vec![(i, i+1, None)],
-                //                     help_text: None
-                //                 })
-                //             },
-                //             xmlparser::StreamError::InvalidChar(c1, c2, pos) => {
-                //                 let i = get_index_from_row_col(input, pos.row as usize, pos.col as usize);
-                //                 return Err(ParseXplError {
-                //                     details: format!("Encountered unexpected character: '{}' (expected '{}')", c1 as char, c2 as char).to_string(),
-                //                     error_type: ParseXplErrorType::MalformedXml,
-                //                     index: vec![(i, i+1, None)],
-                //                     help_text: None
-                //                 })
-                //             },
-                //             _ => todo!("{:?}", stream_err)
-                //         }
-                //     },
-                //     _ => todo!("{:?}", err)
-                // }
-                todo!("{:?}", err)
-                // panic!("Malformed XML");
-            }
-            _ => panic!("Unrecognized Token: {:?}", token)
-        }
-    }
-    if !node_stack.is_empty() {
-        //self.malformed_xml.handle_error(ErrorAcceptanceLevel::Compliant, "Encountered EOF with unclosed elements")?;
-        // let mut index_vec = vec![];
-        // for (_, sspan) in node_stack {
-        //     index_vec.push((sspan.start(), sspan.end(), Some(format!("'{}' element opened here and never closed:", sspan.as_str()).to_string())));
-        // }
-        // return Err(ParseXplError {
-        //     details: format!("Encountered end of file with unclosed elements:").to_string(),
-        //     error_type: ParseXplErrorType::MalformedXml,
-        //     index: index_vec,
-        //     help_text: None
-        // })
-        panic!("Encountered EOF with unclosed elements");
-    }
-
-    if objects.len() == 1 {
-        Structure::from_xml_object(objects.into_iter().nth(0).unwrap())
-    } else {
-        panic!("Wrong number of objects in XML!")
-    }
-    // Ok(svg)
-}
