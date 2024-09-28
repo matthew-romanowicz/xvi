@@ -9,6 +9,9 @@ use flate2::Compression;
 extern crate pancurses;
 use pancurses::{initscr, endwin, Input, noecho, Window, resize_term, start_color, init_color, init_pair, COLORS, COLOR_PAIRS};
 
+mod expr;
+use crate::expr::*;
+
 mod line_entry;
 use crate::line_entry::{AlertType, LineEntry};
 

@@ -11,12 +11,13 @@ use bitutils2::{BitIndex};
 use crate::globals;
 
 use crate::AlertType;
+use crate::expr::ExprValue;
 
 mod file_manager;
 pub use crate::hex_edit::file_manager::{FileManagerType, FileManager};
 
 mod file_specs;
-pub use crate::hex_edit::file_specs::{FileSpec, BinaryField, PngFileSpec, ExprValue, FileMap, FileRegion, Structure, make_png};
+pub use crate::hex_edit::file_specs::{FileSpec, BinaryField, PngFileSpec, FileMap, FileRegion, Structure, make_png};
 
 
 extern crate pancurses;
