@@ -1029,7 +1029,12 @@ impl<'a> HexEdit<'a> {
         } else {
             self.file_spec = None;
         }
-        ActionResult::no_error(UpdateDescription::AttrsOnly)
+        
+        let mut res = ActionResult::no_error(UpdateDescription::AttrsOnly);
+        if let Some(info_text) = self.update_syntax_highlight() {
+            res.set_info(info_text);
+        }
+        res
     }
 
     pub fn set_file_spec(&mut self, fs: Rc<Structure>) {
@@ -1656,6 +1661,47 @@ impl<'a> HexEdit<'a> {
         res
     }
 
+    fn update_syntax_highlight(&mut self) -> Option<String> {
+        if let Some(ref mut fs) = &mut self.file_spec {
+            // self.current_field = fs.field_at(self.cursor_pos, &mut self.file_manager);
+            if self.cursor_pos < self.file_manager.len() {
+                let region = fs.region_at(BitIndex::bytes(self.cursor_pos), &mut self.file_manager);
+
+                match region {
+                    FileRegion::Field(field_id) => {
+                        let s_name = fs.structure_name(field_id.structure.clone());
+                        let field = fs.get_field(field_id.clone(), &mut self.file_manager);
+                        self.current_field = Some(field.start..(field.start + field.span));
+                        let value = field.parse(&mut self.file_manager).unwrap();
+                        let field_data = fs.format_field_data(field_id, value);
+                        let field_info = format!("[{}] {}: {}", s_name, field.name, field_data).to_string();
+                        let mut field_info = field_info.replace("\x00", "\\x00");
+                        // let field_info = match value {
+                        //     ExprValue::Integer(v) => format!("[{}] {}: {}", s_name, field.name, v).to_string(),
+                        //     ExprValue::String(v) => format!("[{}] {}: {}", s_name, field.name, v).to_string(),
+                        //     _ => todo!()
+                        // };
+                        // res.set_info(field_info);
+                        Some(field_info)
+                        
+                    },
+                    FileRegion::Spare(struct_id, rng) => {
+                        self.current_field = Some(rng);
+                        let s_name = fs.structure_name(struct_id);
+                        Some(format!("[{}] Spare", s_name).to_string())
+                    }
+                    _ => todo!()
+                }
+            } else {
+                self.current_field = None;
+                None
+            }
+        } else {
+            self.current_field = None;
+            None
+        }
+    }
+
     pub fn set_cursor_pos(&mut self, index: usize) -> ActionResult {
         let line = index / (self.line_length as usize);
         let action = SeekAction::new(self.cursor_pos, SeekFrom::Start(index as u64));
@@ -1677,44 +1723,12 @@ impl<'a> HexEdit<'a> {
             ActionResult::no_error(UpdateDescription::AttrsOnly)
         };
 
-        res.set_action(Some(Rc::new(action)));
-
-        if let Some(ref mut fs) = &mut self.file_spec {
-            // self.current_field = fs.field_at(self.cursor_pos, &mut self.file_manager);
-            if self.cursor_pos < self.file_manager.len() {
-                let region = fs.region_at(BitIndex::bytes(self.cursor_pos), &mut self.file_manager);
-
-                match region {
-                    FileRegion::Field(field_id) => {
-                        let s_name = fs.structure_name(field_id.structure.clone());
-                        let field = fs.get_field(field_id.clone(), &mut self.file_manager);
-                        self.current_field = Some(field.start..(field.start + field.span));
-                        let value = field.parse(&mut self.file_manager).unwrap();
-                        let field_data = fs.format_field_data(field_id, value);
-                        let field_info = format!("[{}] {}: {}", s_name, field.name, field_data).to_string();
-                        let mut field_info = field_info.replace("\x00", "\\x00");
-                        // let field_info = match value {
-                        //     ExprValue::Integer(v) => format!("[{}] {}: {}", s_name, field.name, v).to_string(),
-                        //     ExprValue::String(v) => format!("[{}] {}: {}", s_name, field.name, v).to_string(),
-                        //     _ => todo!()
-                        // };
-                        res.set_info(field_info);
-                        
-                    },
-                    FileRegion::Spare(struct_id, rng) => {
-                        self.current_field = Some(rng);
-                        let s_name = fs.structure_name(struct_id);
-                        res.set_info(format!("[{}] Spare", s_name).to_string());
-                    }
-                    _ => todo!()
-                }
-            } else {
-                self.current_field = None;
-
-            }
+        if let Some(info_text) = self.update_syntax_highlight() {
+            res.set_info(info_text);
         }
-        
 
+        res.set_action(Some(Rc::new(action)));
+        
         res
     }
 
