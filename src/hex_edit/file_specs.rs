@@ -2762,8 +2762,8 @@ impl<'a> PartiallyResolvedStructure<'a> {
                             // Import source doesn't exist, use default value if available
                             if let Some(default) = self.original.exports.get(&field_id.id).expect("PRS has export that isn't in original structure?") {
                                 // panic!("DEFAULT!!!");
-                                let lookup = self.get_lookup_fn(vd);
-                                match default.evaluate(&lookup) {
+                                // let lookup = self.get_lookup_fn(vd);
+                                match default.evaluate(&|alias| {self.lookup_str(&vd, alias)}) {
                                     Ok(value) => {
                                         let mut dr = DependencyReport::success(DataSource::Given(value));
                                         dr.add_pc_pairs(self.convert_expr_vars(default.vars())?, HashSet::from([field_id.to_abstract()]));
@@ -2861,28 +2861,43 @@ impl<'a> PartiallyResolvedStructure<'a> {
         }
     }
 
-    fn get_lookup_fn<'b, 'c>(&'c self, vd: &'b ValueDictionary) -> impl Fn(&str) -> Option<ExprValue> + 'b {
-        // TODO: MAKE THIS MORE EFFICIENT!!!
-        let monikers = self.inherited_monikers.clone();
-        let import_monikers = self.import_monikers.clone();
-        let self_id = self.id.clone();
-        // info!("Looking for {} in {}", key, self.id);
-        info!("Monikers for {:?}: {:?}", self.id, monikers);
-        info!("Imports for {:?}: {:?}", self.id, import_monikers);
-        let lookup = move |alias: &str| match monikers.get(alias) {
+    fn lookup_str(&self, vd: &ValueDictionary, alias: &str) -> Option<ExprValue> {
+        match self.inherited_monikers.get(alias) {
             Some(fi) => vd.lookup_field(fi),
             None => {
-                if import_monikers.contains_key(alias) {
-                    let fi = self_id.clone().get_field_ident(alias.to_string());
+                if self.import_monikers.contains_key(alias) {
+                    let fi = self.id.clone().get_field_ident(alias.to_string());
                     vd.lookup_field(&fi)
                 } else {
                     vd.lookup_str(alias).unwrap_or(None)
                 }
                 
             }
-        };
-        lookup
+        }
     }
+
+    // fn get_lookup_fn<'b, 'c>(&'c self, vd: &'b ValueDictionary) -> impl Fn(&str) -> Option<ExprValue> + 'b {
+    //     // TODO: MAKE THIS MORE EFFICIENT!!!
+    //     let monikers = self.inherited_monikers.clone();
+    //     let import_monikers = self.import_monikers.clone();
+    //     let self_id = self.id.clone();
+    //     // info!("Looking for {} in {}", key, self.id);
+    //     info!("Monikers for {:?}: {:?}", self.id, monikers);
+    //     info!("Imports for {:?}: {:?}", self.id, import_monikers);
+    //     let lookup = move |alias: &str| match monikers.get(alias) {
+    //         Some(fi) => vd.lookup_field(fi),
+    //         None => {
+    //             if import_monikers.contains_key(alias) {
+    //                 let fi = self_id.clone().get_field_ident(alias.to_string());
+    //                 vd.lookup_field(&fi)
+    //             } else {
+    //                 vd.lookup_str(alias).unwrap_or(None)
+    //             }
+                
+    //         }
+    //     };
+    //     lookup
+    // }
 
     fn try_lookup(&mut self, key: AbstractIdent, vd: &ValueDictionary, prs_map: &mut HashMap<StructureIdent, Rc<RefCell<PartiallyResolvedStructure<'a>>>>) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
         // let monikers = self.inherited_monikers.clone();
@@ -2894,28 +2909,29 @@ impl<'a> PartiallyResolvedStructure<'a> {
         //         vd.lookup_str(alias).unwrap_or(None)
         //     }
         // };
-        let lookup = self.get_lookup_fn(vd);
+        // let lookup = self.get_lookup_fn(vd);
         // TODO: replace this with a match
         let mut result = match key {
             AbstractIdent::StructureAttr(ref sai) => {
                 if sai.structure == self.id {
                     match sai.attr {
-                        StructureAttrType::Position => self.try_get_position(&lookup),
-                        StructureAttrType::Align => self.try_get_alignment(&lookup),
-                        StructureAttrType::AlignBase => self.try_get_alignment_base(&lookup),
+                        StructureAttrType::Position => self.try_get_position(vd),
+                        StructureAttrType::Align => self.try_get_alignment(vd),
+                        StructureAttrType::AlignBase => self.try_get_alignment_base(vd),
                         StructureAttrType::StartPad => self.try_get_start_pad(vd),
                         StructureAttrType::Start => self.try_get_start(vd),
-                        StructureAttrType::Length => self.try_get_length(vd, &lookup),
+                        StructureAttrType::Length => self.try_get_length(vd),
                         StructureAttrType::SpareLength => self.try_get_spare_length(vd),
-                        StructureAttrType::ContentsLength => self.try_get_contents_length(vd, &lookup),
-                        StructureAttrType::End => self.try_get_end(vd, &lookup),
-                        StructureAttrType::SwitchValue => self.try_get_switch_value(&lookup),
+                        StructureAttrType::ContentsLength => self.try_get_contents_length(vd),
+                        StructureAttrType::End => self.try_get_end(vd),
+                        StructureAttrType::SwitchValue => self.try_get_switch_value(vd),
                         StructureAttrType::SwitchIndex => self.try_get_switch_index(vd, prs_map),
-                        StructureAttrType::Repetitions => self.try_get_repetitions(vd, &lookup, prs_map),
-                        StructureAttrType::SwitchCase(i) => self.try_get_switch_case(i, vd, &lookup),
-                        StructureAttrType::Break(i) => self.try_get_break(i, vd, &lookup)
+                        StructureAttrType::Repetitions => self.try_get_repetitions(vd, prs_map),
+                        StructureAttrType::SwitchCase(i) => self.try_get_switch_case(i, vd),
+                        StructureAttrType::Break(i) => self.try_get_break(i, vd)
                     }
                 } else {
+                    info!("Searching in children");
                     self.try_lookup_in_children(key, vd, prs_map)
                 }
             },
@@ -2976,15 +2992,15 @@ impl<'a> PartiallyResolvedStructure<'a> {
                         match fai.attr {
                             FieldAttrType::Start => self.try_get_field_start(fai.field.clone(), vd),
                             FieldAttrType::StartPad => self.try_get_field_start_pad(fai.field.clone(), vd),
-                            FieldAttrType::Length => self.try_get_field_length(fai.field.clone(), &lookup),
+                            FieldAttrType::Length => self.try_get_field_length(fai.field.clone(), vd),
                             FieldAttrType::End => self.try_get_field_end(fai.field.clone(), vd),
-                            FieldAttrType::Offset => self.try_get_field_offset(fai.field.clone(), &lookup),
+                            FieldAttrType::Offset => self.try_get_field_offset(fai.field.clone(), vd),
                             FieldAttrType::Position => self.try_get_field_position(fai.field.clone(), vd),
-                            FieldAttrType::Align => self.try_get_field_alignment(fai.field.clone(), &lookup),
-                            FieldAttrType::AlignBase => self.try_get_field_alignment_base(fai.field.clone(), &lookup),
-                            FieldAttrType::SearchStart => self.try_get_def_search_start(fai.field.clone(), &lookup),
-                            FieldAttrType::SearchN => self.try_get_def_search_n(fai.field.clone(), &lookup),
-                            FieldAttrType::AnchorOffset => self.try_get_def_anchor_offset(fai.field.clone(), &lookup),
+                            FieldAttrType::Align => self.try_get_field_alignment(fai.field.clone(), vd),
+                            FieldAttrType::AlignBase => self.try_get_field_alignment_base(fai.field.clone(), vd),
+                            FieldAttrType::SearchStart => self.try_get_def_search_start(fai.field.clone(), vd),
+                            FieldAttrType::SearchN => self.try_get_def_search_n(fai.field.clone(), vd),
+                            FieldAttrType::AnchorOffset => self.try_get_def_anchor_offset(fai.field.clone(), vd),
                         }
                     }
                 } else {
@@ -3188,7 +3204,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
         } 
     }
 
-    fn try_get_field_length(&self, field_id: FieldIdent, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
+    fn try_get_field_length(&self, field_id: FieldIdent, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
         match self.stype.as_ref() {
             PartiallyResolvedStructureType::UnresolvedSection{initial} => {
                 let field_index = match initial.id_map.get(&field_id.id) {
@@ -3196,7 +3212,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
                     None => return Ok(DependencyReport::does_not_exist())
                 };
                 let field = &initial.fields[*field_index];
-                match field.length.evaluate_expect_position(lookup) {
+                match field.length.evaluate_expect_position(&|alias| {self.lookup_str(&vd, alias)}) {
                     Ok(length) => {
                         info!("Length for {}: {:?}", field_id.id, length);
                         let mut dr = DependencyReport::success(ExprValue::Position(length));
@@ -3216,7 +3232,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
         }
     }
 
-    fn try_get_field_offset(&self, field_id: FieldIdent, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
+    fn try_get_field_offset(&self, field_id: FieldIdent, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
         match self.stype.as_ref() {
             PartiallyResolvedStructureType::UnresolvedSection{initial} => {
                 let field_index = match initial.id_map.get(&field_id.id) {
@@ -3224,7 +3240,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
                     None => return Ok(DependencyReport::does_not_exist())
                 };
                 let field = &initial.fields[*field_index];
-                match field.offset.evaluate_expect_position(lookup) {
+                match field.offset.evaluate_expect_position(&|alias| {self.lookup_str(&vd, alias)}) {
                     Ok(offset) => {
                         let mut dr = DependencyReport::success(ExprValue::Position(offset));
                         let field_offset_id = field_id.clone().get_attr_ident(FieldAttrType::Offset).to_abstract();
@@ -3243,7 +3259,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
         }
     }
 
-    fn try_get_field_alignment(&self, field_id: FieldIdent, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
+    fn try_get_field_alignment(&self, field_id: FieldIdent, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
         match self.stype.as_ref() {
             PartiallyResolvedStructureType::UnresolvedSection{initial} => {
                 let field_index = match initial.id_map.get(&field_id.id) {
@@ -3251,7 +3267,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
                     None => return Ok(DependencyReport::does_not_exist())
                 };
                 let field = &initial.fields[*field_index];
-                match field.alignment.evaluate_expect_position(lookup) {
+                match field.alignment.evaluate_expect_position(&|alias| {self.lookup_str(&vd, alias)}) {
                     Ok(alignment) => {
                         let mut dr = DependencyReport::success(ExprValue::Position(alignment));
                         let field_alignment_id = field_id.clone().get_attr_ident(FieldAttrType::Align).to_abstract();
@@ -3270,7 +3286,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
         }
     }
 
-    fn try_get_field_alignment_base(&self, field_id: FieldIdent, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
+    fn try_get_field_alignment_base(&self, field_id: FieldIdent, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
         match self.stype.as_ref() {
             PartiallyResolvedStructureType::UnresolvedSection{initial} => {
                 let field_index = match initial.id_map.get(&field_id.id) {
@@ -3278,7 +3294,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
                     None => return Ok(DependencyReport::does_not_exist())
                 };
                 let field = &initial.fields[*field_index];
-                match field.alignment_base.evaluate_expect_position(lookup) {
+                match field.alignment_base.evaluate_expect_position(&|alias| {self.lookup_str(&vd, alias)}) {
                     Ok(alignment_base) => {
                         let mut dr = DependencyReport::success(ExprValue::Position(alignment_base));
                         let field_alignment_base_id = field_id.clone().get_attr_ident(FieldAttrType::AlignBase).to_abstract();
@@ -3327,11 +3343,11 @@ impl<'a> PartiallyResolvedStructure<'a> {
         }       
     }
 
-    fn try_get_def_search_start(&self, field_id: FieldIdent, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
+    fn try_get_def_search_start(&self, field_id: FieldIdent, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
         if self.original.def_fields.contains_key(&field_id.id) {
             match &self.original.def_fields[&field_id.id] {
                 DefField::Search{start, ..} => {
-                    match start.evaluate_expect_position(lookup) {
+                    match start.evaluate_expect_position(&|alias| {self.lookup_str(&vd, alias)}) {
                         Ok(value) => {
                             let mut dr = DependencyReport::success(ExprValue::Position(value));
                             let search_start_id = field_id.clone().get_attr_ident(FieldAttrType::SearchStart);
@@ -3349,11 +3365,11 @@ impl<'a> PartiallyResolvedStructure<'a> {
         }
     }
 
-    fn try_get_def_search_n(&self, field_id: FieldIdent, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
+    fn try_get_def_search_n(&self, field_id: FieldIdent, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
         if self.original.def_fields.contains_key(&field_id.id) {
             match &self.original.def_fields[&field_id.id] {
                 DefField::Search{n, ..} => {
-                    match n.evaluate_expect_integer(lookup) {
+                    match n.evaluate_expect_integer(&|alias| {self.lookup_str(&vd, alias)}) {
                         Ok(value) => {
                             let mut dr = DependencyReport::success(ExprValue::Integer(value));
                             let search_n_id = field_id.clone().get_attr_ident(FieldAttrType::SearchN);
@@ -3371,11 +3387,11 @@ impl<'a> PartiallyResolvedStructure<'a> {
         }
     }
 
-    fn try_get_def_anchor_offset(&self, field_id: FieldIdent, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
+    fn try_get_def_anchor_offset(&self, field_id: FieldIdent, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
         if self.original.def_fields.contains_key(&field_id.id) {
             match &self.original.def_fields[&field_id.id] {
                 DefField::Anchor{offset} => {
-                    match offset.evaluate_expect_position(lookup) {
+                    match offset.evaluate_expect_position(&|alias| {self.lookup_str(&vd, alias)}) {
                         Ok(value) => {
                             let mut dr = DependencyReport::success(ExprValue::Position(value));
                             let anchor_offset_id = field_id.clone().get_attr_ident(FieldAttrType::AnchorOffset);
@@ -3599,11 +3615,11 @@ impl<'a> PartiallyResolvedStructure<'a> {
         }
     }
 
-    fn try_get_switch_value(&self, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
+    fn try_get_switch_value(&self, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
         match self.stype.as_ref() {
             PartiallyResolvedStructureType::Switch{value, ..} => {
                 let parents = self.convert_expr_vars(value.vars())?;
-                match value.evaluate(lookup) {
+                match value.evaluate(&|alias| {self.lookup_str(&vd, alias)}) {
                     Ok(v) => {
 
                         // let mut input = String::new();
@@ -3624,7 +3640,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
         }
     }
 
-    fn try_get_switch_case(&self, i: usize, vd: &ValueDictionary, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
+    fn try_get_switch_case(&self, i: usize, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
         // info!("In try_get_switch_case");
         match self.stype.as_ref() {
             PartiallyResolvedStructureType::Switch{cases, ..} => {
@@ -3640,7 +3656,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
                         None => return Ok(DependencyReport::incomplete(parents))
                     };
 
-                    match expr.evaluate_with_args(&vec![arg], lookup) {
+                    match expr.evaluate_with_args(&vec![arg], &|alias| {self.lookup_str(&vd, alias)}) {
                         Ok(v) => {
 
                             // let mut input = String::new();
@@ -3721,7 +3737,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
 
     }
 
-    fn try_get_break(&self, i: usize, vd: &ValueDictionary, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
+    fn try_get_break(&self, i: usize, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
         if self.original.breaks.is_empty() {
             // If there are no breaks, return false to indicate that no break condition has been met
             return Ok(DependencyReport::success(ExprValue::Bool(false)))
@@ -3746,7 +3762,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
         };
 
         // The break condition is evaluated using the context of the repeating structure
-        let lookup = last_prs.borrow().get_lookup_fn(vd);
+        // let lookup = last_prs.borrow().get_lookup_fn(vd);
         let mut parents = HashSet::new();
         for b in &self.original.breaks {
             let expr = &b.condition;
@@ -3755,7 +3771,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
 
         for b in &self.original.breaks {
             let expr = &b.condition;
-            match expr.evaluate(&lookup) {
+            match expr.evaluate(&|alias| {last_prs.borrow().lookup_str(&vd, alias)}) {
                 Ok(v) => {
 
                     // let mut input = String::new();
@@ -3781,16 +3797,25 @@ impl<'a> PartiallyResolvedStructure<'a> {
         Ok(dr)
     }
 
-    fn try_get_repetitions(&mut self, vd: &ValueDictionary, lookup: &dyn Fn(&str) -> Option<ExprValue>, prs_map: &mut HashMap<StructureIdent, Rc<RefCell<PartiallyResolvedStructure<'a>>>>) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
+    fn try_get_repetitions(&mut self, vd: &ValueDictionary, prs_map: &mut HashMap<StructureIdent, Rc<RefCell<PartiallyResolvedStructure<'a>>>>) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
         let end_id = self.id.get_attr_ident(StructureAttrType::End);
         let start_id = self.id.get_attr_ident(StructureAttrType::Start);
 
         let child_monikers = self.monikers_for_child();
 
+        let n_value = match self.stype.as_ref() { // Need this for the borrow checker
+            PartiallyResolvedStructureType::Repeat{n, ..} => {
+                Some(n.evaluate_expect_integer(&|alias| {self.lookup_str(&vd, alias)}))
+            },
+            _ => {
+                None
+            }
+        };
+
         match self.stype.as_mut() {
             PartiallyResolvedStructureType::Repeat{n, structure, ref mut seq, ref mut finalized} => {
                 let n = n.clone(); // Need this for the borrow checker
-                match n.evaluate_expect_integer(lookup) {
+                match n_value.unwrap() { // Unwrap always works since n_value is set when stype is Repeat
                     Ok(v) => {
                         let mut struct_seq = Vec::new();
                         for i in 0..v {
@@ -3921,9 +3946,9 @@ impl<'a> PartiallyResolvedStructure<'a> {
                 info!("Last member's import monikers: {:?}", last_member.borrow().import_monikers);
                 parents.extend(last_member.borrow().convert_expr_vars(next.vars())?);
 
-                let lookup = last_member.borrow().get_lookup_fn(vd);
+                // let lookup = last_member.borrow().get_lookup_fn(vd);
 
-                match next.evaluate_expect_position(&lookup) {
+                match next.evaluate_expect_position(&|alias| {last_member.borrow().lookup_str(&vd, alias)}) {
                     Ok(v) => {
                         // panic!("Next position: {:?} from {:?}", v, last_member.borrow().id);
                         if !seq.is_empty() {
@@ -3953,13 +3978,13 @@ impl<'a> PartiallyResolvedStructure<'a> {
         }
     }
 
-    fn try_get_position(&self, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
+    fn try_get_position(&self, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
         match self.stype.as_ref() {
             // PartiallyResolvedStructureType::UnresolvedSection{initial, pss: Some(section)} => {
             //     Ok(DependencyReport::success(ExprValue::Position(section.get_position())))
             // },
             PartiallyResolvedStructureType::Addressed{position, ..} => {
-                match position.evaluate_expect_position(lookup) {
+                match position.evaluate_expect_position(&|alias| {self.lookup_str(&vd, alias)}) {
                     Ok(value) => {
                         let mut dr = DependencyReport::success(ExprValue::Position(value));
                         let position_id = self.id.get_attr_ident(StructureAttrType::Position);
@@ -3978,8 +4003,8 @@ impl<'a> PartiallyResolvedStructure<'a> {
         }        
     }
 
-    fn try_get_alignment(&self, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
-        match self.alignment.evaluate_expect_position(lookup) {
+    fn try_get_alignment(&self, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
+        match self.alignment.evaluate_expect_position(&|alias| {self.lookup_str(&vd, alias)}) {
             Ok(value) => {
                 let mut dr = DependencyReport::success(ExprValue::Position(value));
                 let alignment_id = self.id.get_attr_ident(StructureAttrType::Align).to_abstract();
@@ -3991,8 +4016,8 @@ impl<'a> PartiallyResolvedStructure<'a> {
         }
     }
 
-    fn try_get_alignment_base(&self, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
-        match self.alignment_base.evaluate_expect_position(lookup) {
+    fn try_get_alignment_base(&self, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
+        match self.alignment_base.evaluate_expect_position(&|alias| {self.lookup_str(&vd, alias)}) {
             Ok(value) => {
                 let mut dr = DependencyReport::success(ExprValue::Position(value));
                 let alignment_base_id = self.id.get_attr_ident(StructureAttrType::AlignBase).to_abstract();
@@ -4062,7 +4087,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
         Ok(dr)
     }
 
-    fn try_get_length(&self, vd: &ValueDictionary, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
+    fn try_get_length(&self, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
         match &self.length {
             LengthPolicy::Expand => {
                 // let spare_length_id = format!("{}.spare_length", self.parent_id).to_string(); // TODO: Make this not as janky
@@ -4079,7 +4104,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
             LengthPolicy::Expr(expr) => {
                 let parents = self.convert_expr_vars(expr.vars())?;
                 
-                match expr.evaluate(lookup) {
+                match expr.evaluate(&|alias| {self.lookup_str(&vd, alias)}) {
                     Ok(v) => {
                         let mut dr = DependencyReport::success(v);
                         let length_id = self.id.get_attr_ident(StructureAttrType::Length).to_abstract();
@@ -4314,7 +4339,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
     }
 
     /// Tries to compute the structure length based on contents
-    fn try_get_contents_length(&self, vd: &ValueDictionary, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
+    fn try_get_contents_length(&self, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
         match self.stype.as_ref() {
             PartiallyResolvedStructureType::UnresolvedSection{initial} => {
                 let section = initial;
@@ -4323,7 +4348,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
                         return Ok(DependencyReport::does_not_exist())
                     },
                     LengthPolicy::Expr(expr) => {
-                        match expr.evaluate_expect_position(lookup) {
+                        match expr.evaluate_expect_position(&|alias| {self.lookup_str(&vd, alias)}) {
                             Ok(value) => {
                                 let mut dr = DependencyReport::success(ExprValue::Position(value));
                                 let contents_length_id = self.id.get_attr_ident(StructureAttrType::ContentsLength).to_abstract();
@@ -4529,10 +4554,10 @@ impl<'a> PartiallyResolvedStructure<'a> {
         }        
     }
 
-    fn try_get_end(&self, vd: &ValueDictionary, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
+    fn try_get_end(&self, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
         match self.stype.as_ref() {
             PartiallyResolvedStructureType::RepeatUntil{end, ..} => {
-                match end.evaluate_expect_position(lookup) {
+                match end.evaluate_expect_position(&|alias| {self.lookup_str(&vd, alias)}) {
                     Ok(value) => {
                         let mut dr = DependencyReport::success(ExprValue::Position(value));
                         let end_id = self.id.get_attr_ident(StructureAttrType::End).to_abstract();
