@@ -82,6 +82,7 @@ impl<'a> MyStrSpan<'a> {
             text: new_text.trim_end()
         }
     }
+
 }
 
 pub struct StrSpanChars<'a> {
@@ -130,6 +131,122 @@ impl<'a> StrSpanChars<'a> {
             start: sspan.start,
             text: sspan.text,
             iter: sspan.text.char_indices()
+        }
+    }
+}
+
+#[derive(Debug)]
+enum IndexMutation {
+    Deletion{start: usize, span: usize},
+    Insertion{start: usize, span: usize}
+}
+
+impl IndexMutation {
+    fn apply(&self, i: usize) -> usize {
+        match self {
+            IndexMutation::Deletion{start, span} => {
+                if i >= *start {
+                    if i < start + span { // Index is in the deleted region
+                        *start
+                    } else { // Index is after the deleted region
+                        i - span
+                    }
+                } else { // index is before the deleted region
+                    i
+                }
+            },
+            IndexMutation::Insertion{start, span} => {
+                if i >= *start { // Index is after the point of insertion
+                    i + span
+                } else { // Index is before the point of insertion
+                    i
+                }
+            }
+        }
+    }
+
+    fn inverted(&self) -> IndexMutation {
+        match self {
+            IndexMutation::Deletion{start, span} => IndexMutation::Insertion{start: *start, span: *span},
+            IndexMutation::Insertion{start, span} => IndexMutation::Deletion{start: *start, span: *span}
+        }
+    }
+}
+
+pub struct IndexRemap {
+    mutations: Vec<IndexMutation>
+}
+
+impl IndexRemap {
+    pub fn apply(&self, mut i: usize) -> usize {
+        for m in &self.mutations {
+            i = m.apply(i);
+        }
+        i
+    }
+
+    pub fn apply_range(&self, rng: std::ops::Range<usize>) -> std::ops::Range<usize> {
+        self.apply(rng.start)..self.apply(rng.end)
+    }
+
+    pub fn extend(&mut self, other: IndexRemap) {
+        self.mutations.extend(other.mutations);
+    }
+
+    pub fn inverted(&self) -> IndexRemap {
+        IndexRemap {
+            mutations: self.mutations.iter().rev().map(|m| m.inverted()).collect()
+        }
+    }
+
+    pub fn from_replacement(original: &str, from: &str, to: &str) -> (String, IndexRemap) {
+        let mut result = String::new();
+        let mut mutations = Vec::new();
+        let mut last_end = 0;
+        for (start, part) in original.match_indices(from) {
+            if part.len() < to.len() {
+                mutations.push(IndexMutation::Insertion{start: start, span: to.len() - part.len()})
+            } else if part.len() > to.len() {
+                mutations.push(IndexMutation::Deletion{start: start + to.len(), span: part.len() - to.len()})
+            }
+            result.push_str(&original[last_end..start]);
+            result.push_str(to);
+            last_end = start + part.len();
+        }
+        result.push_str(&original[last_end..original.len()]);
+        (result, IndexRemap{mutations: mutations.into_iter().rev().collect()})
+    }
+
+    pub fn from_str_span(str_span: &MyStrSpan) -> IndexRemap {
+        IndexRemap {
+            mutations: vec![
+                IndexMutation::Deletion{start: 0, span: str_span.start}
+            ]
+        }
+    }
+}
+
+#[cfg(test)]
+mod index_remap_tests {
+    use super::*;
+
+    #[test]
+    fn replacement() {
+        let original = "4 &lt;= x + 1 && x &lt; 15";
+        println!("{}", &original[3..3+3]);
+        let (new, remap) = IndexRemap::from_replacement(original, "&lt;", "<");
+        assert_eq!(new.as_str(), "4 <= x + 1 && x < 15");
+        println!("{:?}", remap.mutations);
+        for i in (0..2).into_iter().chain((6..19).into_iter()).chain((23..26).into_iter()) {
+            let j = remap.apply(i);
+            assert_eq!(original[i..i+1], new[j..j+1]);
+        }
+        let remap_inv = remap.inverted();
+        for i in 0..new.len() {
+            if &new[i..i+1] != "<" {
+                let j = remap_inv.apply(i);
+                assert_eq!(new[i..i+1], original[j..j+1]);
+            }
         }
     }
 }

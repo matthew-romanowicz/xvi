@@ -55,7 +55,7 @@ pub struct BinaryField {
     pub span: usize
 }
 
-use crate::expr::{MyStrSpan, ExprValue, Expr, ExprEvalError, ParseExprError};
+use crate::expr::{MyStrSpan, IndexRemap, ExprValue, Expr, ExprEvalError, ParseExprError};
 
 // impl From<ParseAbstractIdentError> for ExprEvalError {
 //     fn from(err: ParseAbstractIdentError) -> Self {
@@ -166,6 +166,9 @@ impl ParseXmlError {
     }
 
     pub fn set_context(&mut self, context: &str) {
+        if self.message.is_some() {
+            return;
+        }
         let mut msg = format!("\x1b[0;31mERROR:\x1b[0m {}", self.details).to_string();
         if let Some(fname) = &self.fname {
             let s = format!("\n\x1b[0;96m -->\x1b[0m {}", fname).to_string();
@@ -226,6 +229,34 @@ impl From<ParseExprError> for ParseXmlError {
 fn convert_xml_symbols(s: &str) -> String {
     let out = s.replace("&lt;", "<");
     out
+}
+
+fn expr_from_xml(s: &MyStrSpan) -> Result<Expr, ParseXmlError> {
+    let mut new: String = s.as_str().to_string();
+    let mut remap = IndexRemap::from_str_span(s);
+    for (from, to) in vec![("&lt;", "<"), ("&gt;", ">")] {
+        let new_remap: IndexRemap;
+        (new, new_remap) = IndexRemap::from_replacement(&new, from, to);
+        remap.extend(new_remap);
+    }
+    match Expr::from_str_span(MyStrSpan::new(0, &new)) {
+        Ok(Expr) => Ok(Expr),
+        Err(err) => {
+            remap = remap.inverted();
+            let mut new_annotations = vec![];
+            for (s, rng) in err.annotations {
+                new_annotations.push((s.clone(), remap.apply_range(rng)));
+            }
+            Err(ParseXmlError{
+                details: err.details,
+                annotations: new_annotations,
+                help: err.help,
+                fname: None,
+                message: None
+            })
+        }
+    }
+
 }
 
 use crate::Endianness;
@@ -378,6 +409,7 @@ struct FieldSpec {
     length: Expr,
     alignment: Expr,
     alignment_base: Expr,
+    valid: Option<Expr>,
     dtype: String,
     endian: Endianness,
     enumeration: Option<IntegerEnum>,
@@ -494,6 +526,10 @@ impl FieldSpec {
             Some(s) => Expr::from_str(&convert_xml_symbols(s.as_str()))?,
             None => Expr::Value(ExprValue::Position(BitIndex::zero()))
         };
+        let valid = match obj.attrs.remove("valid") {
+            Some(s) => Some(Expr::from_str(&convert_xml_symbols(s.as_str()))?),
+            None => None
+        };
         let units = match obj.attrs.remove("units") {
             Some(s) => Some(convert_xml_symbols(s.as_str()).to_string()),
             None => None
@@ -518,6 +554,7 @@ impl FieldSpec {
             length,
             alignment,
             alignment_base,
+            valid,
             dtype,
             endian,
             enumeration,
@@ -533,40 +570,6 @@ enum SectionType {
     Footer
 }
 
-struct PositionedSectionSpec<'a> {
-    parent: &'a SectionSpec,
-    position: BitIndex, // Position == start since alignment is already done
-    resolved_length: BitIndex,
-    field_offsets: Vec<BitIndex>,
-    field_lengths: Vec<BitIndex>
-}
-
-impl<'a> PositionedSectionSpec<'a> {
-    pub fn new(position: BitIndex, parent: &'a SectionSpec) -> PositionedSectionSpec {
-        let n_fields = parent.fields.len();
-        PositionedSectionSpec {
-            parent,
-            position,
-            resolved_length: BitIndex::new(0, 0),
-            field_offsets: Vec::new(),
-            field_lengths: Vec::new()
-        }
-    }
-
-    fn get_position(&self) -> BitIndex { 
-        self.position.clone()
-    }
-
-    fn try_get_position(&self, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<DependencyReport<ExprValue>, ExprEvalError> {
-        return Ok(DependencyReport::success(ExprValue::Position(self.position.clone())))
-
-    }
-
-    // fn contains_value(&self, key: String) -> bool {
-    //     self.parent.contains_value(key)
-    // }
-
-}
 
 #[derive(Clone)]
 struct SectionSpec {
@@ -805,6 +808,7 @@ enum FieldAttrType {
     Start,
     Length,
     End,
+    Valid,
     SearchStart,
     SearchN,
     AnchorOffset
@@ -821,6 +825,7 @@ impl std::fmt::Display for FieldAttrType {
             FieldAttrType::Start => write!(f, "start"),
             FieldAttrType::Length => write!(f, "length"),
             FieldAttrType::End => write!(f, "end"),
+            FieldAttrType::Valid => write!(f, "valid"),
             FieldAttrType::SearchStart => write!(f, "search_start"),
             FieldAttrType::SearchN => write!(f, "search_n"),
             FieldAttrType::AnchorOffset => write!(f, "anchor_offset"),
@@ -932,6 +937,7 @@ impl FromStr for AbstractIdent {
                         "start" => FieldAttrType::Start,
                         "length" => FieldAttrType::Length,
                         "end" => FieldAttrType::End,
+                        "valid" => FieldAttrType::Valid,
                         _ => return Err(ParseAbstractIdentError::new(format!("Unrecognized field attribute: '{}'", attr_match.as_str()).to_string()))
                     };
                     Ok(field.get_attr_ident(attr).to_abstract())
@@ -1634,6 +1640,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
                             FieldAttrType::Position => self.try_get_field_position(fai.field.clone(), vd),
                             FieldAttrType::Align => self.try_get_field_alignment(fai.field.clone(), vd),
                             FieldAttrType::AlignBase => self.try_get_field_alignment_base(fai.field.clone(), vd),
+                            FieldAttrType::Valid => self.try_get_field_valid(fai.field.clone(), vd),
                             FieldAttrType::SearchStart => self.try_get_def_search_start(fai.field.clone(), vd),
                             FieldAttrType::SearchN => self.try_get_def_search_n(fai.field.clone(), vd),
                             FieldAttrType::AnchorOffset => self.try_get_def_anchor_offset(fai.field.clone(), vd),
@@ -1713,6 +1720,14 @@ impl<'a> PartiallyResolvedStructure<'a> {
 
     }
 
+    /// Attempts to determine the absolute position of a field and returns the result
+    /// as a dependency report. The position is calculated by adding the field's offset
+    /// to the end of the previous field (or, if it is the first field in the section,
+    /// the start position of the section). Accordingly, the dependencies given in the
+    /// dependency report will be the field's offset and either the start position of
+    /// the section or the end position of the previous field. 
+    ///
+    /// If `self` is not a `UnresolvedSection`, then this returns a IdentNotValid error.
     fn try_get_field_position(&self, field_id: FieldIdent, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, FileSpecError> {
         match self.stype.as_ref() {
             PartiallyResolvedStructureType::UnresolvedSection{initial} => {
@@ -1988,6 +2003,54 @@ impl<'a> PartiallyResolvedStructure<'a> {
                 Err(FileSpecError::IdentNotValid(target_id))
             }
         }       
+    }
+
+    fn try_get_field_valid(&self, field_id: FieldIdent, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, FileSpecError> {
+        match self.stype.as_ref() {
+            PartiallyResolvedStructureType::UnresolvedSection{initial} => {
+
+                
+
+                let field_index = match initial.id_map.get(&field_id.id) {
+                    Some(i) => i,
+                    None => return Ok(DependencyReport::does_not_exist())
+                };
+                let field = &initial.fields[*field_index];
+
+                if let Some(field_valid) = &field.valid {
+                    let mut parents = self.convert_expr_vars(field_valid.vars())?;
+                    parents.insert(field_id.clone().to_abstract());
+
+                    let field_value = match vd.lookup_field(&field_id) {
+                        Some(ev) => ev,
+                        None => return Ok(DependencyReport::incomplete(parents))
+                    };
+    
+                    
+                    match field_valid.evaluate_with_args(&vec![field_value], &|alias| {self.lookup_str(&vd, alias)}) {
+                        Ok(valid) => {
+                            let mut dr = DependencyReport::success(ExprValue::Bool(valid.expect_bool()?));
+                            let field_valid_id = field_id.clone().get_attr_ident(FieldAttrType::Valid).to_abstract();
+                            dr.add_pc_pairs(parents, HashSet::from([field_valid_id]));
+                            Ok(dr)
+                        },
+                        Err(ExprEvalError::LookupError{..}) => {
+                            Ok(DependencyReport::incomplete(parents))
+                        }
+                        Err(err) => return Err(FileSpecError::from(err))
+                    }
+                } else {
+                    // Field has no validity check, always return true
+                    Ok(DependencyReport::success(ExprValue::Bool(true)))
+                }
+
+
+            },
+            _ => {
+                let target_id = field_id.clone().get_attr_ident(FieldAttrType::Offset).to_abstract();
+                Err(FileSpecError::IdentNotValid(target_id))
+            }
+        }
     }
 
     fn try_get_def_search_start(&self, field_id: FieldIdent, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, FileSpecError> {
@@ -3729,7 +3792,8 @@ impl Structure {
                             def_fields.insert(id, DefField::from_xml_object(child)?);
                         },
                         "switch-case" => {
-                            let check = Expr::from_str(&convert_xml_symbols(child.attrs.remove("check").unwrap().as_str()))?;
+                            // let check = Expr::from_str(&convert_xml_symbols(child.attrs.remove("check").unwrap().as_str()))?;
+                            let check = expr_from_xml(&child.attrs.remove("check").unwrap())?;
                             if child.children.len() != 1 {
                                 panic!("switch-case must have exactly one child")
                             }
@@ -4461,6 +4525,18 @@ impl<'a> FileMap<'a> {
         //     new_parents = Vec::new();
         // }
         related
+    }
+
+    pub fn get_field_valid(&mut self, field: FieldIdent, fm: &mut crate::FileManager) -> Result<bool, FileSpecError> {
+        let fai = field.clone().get_attr_ident(FieldAttrType::Valid);
+        self.get_data(vec![fai.clone().to_abstract()], fm)?;
+
+        if let Some(ev) = self.value_dict.lookup_field_attr(&fai) {
+            return Ok(ev.expect_bool()?)
+        } else {
+            error!("Field attribute didn't get populated by get_data call: {}", fai);
+            return Err(FileSpecError::IdentNotFound(fai.to_abstract()))
+        }
     }
 
     pub fn get_field(&mut self, field: FieldIdent, fm: &mut crate::FileManager) -> Result<UnparsedBinaryField, FileSpecError> {

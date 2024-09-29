@@ -858,7 +858,7 @@ pub struct HexEdit<'a> {
     valid_bytes: usize,
     clipboard_registers: [Vec::<u8>; 32], //Needs to be 32 or less for Default::default() to work
     file_spec: Option<FileMap<'a>>,
-    current_field: Option<std::ops::Range<BitIndex>>,
+    current_field: Option<(std::ops::Range<BitIndex>, bool)>, // (range, is_valid)
     related_fields: Vec<std::ops::Range<BitIndex>>
 }
 
@@ -1675,7 +1675,8 @@ impl<'a> HexEdit<'a> {
                         // TODO: take care of these unwraps...
                         let s_name = fs.structure_name(field_id.structure.clone());
                         let field = fs.get_field(field_id.clone(), &mut self.file_manager).unwrap();
-                        self.current_field = Some(field.start..(field.start + field.span));
+                        let field_valid = fs.get_field_valid(field_id.clone(), &mut self.file_manager).unwrap();
+                        self.current_field = Some((field.start..(field.start + field.span), field_valid));
                         for fid in fs.related_fields(field_id.clone()) {
                             let related_field = fs.get_field(fid, &mut self.file_manager).unwrap();
                             self.related_fields.push((related_field.start..(related_field.start + related_field.span)));
@@ -1694,7 +1695,7 @@ impl<'a> HexEdit<'a> {
                         
                     },
                     FileRegion::Spare(struct_id, rng) => {
-                        self.current_field = Some(rng);
+                        self.current_field = Some((rng, true));
                         let s_name = fs.structure_name(struct_id);
                         Some(format!("[{}] Spare", s_name).to_string())
                     }
@@ -2059,10 +2060,19 @@ impl<'a> HexEdit<'a> {
         related_field_attr.set_color_pair(pancurses::ColorPair(globals::RELATED_FIELD_COLOR));
         let related_field_attr = chtype::from(related_field_attr);
 
-        let attrs = vec![rv_attr, field_attr, related_field_attr];
+        let mut error_field_attr = Attributes::new();
+        error_field_attr.set_color_pair(pancurses::ColorPair(globals::ERROR_COLOR));
+        let error_field_attr = chtype::from(error_field_attr);
+
+        let attrs = vec![rv_attr, field_attr, related_field_attr, error_field_attr];
         let mut highlights = vec![];
-        if let Some(h) = &self.current_field {
-            highlights.push((h.start.byte(), h.end.byte(), 1));
+        if let Some((h, v)) = &self.current_field {
+            if *v {
+                highlights.push((h.start.byte(), h.end.byte(), 1));
+            } else {
+                highlights.push((h.start.byte(), h.end.byte(), 3));
+            }
+            
         }
 
         for h in &self.related_fields {
