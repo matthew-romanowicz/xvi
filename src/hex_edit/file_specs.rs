@@ -5,6 +5,10 @@ use bitutils2::{BitIndex, BitField, BinRegex};
 use xmlparser::{Tokenizer, Token, ElementEnd, StrSpan};
 use log::*;
 
+fn get_index_from_row_col(input: &str, row: usize, col: usize) -> usize {
+    input.split_inclusive("\n").take(row - 1).map(|line| line.len()).sum::<usize>() + col - 1
+}
+
 // TODO: This is duplicated in expr
 fn get_line_char(input: &str, index: usize) -> (usize, usize) {
     if let Some((n, line)) = input[..index].lines().enumerate().last() {
@@ -13,6 +17,34 @@ fn get_line_char(input: &str, index: usize) -> (usize, usize) {
         (0, 0)
     } else {
         panic!("Empty input!: {}", input)
+    }
+}
+
+const MAX_LINE_LENGTH: usize = 100;
+const MIN_LINE_CONTEXT: usize = 5;
+const LEFT_ELLIPSIS: &str = "... ";
+const RIGHT_ELLIPSIS: &str = " ...";
+const MID_ELLIPSES: &str = " ... ";
+
+fn sample_line(line: &str, min_index: usize, max_index: usize) -> (String, usize, usize) {
+    if line.len() < MAX_LINE_LENGTH {
+        (line.to_string(), min_index, max_index)
+    } else if MAX_LINE_LENGTH > max_index + MIN_LINE_CONTEXT {
+        let elided = line[..MAX_LINE_LENGTH].to_string();
+        (elided + "\x1b[0;96m" + RIGHT_ELLIPSIS + "\x1b[0m", min_index, max_index)
+    } else if line.len() - MAX_LINE_LENGTH + MIN_LINE_CONTEXT < min_index {
+        let offset = line.len() - MAX_LINE_LENGTH;
+        let ellipsis = LEFT_ELLIPSIS.len();
+        let elided = &line[offset..];
+        ("\x1b[0;96m".to_string() + LEFT_ELLIPSIS + "\x1b[0m" + elided, min_index - offset + ellipsis, max_index - offset + ellipsis)
+    } else if max_index - min_index + MIN_LINE_CONTEXT * 2 < MAX_LINE_LENGTH {
+        let offset = (min_index + max_index - MAX_LINE_LENGTH) / 2 - MIN_LINE_CONTEXT;
+        let ellipsis = LEFT_ELLIPSIS.len();
+        info!("min: {} max: {} Offset: {}", min_index, max_index, offset);
+        let elided = &line[offset..offset+MAX_LINE_LENGTH];
+        ("\x1b[0;96m".to_string() + LEFT_ELLIPSIS + "\x1b[0m" + elided + "\x1b[0;96m" + RIGHT_ELLIPSIS + "\x1b[0m", min_index - offset + ellipsis, max_index - offset + ellipsis)
+    } else {
+        todo!()
     }
 }
 
@@ -35,9 +67,17 @@ use crate::expr::{MyStrSpan, ExprValue, Expr, ExprEvalError, ParseExprError};
 
 #[derive(Debug)]
 pub enum FileSpecError {
+    IOError(std::io::Error),
     ExprEvalError(ExprEvalError),
     IdentNotFound(AbstractIdent),
+    IdentNotValid(AbstractIdent),
     IdentParseError(ParseAbstractIdentError)
+}
+
+impl From<std::io::Error> for FileSpecError {
+    fn from(err: std::io::Error) -> Self {
+        FileSpecError::IOError(err)
+    }
 }
 
 impl From<ExprEvalError> for FileSpecError {
@@ -55,8 +95,10 @@ impl From<ParseAbstractIdentError> for FileSpecError {
 impl std::fmt::Display for FileSpecError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            FileSpecError::IOError(err) => write!(f, "I/O Error: {}", err),
             FileSpecError::ExprEvalError(err) => write!(f, "Expression Eval Error: {}", err),
             FileSpecError::IdentNotFound(err) => write!(f, "Identifier not found: {}", err),
+            FileSpecError::IdentNotValid(err) => write!(f, "Identifier not valid: {}", err),
             FileSpecError::IdentParseError(err) => write!(f, "Identifier parse error: {}", err),
         }
     }    
@@ -79,15 +121,104 @@ impl std::fmt::Display for FileParseError {
     }    
 }
 
+// #[derive(Debug)]
+// pub struct ParseXmlError {
+//     details: String
+// }
+
 #[derive(Debug)]
 pub struct ParseXmlError {
-    details: String
+    details: String,
+    annotations: Vec<(Option<String>, std::ops::Range<usize>)>,
+    help: Option<String>,
+    fname: Option<String>,
+    message: Option<String>
+}
+
+impl ParseXmlError {
+    pub fn new(details: String) -> ParseXmlError {
+        ParseXmlError{
+            details, 
+            annotations: Vec::new(), 
+            help: None, 
+            fname: None,
+            message: None
+        }
+    }
+
+    pub fn push_annotation(&mut self, range: std::ops::Range<usize>, message: Option<String>) {
+        self.annotations.push((message, range));
+    }
+
+    pub fn set_help(&mut self, text: String) {
+        self.help = Some(text);
+    }
+
+    pub fn set_fname(&mut self, fname: String) {
+        self.fname = Some(fname);
+    }
+
+    pub fn get_message(&mut self, context: &str) -> String {
+        if self.message.is_none() {
+            self.set_context(context);
+        }
+        self.message.as_ref().unwrap().clone()
+    }
+
+    pub fn set_context(&mut self, context: &str) {
+        let mut msg = format!("\x1b[0;31mERROR:\x1b[0m {}", self.details).to_string();
+        if let Some(fname) = &self.fname {
+            let s = format!("\n\x1b[0;96m -->\x1b[0m {}", fname).to_string();
+            msg.push_str(&s)
+        }
+        let mut max_line_num = 0;
+        for (_, r) in &self.annotations {
+            let (line, _) = get_line_char(context, r.start);
+            if line > max_line_num {
+                max_line_num = line;
+            }
+            let (line, _) = get_line_char(context, r.end);
+            if line > max_line_num {
+                max_line_num = line;
+            }
+        }
+        let line_num_length = format!("{}", max_line_num).len();
+        for (info, r) in &self.annotations {
+            let (line1, col1) = get_line_char(context, r.start);
+            let (line2, col2) = get_line_char(context, r.end);
+            let line_text = context.lines().nth(line1).unwrap();
+            if let Some(info_string) = info {
+                msg.push_str("\n");
+                msg.push_str(&info_string);
+            }
+            let (line_text, col1, col2) = sample_line(line_text, col1, col2);
+            let s = format!("\n\x1b[0;96m{:2$} | \x1b[0m{}", line1 + 1, line_text, line_num_length).to_string();
+            msg.push_str(&s);
+            let s = format!("\n{}\x1b[0;31m{}\x1b[0m", " ".repeat(col1 + line_num_length + 3), "~".repeat(col2 - col1)).to_string();
+            msg.push_str(&s);
+        }
+        if let Some(help) = &self.help {
+            msg.push_str(format!("\n\x1b[0;32mHELP:\x1b[0m {}", help).as_str());
+        }
+        self.message = Some(msg)
+    }
+
+}
+
+impl std::fmt::Display for ParseXmlError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.details)
+    }    
 }
 
 impl From<ParseExprError> for ParseXmlError {
     fn from(err: ParseExprError) -> Self {
         ParseXmlError{
-            details: format!("{}", err).to_string()
+            details: err.details,
+            annotations: err.annotations,
+            help: err.help,
+            fname: None,
+            message: None
         }
     }
 }
@@ -832,6 +963,21 @@ enum PartiallyResolvedStructureType<'a> {
     Chain{next: Rc<Expr>, structure: Rc<Structure>, prs: Rc<RefCell<PartiallyResolvedStructure<'a>>>, seq: Vec<Rc<RefCell<PartiallyResolvedStructure<'a>>>>, finalized: bool}
 }
 
+impl<'a> PartiallyResolvedStructureType<'a> {
+    /// Returns a string representing `self`'s structure type for use in error/debug messages
+    fn name(&self) -> String {
+        match self {
+            PartiallyResolvedStructureType::UnresolvedSection{..} => "section".to_string(),
+            PartiallyResolvedStructureType::Addressed{..} => "addressed".to_string(),
+            PartiallyResolvedStructureType::Sequence{..} => "sequence".to_string(),
+            PartiallyResolvedStructureType::Switch{..} => "switch".to_string(),
+            PartiallyResolvedStructureType::Repeat{..} => "repeat".to_string(),
+            PartiallyResolvedStructureType::RepeatUntil{..} => "repeat-until".to_string(),
+            PartiallyResolvedStructureType::Chain{..} => "chain".to_string()
+        }
+    }
+}
+
 struct PartiallyResolvedStructure<'a> {
     id: StructureIdent,
     original: Rc<Structure>,
@@ -874,7 +1020,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
                 }
                 let mut child_index = index.clone();
                 child_index.push(0);
-                let pss = PartiallyResolvedStructure::new_indexed(content.clone(), parent_id.clone(), child_index, prs_map);
+                let pss = PartiallyResolvedStructure::new_indexed(content.clone(), id.clone(), child_index, prs_map);
                 PartiallyResolvedStructureType::Addressed{position: position.clone(), pss}
             },
             StructureType::Sequence(seq) => {
@@ -947,6 +1093,9 @@ impl<'a> PartiallyResolvedStructure<'a> {
 
     fn monikers_for_child(&self) -> HashMap<String, FieldIdent> {
         let mut child_monikers = self.inherited_monikers.clone();
+        for key in self.original.def_fields.keys() {
+            child_monikers.insert(key.clone(), self.id.clone().get_field_ident(key.clone()));
+        }
         for key in self.import_monikers.keys().clone() {
             if !child_monikers.contains_key(key) {
                 child_monikers.insert(key.to_string(), self.id.get_field_ident(key.clone()));
@@ -959,9 +1108,9 @@ impl<'a> PartiallyResolvedStructure<'a> {
             monikers: HashMap<String, FieldIdent>) {
         
         self.inherited_monikers = monikers;
-        for key in self.original.def_fields.keys() {
-            self.inherited_monikers.insert(key.clone(), self.id.clone().get_field_ident(key.clone()));
-        }
+        // for key in self.original.def_fields.keys() {
+        //     self.inherited_monikers.insert(key.clone(), self.id.clone().get_field_ident(key.clone()));
+        // }
         let child_monikers = self.monikers_for_child();
         
         match self.stype.as_mut() {
@@ -991,6 +1140,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
                     if self.import_monikers.contains_key(&s) || self.original.def_fields.contains_key(&s) {
                         new.insert(self.id.get_field_ident(s).to_abstract());
                     } else {
+                        error!("Couldn't convert {} in {}", s, self.id);
                         new.insert(AbstractIdent::from_str(&s)?);
                     }
                 }
@@ -999,8 +1149,66 @@ impl<'a> PartiallyResolvedStructure<'a> {
         Ok(new)
     }
 
+    /// Attempts to find the actual field that field_name refers to in the context of `self`. This 
+    /// requires recursively following inheritance/import sources. Returns Ok(Some(...)) if the 
+    /// field name provided is associated with an actual field ID somewhere. Returns Ok(None) if the
+    /// field name is valid but it refers to a derived field as opposed to a real field in the file.
+    /// Returns Err(IdentNotValid) if the field doesn't exist or if the inheritance/import source 
+    /// points to a structure that isn't in prs_map. Returns Err(IdentNotFound) if the source may
+    /// exist but hasn't been fully determined yet.
+    fn get_source_field(&self, field_name: String, prs_map: &HashMap<StructureIdent, Rc<RefCell<PartiallyResolvedStructure<'a>>>>) -> Result<Option<FieldIdent>, FileSpecError> {
+        info!("Entering get_source_field for {:?}", self.id);
+        match self.stype.as_ref() {
+            PartiallyResolvedStructureType::UnresolvedSection{initial} => {
+                if initial.id_map.contains_key(&field_name) {
+                    return Ok(Some(self.id.get_field_ident(field_name)))
+                } else {
+                    error!("initial did not conain key");
+                    return Err(FileSpecError::IdentNotValid(self.id.get_field_ident(field_name).to_abstract()))
+                }
+            },
+            _ => {
+                match self.inherited_monikers.get(&field_name) {
+                    Some(fi) => {
+                        if let Some(prs) = prs_map.get(&fi.structure) {
+                            info!("Looking for source field in inherited monikers");
+                            return prs.borrow().get_source_field(field_name, prs_map)
+                        } else {
+                            todo!("inherited monikers contains PRS that wasn't in prs_map")
+                        }
+                    },
+                    None => {
+                        match self.import_monikers.get(&field_name) {
+                            Some(Some(sid)) => {
+                                if let Some(prs) = prs_map.get(&sid) {
+                                    info!("Looking for source field in import monikers");
+                                    return prs.borrow().get_source_field(field_name, prs_map)
+                                } else {
+                                    todo!("import monikers contains PRS that wasn't in prs_map")
+                                }
+                            },
+                            Some(None) => {
+                                error!("Couldn't find {} in {}", field_name, self.id);
+                                return Err(FileSpecError::IdentNotFound(self.id.get_field_ident(field_name).to_abstract()))
+                            },
+                            None => {
+                                if self.original.def_fields.contains_key(&field_name) {
+                                    return Ok(None)
+                                } else {
+                                    return Err(FileSpecError::IdentNotValid(self.id.get_field_ident(field_name).to_abstract()))
+                                }
+                                
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+    }
+
     fn try_get_region_at(&self, vd: &ValueDictionary, location: BitIndex) -> Result<DependencyReport<FileRegion>, FileSpecError> {
-        // info!("Trying to get region for {:?}", self.id);
+        info!("Trying to get region for {:?}", self.id);
         let position_id = self.id.get_attr_ident(StructureAttrType::Position);
         let start_id = self.id.get_attr_ident(StructureAttrType::Start);
         let end_id = self.id.get_attr_ident(StructureAttrType::End);
@@ -1156,7 +1364,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
         }   
     }
 
-    fn try_get_field(&self, field_id: FieldIdent, vd: &ValueDictionary,
+    fn try_get_field(&mut self, field_id: FieldIdent, vd: &ValueDictionary,
             prs_map: &HashMap<StructureIdent, Rc<RefCell<PartiallyResolvedStructure<'a>>>>) -> Result<DependencyReport<DataSource>, FileSpecError> {
         info!("Import monikers for {:?}: {:?}", self.id, self.import_monikers);
         if self.import_monikers.contains_key(&field_id.id) {
@@ -1166,16 +1374,17 @@ impl<'a> PartiallyResolvedStructure<'a> {
                     info!("Trying to import {} from {:?}", field_id, source_id);
                     let source = prs_map.get(source_id).unwrap();
                     let new_field_id = source_id.get_field_ident(field_id.id);
-                    source.borrow().try_get_field(new_field_id, vd, prs_map)
+                    source.borrow_mut().try_get_field(new_field_id, vd, prs_map)
                 },
                 None => {
                     let dr = self.try_resolve_import(field_id.id.clone())?;
                     match dr.result {
                         DepResult::Success(source_id) => {
                             info!("Successfully resolved import");
+                            self.import_monikers.insert(field_id.id.clone(), Some(source_id.clone()));
                             let source = prs_map.get(&source_id).unwrap();
                             let new_field_id = source_id.get_field_ident(field_id.id);
-                            source.borrow().try_get_field(new_field_id, vd, prs_map)
+                            source.borrow_mut().try_get_field(new_field_id, vd, prs_map)
                         },
                         DepResult::Incomplete(vars) => {
                             info!("Import incomplete");
@@ -1208,7 +1417,6 @@ impl<'a> PartiallyResolvedStructure<'a> {
                             }
                             
                         }
-                        // _ => todo!()
                     }
 
                 }
@@ -1278,16 +1486,23 @@ impl<'a> PartiallyResolvedStructure<'a> {
                                 dr.add_pc_pairs(parents, HashSet::from([field_id.to_abstract()]));
                                 Ok(dr)
                             },
-                            Err(()) => panic!("Structure did not contain the field!!!")
+                            Err(()) => {
+                                error!("Structure did not contain the field!!!");
+                                return Err(FileSpecError::IdentNotValid(field_id.to_abstract()))
+                            }
                         }
                         
         
                     },
-                    _ => panic!("Cannot get a field for a non-section structure!")
+                    _ => {
+                        error!("Cannot get a field for a non-section structure!");
+                        return Err(FileSpecError::IdentNotValid(field_id.to_abstract()))
+                    }
                 }
             }
         } else {
-            panic!("Field {} does not exist!", field_id);
+            error!("Field {} does not exist!", field_id);
+            return Err(FileSpecError::IdentNotFound(field_id.to_abstract()))
 
         }
     }
@@ -1296,7 +1511,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
         match self.inherited_monikers.get(alias) {
             Some(fi) => vd.lookup_field(fi),
             None => {
-                if self.import_monikers.contains_key(alias) {
+                if self.import_monikers.contains_key(alias)  || self.original.def_fields.contains_key(alias) {
                     let fi = self.id.clone().get_field_ident(alias.to_string());
                     vd.lookup_field(&fi)
                 } else {
@@ -1433,6 +1648,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
         }?;
 
         for (parents, children) in result.parents_children.iter_mut() {
+            // TODO: Make sure this logic works with def_fields
             *parents = parents.iter().map(
                 |var| match var {
                     AbstractIdent::Field(fi) => {
@@ -1449,6 +1665,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
                 }
             ).collect();
             
+            // TODO: Make sure this logic works with def_fields
             *children = children.iter().map(
                 |var| match var {
                     AbstractIdent::Field(fi) => {
@@ -1474,6 +1691,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
                 for var in vars.clone().into_iter() {
                     if let AbstractIdent::Field(ref fi) = var {
                         if fi.structure == self.id {
+                            // TODO: Make sure this logic works with def_fields
                             match self.inherited_monikers.get(&fi.id) {
                                 Some(new) => {new_vars.insert(AbstractIdent::Field(new.clone()));},
                                 None => {new_vars.insert(var);}
@@ -1541,7 +1759,8 @@ impl<'a> PartiallyResolvedStructure<'a> {
 
             },
             _ => {
-                todo!()
+                let target_id = field_id.clone().get_attr_ident(FieldAttrType::Position).to_abstract();
+                Err(FileSpecError::IdentNotValid(target_id))
             }
         }       
     }
@@ -1572,7 +1791,8 @@ impl<'a> PartiallyResolvedStructure<'a> {
 
             },
             _ => {
-                todo!()
+                let target_id = field_id.clone().get_attr_ident(FieldAttrType::Start).to_abstract();
+                Err(FileSpecError::IdentNotValid(target_id))
             }
         }       
     }
@@ -1620,7 +1840,8 @@ impl<'a> PartiallyResolvedStructure<'a> {
 
             },
             _ => {
-                todo!()
+                let target_id = field_id.clone().get_attr_ident(FieldAttrType::StartPad).to_abstract();
+                Err(FileSpecError::IdentNotValid(target_id))
             }
         } 
     }
@@ -1648,7 +1869,8 @@ impl<'a> PartiallyResolvedStructure<'a> {
                 }
             },
             _ => {
-                todo!("Trying to get field length for {}", field_id);
+                let target_id = field_id.clone().get_attr_ident(FieldAttrType::Length).to_abstract();
+                Err(FileSpecError::IdentNotValid(target_id))
             }
         }
     }
@@ -1675,7 +1897,8 @@ impl<'a> PartiallyResolvedStructure<'a> {
                 }
             },
             _ => {
-                todo!()
+                let target_id = field_id.clone().get_attr_ident(FieldAttrType::Offset).to_abstract();
+                Err(FileSpecError::IdentNotValid(target_id))
             }
         }
     }
@@ -1698,11 +1921,12 @@ impl<'a> PartiallyResolvedStructure<'a> {
                     Err(ExprEvalError::LookupError{..}) => {
                         Ok(DependencyReport::incomplete(self.convert_expr_vars(field.alignment.vars())?))
                     }
-                    Err(err) => return Err(FileSpecError::from(err))
+                    Err(err) => Err(FileSpecError::from(err))
                 }
             },
             _ => {
-                todo!()
+                let target_id = field_id.clone().get_attr_ident(FieldAttrType::Align).to_abstract();
+                Err(FileSpecError::IdentNotValid(target_id))
             }
         }
     }
@@ -1729,7 +1953,8 @@ impl<'a> PartiallyResolvedStructure<'a> {
                 }
             },
             _ => {
-                todo!()
+                let target_id = field_id.clone().get_attr_ident(FieldAttrType::AlignBase).to_abstract();
+                Err(FileSpecError::IdentNotValid(target_id))
             }
         }
     }
@@ -1759,7 +1984,8 @@ impl<'a> PartiallyResolvedStructure<'a> {
 
             },
             _ => {
-                todo!()
+                let target_id = field_id.clone().get_attr_ident(FieldAttrType::End).to_abstract();
+                Err(FileSpecError::IdentNotValid(target_id))
             }
         }       
     }
@@ -2057,7 +2283,10 @@ impl<'a> PartiallyResolvedStructure<'a> {
                     Err(err) => Err(FileSpecError::from(err))
                 }
             },
-            _ => panic!("switch_value not valid for '{}'", self.id)
+            _ => {
+                let target_id = self.id.get_attr_ident(StructureAttrType::SwitchValue).to_abstract();
+                Err(FileSpecError::IdentNotValid(target_id))
+            }
         }
     }
 
@@ -2098,10 +2327,19 @@ impl<'a> PartiallyResolvedStructure<'a> {
                 }
 
             },
-            _ => panic!("switch_case not valid for '{}'", self.id)
+            _ => {
+                let target_id = self.id.get_attr_ident(StructureAttrType::SwitchValue).to_abstract();
+                Err(FileSpecError::IdentNotValid(target_id))
+            }
         }
     }
 
+    /// Attempts to determine the index of the correct switch case and returns the result as a 
+    /// `DependencyReport`. If the index can be determined, then calling this function will create
+    /// a new `PartiallyResolvedStructure` to represent it. The resulting structure will be added
+    /// to `self` as a member and to `prs_map`.
+    ///
+    /// Returns an error of `self` is not a Switch type.
     fn try_get_switch_index(&mut self, vd: &ValueDictionary, prs_map: &mut HashMap<StructureIdent, Rc<RefCell<PartiallyResolvedStructure<'a>>>>) -> Result<DependencyReport<ExprValue>, FileSpecError> {
         // This has to be factored weird to get past the borrow checker
         let n_cases = match self.stype.as_ref() {
@@ -2109,7 +2347,10 @@ impl<'a> PartiallyResolvedStructure<'a> {
                 cases.len()
 
             },
-            _ => panic!("switch_index not valid for '{}'", self.id)
+            _ => {
+                let target_id = self.id.get_attr_ident(StructureAttrType::SwitchIndex).to_abstract();
+                return Err(FileSpecError::IdentNotValid(target_id))
+            }
         };
 
     
@@ -3276,8 +3517,15 @@ impl Structure {
         if obj.element.as_str() == "use" {
             let url = convert_xml_symbols(obj.attrs.remove("url").unwrap().as_str());
             if let Some((fname, struct_id)) = url.split_once("#") {
-                let text = std::fs::read_to_string(fname).unwrap();
-                let s = Rc::new(Structure::from_xml(&text).unwrap());
+                let text = std::fs::read_to_string(&fname).unwrap();
+                let s = match Structure::from_xml(&text) {
+                    Ok(s) => Rc::new(s),
+                    Err(mut err) => {
+                        err.set_fname(fname.to_string());
+                        err.set_context(&text);
+                        return Err(err)
+                    }
+                };
                 if let Some(child) = s.get_child_by_id(struct_id) {
                     std::mem::drop(s);
                     return Ok(Rc::into_inner(child).unwrap())
@@ -3332,7 +3580,7 @@ impl Structure {
                     "section" | "section-body" => SectionType::Body,
                     "section-header" => SectionType::Header,
                     "section-footer" => SectionType::Footer,
-                    _ => panic!("Unrecognized length policy")
+                    _ => unreachable!()
                 };
 
                 let mut fields = vec![];
@@ -3376,10 +3624,8 @@ impl Structure {
 
             },
             "addressed" => {
-                if obj.children.len() != 1 {
-                    panic!("addressed must have exactly one child")
-                }
                 let mut structure = None;
+                let mut structure_element_range = None; // Needed for error message
                 for mut child in obj.children {
                     match child.element.as_str() {
                         "export" => {
@@ -3401,9 +3647,17 @@ impl Structure {
                         },
                         _ => {
                             if structure.is_none() {
+                                structure_element_range = Some(child.element.range());
                                 structure = Some(Structure::from_xml_object(child)?);
                             } else {
-                                panic!("'addressed' should only have one non-export child!");
+                                let message = format!("'{}' object has more than one structural child", obj.element.as_str()).to_string();
+                                let mut err = ParseXmlError::new(message);
+                                let message = format!("This '{}' object should only have one child, but at least two were detected", obj.element.as_str()).to_string();
+                                err.push_annotation(obj.element.range(), Some(message));
+                                err.push_annotation(structure_element_range.unwrap(), Some("First structural child is defined here".to_string()));
+                                err.push_annotation(child.element.range(), Some("Second structural child is defined here".to_string()));
+                                err.set_help("Try wrapping children in a 'sequence' object".to_string());
+                                return Err(err)
                             }
                         }
                     }
@@ -3523,7 +3777,9 @@ impl Structure {
                             def_fields.insert(id, DefField::from_xml_object(child)?);
                         },
                         "break" => {
-                            let condition = Expr::from_str(&convert_xml_symbols(child.attrs.remove("condition").unwrap().as_str()))?;
+                            // let condition = Expr::from_str(&convert_xml_symbols(child.attrs.remove("condition").unwrap().as_str()))?;
+                            let condition_ss = child.attrs.remove("condition").unwrap();
+                            let condition = Expr::from_str_span(MyStrSpan::new(condition_ss.start(), condition_ss.as_str()))?;
                             breaks.push(Break{condition});
                         }
                         _ => {
@@ -3576,7 +3832,8 @@ impl Structure {
                             def_fields.insert(id, DefField::from_xml_object(child)?);
                         },
                         "break" => {
-                            let condition = Expr::from_str(&convert_xml_symbols(child.attrs.remove("condition").unwrap().as_str()))?;
+                            let condition_ss = child.attrs.remove("condition").unwrap();
+                            let condition = Expr::from_str_span(MyStrSpan::new(condition_ss.start(), condition_ss.as_str()))?;
                             breaks.push(Break{condition});
                         }
                         _ => {
@@ -3675,17 +3932,11 @@ impl Structure {
                             match node_stack.pop() {
                                 Some((elem, name)) if sspan2.as_str() != name.as_str() => {
                                     // let (line_index, col_index) = get_line_char(input, sspan2.start());
-                                    // let message = format!("Element end '{}' does not match start '{}'", sspan2.as_str(), name);
-                                    // return Err(ParseXplError {
-                                    //     details: message.to_string(),
-                                    //     error_type: ParseXplErrorType::MalformedXml,
-                                    //     index: vec![(name.start(), name.end(), Some("Element start is here".to_string())), 
-                                    //                 (sspan2.start(), sspan2.end(), Some("Element end is here".to_string()))],
-                                    //     help_text: None
-                                    // });
-                                    //self.malformed_xml.handle_error(ErrorAcceptanceLevel::Compliant, message.as_str())?;
-                                    // panic!("{}", message);
-                                    panic!("Malformed XML")
+                                    let message = format!("Element end '{}' does not match start '{}'", sspan2.as_str(), name.as_str());
+                                    let mut err = ParseXmlError::new(message.to_string());
+                                    err.push_annotation(name.range(), Some("Element start is here".to_string()));
+                                    err.push_annotation(sspan2.range(), Some("Element end is here".to_string()));
+                                    return Err(err)
                                 },
                                 Some((mut obj, _)) => {
                                     let n = node_stack.len();
@@ -3755,32 +4006,28 @@ impl Structure {
                     info!("Comment: {}", text);
                 },
                 Err(err) => {
-                    // match err {
-                    //     xmlparser::Error::InvalidAttribute(stream_err, pos) => {
-                    //         match stream_err {
-                    //             xmlparser::StreamError::InvalidSpace(c, pos) => {
-                    //                 let i = get_index_from_row_col(input, pos.row as usize, pos.col as usize);
-                    //                 return Err(ParseXplError {
-                    //                     details: format!("Encountered unexpected character: '{}' (expected space)", c as char).to_string(),
-                    //                     error_type: ParseXplErrorType::MalformedXml,
-                    //                     index: vec![(i, i+1, None)],
-                    //                     help_text: None
-                    //                 })
-                    //             },
-                    //             xmlparser::StreamError::InvalidChar(c1, c2, pos) => {
-                    //                 let i = get_index_from_row_col(input, pos.row as usize, pos.col as usize);
-                    //                 return Err(ParseXplError {
-                    //                     details: format!("Encountered unexpected character: '{}' (expected '{}')", c1 as char, c2 as char).to_string(),
-                    //                     error_type: ParseXplErrorType::MalformedXml,
-                    //                     index: vec![(i, i+1, None)],
-                    //                     help_text: None
-                    //                 })
-                    //             },
-                    //             _ => todo!("{:?}", stream_err)
-                    //         }
-                    //     },
-                    //     _ => todo!("{:?}", err)
-                    // }
+                    match err {
+                        xmlparser::Error::InvalidAttribute(stream_err, pos) => {
+                            match stream_err {
+                                xmlparser::StreamError::InvalidSpace(c, pos) => {
+                                    let i = get_index_from_row_col(input, pos.row as usize, pos.col as usize);
+                                    let message = format!("Encountered unexpected character: '{}' (expected space)", c as char).to_string();
+                                    let mut err = ParseXmlError::new(message);
+                                    err.push_annotation(i..i+1, None);
+                                    return Err(err)
+                                },
+                                xmlparser::StreamError::InvalidChar(c1, c2, pos) => {
+                                    let i = get_index_from_row_col(input, pos.row as usize, pos.col as usize);
+                                    let message = format!("Encountered unexpected character: '{}' (expected '{}')", c1 as char, c2 as char).to_string();
+                                    let mut err = ParseXmlError::new(message);
+                                    err.push_annotation(i..i+1, None);
+                                    return Err(err)
+                                },
+                                _ => todo!("{:?}", stream_err)
+                            }
+                        },
+                        _ => todo!("{:?}", err)
+                    }
                     todo!("{:?}", err)
                     // panic!("Malformed XML");
                 }
@@ -3799,7 +4046,13 @@ impl Structure {
             //     index: index_vec,
             //     help_text: None
             // })
-            panic!("Encountered EOF with unclosed elements");
+            let message = format!("Encountered end of file with unclosed elements:").to_string();
+            let mut err = ParseXmlError::new(message);
+            for (_, sspan) in node_stack {
+                err.push_annotation(sspan.range(), Some(format!("'{}' element opened here and never closed:", sspan.as_str()).to_string()));
+            }
+            return Err(err)
+            // panic!("Encountered EOF with unclosed elements");
         }
     
         if objects.len() == 1 {
@@ -4106,41 +4359,163 @@ impl<'a> FileMap<'a> {
         }
     }
 
-    pub fn get_field(&mut self, field: FieldIdent, fm: &mut crate::FileManager) -> UnparsedBinaryField {
+    /// Returns a list of fields that are related to the given field. Related fields include
+    /// those used to derive ancestral switch values, addressed positions, and repetitions
+    pub fn related_fields(&self, field: FieldIdent) -> Vec<FieldIdent> {
+        info!("Getting related fields for {}", field);
+        let mut related = Vec::new();
+        let mut structure = self.prs_map.get(&field.structure).unwrap();
+        loop {
+            match structure.borrow().stype.as_ref() {
+                PartiallyResolvedStructureType::Switch{value, ..} => {
+                    for s in value.vars() {
+                        match structure.borrow().get_source_field(s, &self.prs_map) {
+                            Ok(Some(fid)) => related.push(fid),
+                            Ok(None) => info!("{} must be a derived field", field),
+                            Err(err) => error!("Error while finding related fields: {}", err)
+                        }
+                    }
+                },
+                PartiallyResolvedStructureType::Repeat{n, ..} => {
+                    for s in n.vars() {
+                        match structure.borrow().get_source_field(s, &self.prs_map) {
+                            Ok(Some(fid)) => related.push(fid),
+                            Ok(None) => info!("{} must be a derived field", field),
+                            Err(err) => error!("Error while finding related fields: {}", err)
+                        }
+                    }
+                },
+                PartiallyResolvedStructureType::RepeatUntil{end, ..} => {
+                    for s in end.vars() {
+                        match structure.borrow().get_source_field(s, &self.prs_map) {
+                            Ok(Some(fid)) => related.push(fid),
+                            Ok(None) => info!("{} must be a derived field", field),
+                            Err(err) => error!("Error while finding related fields: {}", err)
+                        }
+                    }
+                },
+                PartiallyResolvedStructureType::Addressed{position, ..} => {
+                    info!("Addressed parent");
+                    for s in position.vars() {
+                        info!("Position var: {}", s);
+                        match structure.borrow().get_source_field(s, &self.prs_map) {
+                            Ok(Some(fid)) => related.push(fid),
+                            Ok(None) => info!("{} must be a derived field", field),
+                            Err(err) => error!("Error while finding related fields: {}", err)
+                        }
+                    }
+
+                    // Addressed is a bit tricky because if it was created as part of a chain
+                    // sequence, it'll be hard-coded to a certain value. In order to figure out
+                    // what fields were actually used to derive it, we have to go back to the
+                    // chain to find the previous iteration and use that as a context to find
+                    // the fields used in `next`
+                    let parent = match self.prs_map.get(&structure.borrow().parent_id) {
+                        Some(parent) => parent,
+                        None => break
+                    };
+                    if let PartiallyResolvedStructureType::Chain{next, prs, seq, ..} = parent.borrow().stype.as_ref() {
+                        if prs.borrow().id == structure.borrow().id {
+                            structure = parent;
+                        } else if let Some(i) = seq.iter().position(|s| s.borrow().id == structure.borrow().id) {
+                            let context = if i == 0 {
+                                &prs
+                            } else {
+                                &seq[i - 1]
+                            };
+                            for s in next.vars() {
+                                match context.borrow().get_source_field(s, &self.prs_map) {
+                                    Ok(Some(fid)) => related.push(fid),
+                                    Ok(None) => info!("{} must be a derived field", field),
+                                    Err(err) => error!("Error while finding related fields: {}", err)
+                                }
+                            }
+                        } else {
+                            error!("Could not find {} in parent chain", structure.borrow().id);
+                        }
+                    }
+                },
+                _ => {
+                    
+                }
+            }
+            structure = match self.prs_map.get(&structure.borrow().parent_id) {
+                Some(parent) => parent,
+                None => break
+            };
+            info!("Parent: {}", structure.borrow().id);
+        }
+        // let dn = self.dep_graph.dep_map.get(&field.to_abstract()).unwrap();
+        // let mut related = Vec::new();
+        // let mut parents = dn.borrow().parents.clone();
+        // let mut new_parents = Vec::new();
+        // for i in 0..20 {
+        //     info!("{}: {:?}", i, parents);
+        //     for parent in parents {
+        //         match &parent.borrow().name {
+        //             AbstractIdent::Field(fi) => related.push(fi.clone()),
+        //             _ => new_parents.extend(parent.borrow().parents.clone())
+        //         }
+        //     }
+        //     parents = new_parents;
+        //     new_parents = Vec::new();
+        // }
+        related
+    }
+
+    pub fn get_field(&mut self, field: FieldIdent, fm: &mut crate::FileManager) -> Result<UnparsedBinaryField, FileSpecError> {
         let child = self.prs_map.get(&field.structure).unwrap().clone();
 
         loop {
 
-            let dr = child.borrow().try_get_field(field.clone(), &self.value_dict, &self.prs_map).unwrap();
+            let dr = child.borrow_mut().try_get_field(field.clone(), &self.value_dict, &self.prs_map).unwrap();
             match dr.result {
                 DepResult::Success(ds) => {
                     match ds {
-                        DataSource::Field(f) => return f,
-                        _ => panic!("{:?} is not a field", field)
+                        DataSource::Field(f) => {
+                            // self.value_dict.insert_field(fi.clone(), v);
+                            let v = f.parse(fm)?;
+                            for pc in dr.parents_children.into_iter() {
+                                let deps: Vec<AbstractIdent> = pc.0.clone().into_iter().collect();
+                                for c in pc.1 {
+                                    info!("Adding dependencies for {}: {:?}", c, deps);
+                                    self.dep_graph.add_dependancies(c, deps.clone());
+                                }
+                            }
+                            return Ok(f)
+                        },
+                        _ => {
+                            error!("{:?} is not a field", field);
+                            return Err(FileSpecError::IdentNotValid(field.to_abstract())) // TODO: This isn't really representative of the issue...
+                        }
                     }
                 },
                 DepResult::Incomplete(deps) | DepResult::MightExist(deps) => {
                     let deps: Vec<AbstractIdent> = deps.into_iter().collect();
                     // std::mem::drop(dr);
-                    self.get_data(deps.into_iter().collect(), fm);
+                    self.get_data(deps.into_iter().collect(), fm)?;
                 },
                 DepResult::DoesNotExist => {
-                    todo!("Field does not exist?")
+                    error!("Field does not exist: {:?}", field);
+                    return Err(FileSpecError::IdentNotFound(field.to_abstract()))
                 }
             }
         }
     }
 
-    pub fn format_field_data(&self, field: FieldIdent, value: ExprValue) -> String {
+    pub fn format_field_data(&self, field: FieldIdent, value: ExprValue) -> Result<String, FileSpecError> {
         let s = self.prs_map[&field.structure].clone();
         let s_borrow = s.borrow();
         match s_borrow.stype.as_ref() {
             PartiallyResolvedStructureType::UnresolvedSection{initial} => {
-                return initial.format_field_data(field.id.clone(), value)
+                return Ok(initial.format_field_data(field.id.clone(), value))
                 
 
             },
-            _ => panic!("Cannot get a field for a non-section structure!")
+            _ => {
+                error!("Cannot get a field for a non-section structure!");
+                return Err(FileSpecError::IdentNotValid(field.to_abstract()))
+            }
         }
     }
 
@@ -4163,7 +4538,7 @@ impl<'a> FileMap<'a> {
         
     }
 
-    fn get_data(&mut self, targets: Vec<AbstractIdent>, fm: &mut crate::FileManager) {
+    fn get_data(&mut self, targets: Vec<AbstractIdent>, fm: &mut crate::FileManager) -> Result<(), FileSpecError> {
         let mut dg = std::mem::take(&mut self.dep_graph);
         let mut vd = std::mem::take(&mut self.value_dict);
         let mut prs_map = std::mem::take(&mut self.prs_map);
@@ -4186,12 +4561,12 @@ impl<'a> FileMap<'a> {
                         let child = prs_map.get(&fi.structure).unwrap();
 
                         // let field_id = struct_id.get_field_ident(fi.id);
-                        let dr = child.borrow().try_get_field(fi.clone(), &vd, &prs_map).unwrap();
+                        let dr = child.borrow_mut().try_get_field(fi.clone(), &vd, &prs_map)?;
                         match dr.result {
                             DepResult::Success(ds) => {
                                 match ds {
                                     DataSource::Field(f) => {
-                                        let v = f.parse(fm).unwrap();
+                                        let v = f.parse(fm)?;
                                         info!("Field parsed! Value is {:?}", v);
                                         //dg.lookup_values.insert(target.clone(), v);
                                         vd.insert_field(fi.clone(), v);
@@ -4208,7 +4583,7 @@ impl<'a> FileMap<'a> {
                                         let span = BitIndex::bytes(100); // TODO: This only searches the next 100 bytes at the moment...
                                         let end = start + span;
                                         let mut buffer = vec![0; end.ceil().byte() - start.byte()];
-                                        fm.get_bytes(start.byte(), &mut buffer).unwrap();
+                                        fm.get_bytes(start.byte(), &mut buffer)?;
                                         let mut bf = BitField::from_vec(buffer) << start.bit() as usize;
                                         bf.truncate(&span);
                                         if let Some(bm) = bre.find_iter(&bf).nth(n) {
@@ -4249,7 +4624,8 @@ impl<'a> FileMap<'a> {
                                 dg.add_dependancies(target.clone(), deps.into_iter().collect());
                             },
                             DepResult::DoesNotExist => {
-                                todo!("Field does not exist?")
+                                error!("Field does not exist: {:?}", target);
+                                return Err(FileSpecError::IdentNotFound(target))
                             }
                         }
 
@@ -4282,8 +4658,8 @@ impl<'a> FileMap<'a> {
                                 dg.add_dependancies(target, deps.into_iter().collect());
                             },
                             DepResult::DoesNotExist => {
-                                todo!("Field Attribute does not exist?");
-                                
+                                todo!("Field Attribute does not exist: {:?}", target);
+                                return Err(FileSpecError::IdentNotFound(target))
                                 
                             }
                         }
@@ -4303,7 +4679,10 @@ impl<'a> FileMap<'a> {
                                 StructureAttrType::Start => {
                                     vd.insert_struct_attr(sai.clone(), ExprValue::Position(BitIndex::zero()));
                                 },
-                                _ => panic!("Invalid file property: {}", sai.attr)
+                                _ => {
+                                    error!("Invalid file property: {}", sai.attr);
+                                    return Err(FileSpecError::IdentNotValid(target))
+                                }
                             }
                             
                         } else {
@@ -4352,10 +4731,12 @@ impl<'a> FileMap<'a> {
                                                     }
                                                     
                                                 } else {
-                                                    panic!("Invalid file property: {}", target)
+                                                    error!("Invalid file property: {}", target);
+                                                    return Err(FileSpecError::IdentNotValid(target))
                                                 }
                                             } else {
-                                                panic!("Invalid file property: {}", target)
+                                                error!("Invalid file property: {}", target);
+                                                return Err(FileSpecError::IdentNotValid(target))
                                             }
                                             break;
                                         } else {
@@ -4366,9 +4747,6 @@ impl<'a> FileMap<'a> {
                                 }
                             }
                         }
-                    },
-                    AbstractIdent::Field(ref f) => {
-                        panic!("Invalid target: {}", target);
                     }
                 }
 
@@ -4386,9 +4764,11 @@ impl<'a> FileMap<'a> {
         self.dep_graph = dg;
         self.value_dict = vd;
         self.prs_map = prs_map;
+
+        Ok(())
     }
 
-    pub fn initialize(&mut self, fm: &mut crate::FileManager) {
+    pub fn initialize(&mut self, fm: &mut crate::FileManager) -> Result<(), FileSpecError> {
         let mut vd = std::mem::take(&mut self.value_dict);
         let (unk0, unk1) = self.prs.borrow().unknowns(&vd).unwrap();
         self.value_dict = vd;
@@ -4403,7 +4783,7 @@ impl<'a> FileMap<'a> {
         loop {
             let prev_prs_map: HashSet<StructureIdent> = self.prs_map.keys().cloned().collect();
 
-            self.get_data(targets, fm);
+            self.get_data(targets, fm)?;
 
             // Discover new unkowns
             for k in self.prs_map.keys() {
@@ -4422,7 +4802,7 @@ impl<'a> FileMap<'a> {
             targets = self.dep_graph.get_resolvable_unknowns(&self.value_dict);
 
             if targets.is_empty() {
-                break;
+                return Ok(())
             }
             interval += 1;
             info!("============= INTERVAL #{} ==============", interval);
@@ -4438,8 +4818,17 @@ impl<'a> FileMap<'a> {
 }
 
 pub fn make_png() -> Structure {
-    let s = std::fs::read_to_string("png-spec.xml").unwrap();
-    Structure::from_xml(&s).unwrap()
+    let fname = "png-spec.xml".to_string();
+    let s = std::fs::read_to_string(&fname).unwrap();
+    match Structure::from_xml(&s) {
+        Ok(s) => s,
+        Err(mut err) => {
+            err.set_fname(fname);
+            let error_string = err.get_message(&s);
+            println!("{}", error_string);
+            panic!()
+        }
+    }
 }
 
 #[cfg(test)]

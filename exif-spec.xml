@@ -21,7 +21,7 @@
         </switch-case>
         <switch-else>
             <addressed pos="chunk_body_start + bytes(exif_subifd_offset)">
-                <chain id="exif_ifd_chain" name="eXIf IFD CHain" next="chunk_body_start + bytes(exif_next_ifd)">
+                <chain id="exif_ifd_chain" name="eXIf IFD Chain" next="chunk_body_start + bytes(exif_next_ifd)">
                     <break condition="exif_next_ifd == 0"/>
                     <use url="exif-ifd-spec.xml#exif_ifd"/>
                 </chain>

@@ -858,7 +858,8 @@ pub struct HexEdit<'a> {
     valid_bytes: usize,
     clipboard_registers: [Vec::<u8>; 32], //Needs to be 32 or less for Default::default() to work
     file_spec: Option<FileMap<'a>>,
-    current_field: Option<std::ops::Range<BitIndex>>
+    current_field: Option<std::ops::Range<BitIndex>>,
+    related_fields: Vec<std::ops::Range<BitIndex>>
 }
 
 pub fn shift_vector(buffer: &mut Vec<u8>, shift: i8) -> Result<(), String> { // TODO: 8 and -8 cause panic
@@ -934,7 +935,8 @@ impl<'a> HexEdit<'a> {
             valid_bytes: 0,
             clipboard_registers: Default::default(),
             file_spec: None,
-            current_field: None
+            current_field: None,
+            related_fields: Vec::new()
         }
     }
 
@@ -1662,6 +1664,7 @@ impl<'a> HexEdit<'a> {
     }
 
     fn update_syntax_highlight(&mut self) -> Option<String> {
+        self.related_fields.clear();
         if let Some(ref mut fs) = &mut self.file_spec {
             // self.current_field = fs.field_at(self.cursor_pos, &mut self.file_manager);
             if self.cursor_pos < self.file_manager.len() {
@@ -1669,11 +1672,16 @@ impl<'a> HexEdit<'a> {
 
                 match region {
                     FileRegion::Field(field_id) => {
+                        // TODO: take care of these unwraps...
                         let s_name = fs.structure_name(field_id.structure.clone());
-                        let field = fs.get_field(field_id.clone(), &mut self.file_manager);
+                        let field = fs.get_field(field_id.clone(), &mut self.file_manager).unwrap();
                         self.current_field = Some(field.start..(field.start + field.span));
+                        for fid in fs.related_fields(field_id.clone()) {
+                            let related_field = fs.get_field(fid, &mut self.file_manager).unwrap();
+                            self.related_fields.push((related_field.start..(related_field.start + related_field.span)));
+                        }
                         let value = field.parse(&mut self.file_manager).unwrap();
-                        let field_data = fs.format_field_data(field_id, value);
+                        let field_data = fs.format_field_data(field_id, value).unwrap();
                         let field_info = format!("[{}] {}: {}", s_name, field.name, field_data).to_string();
                         let mut field_info = field_info.replace("\x00", "\\x00");
                         // let field_info = match value {
@@ -2044,13 +2052,28 @@ impl<'a> HexEdit<'a> {
         // TODO: Merge this processing with the below processing
 
         let mut field_attr = Attributes::new();
-        //rv_attr.set_reverse(true);
         field_attr.set_color_pair(pancurses::ColorPair(globals::CURRENT_FIELD_COLOR));
         let field_attr = chtype::from(field_attr);
 
+        let mut related_field_attr = Attributes::new();
+        related_field_attr.set_color_pair(pancurses::ColorPair(globals::RELATED_FIELD_COLOR));
+        let related_field_attr = chtype::from(related_field_attr);
+
+        let attrs = vec![rv_attr, field_attr, related_field_attr];
+        let mut highlights = vec![];
         if let Some(h) = &self.current_field {
-            let h_end = h.end.byte();
-            let h_start = h.start.byte();
+            highlights.push((h.start.byte(), h.end.byte(), 1));
+        }
+
+        for h in &self.related_fields {
+            highlights.push((h.start.byte(), h.end.byte(), 2));
+        }
+
+        for h in &self.highlights {
+            highlights.push((h.start, h.start + h.span, 0));
+        }
+
+        for (h_start, h_end, attr_index) in highlights {
             if h_end > start && h_start < end { // If the highlight is in the viewport
                 let first_line = (h_start / (self.line_length as usize)) as isize - (self.start_line as isize);
                 let last_line = ((h_end) / (self.line_length as usize)) as isize - (self.start_line as isize);
@@ -2069,41 +2092,70 @@ impl<'a> HexEdit<'a> {
                     }
                     // println!("y={}, x1={}, x2={}, h_start={}, h.span={}, line_length={}", y, x1, x2, h_start, h.span, self.line_length);
                     if x1 != x2 {
-                        window.mvchgat(top_margin + y as i32, (x1*3 + hex_offset) as i32, ((x2 - x1)*3 - 1) as i32, field_attr, 0);
+                        window.mvchgat(top_margin + y as i32, (x1*3 + hex_offset) as i32, ((x2 - x1)*3 - 1) as i32, attrs[attr_index], 0);
                         //window.mvchgat(top_margin + y as i32, (x1 + ascii_offset) as i32, (x2 - x1) as i32, field_attr, 0);
                     }
                 }
             }
         }
+        
 
-        // This is the below processing
+        // if let Some(h) = &self.current_field {
+        //     let h_end = h.end.byte();
+        //     let h_start = h.start.byte();
+        //     if h_end > start && h_start < end { // If the highlight is in the viewport
+        //         let first_line = (h_start / (self.line_length as usize)) as isize - (self.start_line as isize);
+        //         let last_line = ((h_end) / (self.line_length as usize)) as isize - (self.start_line as isize);
+        //         // if (h_start + h.span) % (self.line_length as usize) == 0 {
+        //         //     last_line -= 1;
+        //         // }
+        //         //println!("In view: {}, {}", first_line, last_line);
+        //         for y in std::cmp::max(first_line, 0)..std::cmp::min(last_line, self.content_height() as isize - 1) + 1 {
+        //             let mut x1 = 0;
+        //             let mut x2 = self.line_length as usize;
+        //             if y == first_line {
+        //                 x1 = h_start % (self.line_length as usize);
+        //             }
+        //             if y == last_line {
+        //                 x2 = (h_end) % (self.line_length as usize);
+        //             }
+        //             // println!("y={}, x1={}, x2={}, h_start={}, h.span={}, line_length={}", y, x1, x2, h_start, h.span, self.line_length);
+        //             if x1 != x2 {
+        //                 window.mvchgat(top_margin + y as i32, (x1*3 + hex_offset) as i32, ((x2 - x1)*3 - 1) as i32, field_attr, 0);
+        //                 //window.mvchgat(top_margin + y as i32, (x1 + ascii_offset) as i32, (x2 - x1) as i32, field_attr, 0);
+        //             }
+        //         }
+        //     }
+        // }
 
-        for h in self.highlights.iter() {
-            //println!("{}, {}", h.start, h.span);
-            if h.start + h.span > start && h.start < end { // If the highlight is in the viewport
-                let first_line = (h.start / (self.line_length as usize)) as isize - (self.start_line as isize);
-                let last_line = ((h.start + h.span) / (self.line_length as usize)) as isize - (self.start_line as isize);
-                // if (h.start + h.span) % (self.line_length as usize) == 0 {
-                //     last_line -= 1;
-                // }
-                //println!("In view: {}, {}", first_line, last_line);
-                for y in std::cmp::max(first_line, 0)..std::cmp::min(last_line, self.content_height() as isize - 1) + 1 {
-                    let mut x1 = 0;
-                    let mut x2 = self.line_length as usize;
-                    if y == first_line {
-                        x1 = h.start % (self.line_length as usize);
-                    }
-                    if y == last_line {
-                        x2 = (h.start + h.span) % (self.line_length as usize);
-                    }
-                    // println!("y={}, x1={}, x2={}, h.start={}, h.span={}, line_length={}", y, x1, x2, h.start, h.span, self.line_length);
-                    if x1 != x2 {
-                        window.mvchgat(top_margin + y as i32, (x1*3 + hex_offset) as i32, ((x2 - x1)*3 - 1) as i32, rv_attr, 0);
-                        window.mvchgat(top_margin + y as i32, (x1 + ascii_offset) as i32, (x2 - x1) as i32, rv_attr, 0);
-                    }
-                }
-            }
-        }
+        // // This is the below processing
+
+        // for h in self.highlights.iter() {
+        //     //println!("{}, {}", h.start, h.span);
+        //     if h.start + h.span > start && h.start < end { // If the highlight is in the viewport
+        //         let first_line = (h.start / (self.line_length as usize)) as isize - (self.start_line as isize);
+        //         let last_line = ((h.start + h.span) / (self.line_length as usize)) as isize - (self.start_line as isize);
+        //         // if (h.start + h.span) % (self.line_length as usize) == 0 {
+        //         //     last_line -= 1;
+        //         // }
+        //         //println!("In view: {}, {}", first_line, last_line);
+        //         for y in std::cmp::max(first_line, 0)..std::cmp::min(last_line, self.content_height() as isize - 1) + 1 {
+        //             let mut x1 = 0;
+        //             let mut x2 = self.line_length as usize;
+        //             if y == first_line {
+        //                 x1 = h.start % (self.line_length as usize);
+        //             }
+        //             if y == last_line {
+        //                 x2 = (h.start + h.span) % (self.line_length as usize);
+        //             }
+        //             // println!("y={}, x1={}, x2={}, h.start={}, h.span={}, line_length={}", y, x1, x2, h.start, h.span, self.line_length);
+        //             if x1 != x2 {
+        //                 window.mvchgat(top_margin + y as i32, (x1*3 + hex_offset) as i32, ((x2 - x1)*3 - 1) as i32, rv_attr, 0);
+        //                 window.mvchgat(top_margin + y as i32, (x1 + ascii_offset) as i32, (x2 - x1) as i32, rv_attr, 0);
+        //             }
+        //         }
+        //     }
+        // }
     }
 
     pub fn update(&mut self, window: &mut Window, update: UpdateDescription) -> std::io::Result<()> {

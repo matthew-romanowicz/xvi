@@ -19,3 +19,4 @@ pub const CURSOR_COLOR: u8 = 4;
 pub const BAD_ASCII_COLOR: u8 = 5;
 pub const EOF_COLOR: u8 = 6;
 pub const CURRENT_FIELD_COLOR: u8 = 8;
+pub const RELATED_FIELD_COLOR: u8 = 9;

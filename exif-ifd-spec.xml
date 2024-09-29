@@ -161,6 +161,7 @@
                 <export source="exif_jpeg_offset"/>
                 <export source="exif_jpeg_byte_count"/>
                 <export source="exif_subifd_offset"/>
+                <export source="exif_compression"/>
 
                 <!-- Unsigned Byte -->
                 <switch-case check="$0 == 1"> 
@@ -228,14 +229,19 @@
                 <switch-case check="$0 == 3"> 
                     <switch length="4B" value="exif_ifd_num">
 
+                        <export source="exif_compression"/>
+
                         <!-- Fits in 4-byte data field -->
                         <switch-case check="$0 * 2 &lt;= 4">
                             <switch value="exif_ifd_tag">
+
+                                <export source="exif_compression"/>
 
                                 <!-- Compression -->
                                 <switch-case check="$0 == 259">
                                     <!-- TODO: Assert that exif_ifd_num == 1 -->
                                     <repeat n="exif_ifd_num">
+                                        <export source="exif_compression"/>
                                         <!-- <sequence> -->
                                         <section-body id="exif_ifd_u16_body" name="eXIf U16">
                                             <export source="exif_compression"/>
@@ -537,13 +543,21 @@
                 </switch-else>
             </switch>
 
-            <switch id="hello" value="exif_ifd_tag" length="0B">
+            <switch value="exif_ifd_tag" length="0B">
                 <switch-case check="$0 == 259"> <!-- Compression -->
-                    <addressed pos="chunk_body_start + bytes(exif_jpeg_offset)">
-                        <section id="exif_jpeg" name="EXIF JPEG">
-                            <field id="exif_jpeg_data" name="EXIF JPEG Data" length="bytes(exif_jpeg_byte_count)" dtype="B"/>
-                        </section>
-                    </addressed>
+                    <switch value="exif_compression" length="0B">
+                        <switch-case check="$0 == 6"> <!-- JPEG -->
+                            <addressed pos="chunk_body_start + bytes(exif_jpeg_offset)">
+                                <section id="exif_jpeg" name="EXIF JPEG">
+                                    <field id="exif_jpeg_data" name="EXIF JPEG Data" length="bytes(exif_jpeg_byte_count)" dtype="B"/>
+                                </section>
+                            </addressed>
+                        </switch-case>
+                        <switch-else>
+                            <section>
+                            </section>
+                        </switch-else>
+                    </switch>
                 </switch-case>
                 <switch-else>
                     <section length="0B">

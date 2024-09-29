@@ -527,9 +527,9 @@ fn sample_line(line: &str, min_index: usize, max_index: usize) -> (String, usize
 
 #[derive(Debug)]
 pub struct ParseExprError {
-    details: String,
-    annotations: Vec<(Option<String>, std::ops::Range<usize>)>,
-    help: Option<String>
+    pub details: String,
+    pub annotations: Vec<(Option<String>, std::ops::Range<usize>)>,
+    pub help: Option<String>
 }
 
 impl ParseExprError {
