@@ -105,18 +105,18 @@ impl ExprWrapper {
         }
     }
 
-    pub fn evaluate<'a>(&self, parent: &PartiallyResolvedStructure<'a>, lookup: &dyn Fn(&str) -> Option<ExprValue>, prs_map: &HashMap<StructureIdent, Rc<RefCell<PartiallyResolvedStructure<'a>>>>) -> Result<ExprValue, ExprEvalError> {
-        self.evaluate_with_args(parent, &vec![], lookup, prs_map)
+    pub fn evaluate<'a>(&self, fname: Option<Rc<String>>, lookup: &dyn Fn(&str) -> Option<ExprValue>, prs_map: &HashMap<StructureIdent, Rc<RefCell<PartiallyResolvedStructure<'a>>>>) -> Result<ExprValue, ExprEvalError> {
+        self.evaluate_with_args(fname, &vec![], lookup, prs_map)
     }
 
-    pub fn evaluate_with_args<'a>(&self, parent: &PartiallyResolvedStructure<'a>, arguments: &Vec<ExprValue>, lookup: &dyn Fn(&str) -> Option<ExprValue>, prs_map: &HashMap<StructureIdent, Rc<RefCell<PartiallyResolvedStructure<'a>>>>) -> Result<ExprValue, ExprEvalError> {
+    pub fn evaluate_with_args<'a>(&self, fname: Option<Rc<String>>, arguments: &Vec<ExprValue>, lookup: &dyn Fn(&str) -> Option<ExprValue>, prs_map: &HashMap<StructureIdent, Rc<RefCell<PartiallyResolvedStructure<'a>>>>) -> Result<ExprValue, ExprEvalError> {
         match self.inner.evaluate_with_args(arguments, lookup) {
             Ok(ev) => Ok(ev),
             Err(mut err) => {
-                if let Some(fname) = parent.get_fname(prs_map) {
-                    let text = std::fs::read_to_string(&fname).unwrap();
+                if let Some(fname) = fname {
+                    let text = std::fs::read_to_string(fname.to_string()).unwrap();
                     err.remap(&self.remap);
-                    err.set_fname(fname);
+                    err.set_fname(fname.to_string());
                     err.set_context(&text);
                 }
                 Err(err)
@@ -125,22 +125,22 @@ impl ExprWrapper {
         }
     }
 
-    pub fn evaluate_expect_position<'a>(&self, parent: &PartiallyResolvedStructure<'a>, lookup: &dyn Fn(&str) -> Option<ExprValue>, prs_map: &HashMap<StructureIdent, Rc<RefCell<PartiallyResolvedStructure<'a>>>>) -> Result<BitIndex, ExprEvalError> {
-        match self.evaluate(parent, lookup, prs_map)? {
+    pub fn evaluate_expect_position<'a>(&self, fname: Option<Rc<String>>, lookup: &dyn Fn(&str) -> Option<ExprValue>, prs_map: &HashMap<StructureIdent, Rc<RefCell<PartiallyResolvedStructure<'a>>>>) -> Result<BitIndex, ExprEvalError> {
+        match self.evaluate(fname, lookup, prs_map)? {
             ExprValue::Position(bp) => Ok(bp),
             other => Err(ExprEvalError::DataTypeMismatch{found: other.datatype_as_string(), expected: "Position".to_string()})
         }
     }
 
-    pub fn evaluate_expect_integer<'a>(&self, parent: &PartiallyResolvedStructure<'a>, lookup: &dyn Fn(&str) -> Option<ExprValue>, prs_map: &HashMap<StructureIdent, Rc<RefCell<PartiallyResolvedStructure<'a>>>>) -> Result<i64, ExprEvalError> {
-        match self.evaluate(parent, lookup, prs_map)? {
+    pub fn evaluate_expect_integer<'a>(&self, fname: Option<Rc<String>>, lookup: &dyn Fn(&str) -> Option<ExprValue>, prs_map: &HashMap<StructureIdent, Rc<RefCell<PartiallyResolvedStructure<'a>>>>) -> Result<i64, ExprEvalError> {
+        match self.evaluate(fname, lookup, prs_map)? {
             ExprValue::Integer(i) => Ok(i),
             other => Err(ExprEvalError::DataTypeMismatch{found: other.datatype_as_string(), expected: "Integer".to_string()})
         }
     }
 
-    pub fn evaluate_expect_bool<'a>(&self, parent: &PartiallyResolvedStructure<'a>, lookup: &dyn Fn(&str) -> Option<ExprValue>, prs_map: &HashMap<StructureIdent, Rc<RefCell<PartiallyResolvedStructure<'a>>>>) -> Result<bool, ExprEvalError> {
-        match self.evaluate(parent, lookup, prs_map)? {
+    pub fn evaluate_expect_bool<'a>(&self, fname: Option<Rc<String>>, lookup: &dyn Fn(&str) -> Option<ExprValue>, prs_map: &HashMap<StructureIdent, Rc<RefCell<PartiallyResolvedStructure<'a>>>>) -> Result<bool, ExprEvalError> {
+        match self.evaluate(fname, lookup, prs_map)? {
             ExprValue::Bool(b) => Ok(b),
             other => Err(ExprEvalError::DataTypeMismatch{found: other.datatype_as_string(), expected: "Bool".to_string()})
         }
@@ -249,6 +249,14 @@ impl ParseXmlError {
             fname: None,
             message: None
         }
+    }
+
+    pub fn missing_required_attribute(element: &MyStrSpan, attr_name: String) -> ParseXmlError {
+        let message = format!("'{}' attribute is required for '{}' element, but was not specified", attr_name, element.as_str()).to_string();
+        let mut err = ParseXmlError::new(message);
+        err.push_annotation(element.range(), Some(format!("'{}' attribute was not specified for this element", attr_name).to_string()));
+        err.set_help(format!("Try adding a '{}' attribute or removing the element", attr_name).to_string());
+        err
     }
 
     pub fn push_annotation(&mut self, range: std::ops::Range<usize>, message: Option<String>) {
@@ -1068,10 +1076,10 @@ enum PartiallyResolvedStructureType<'a> {
     UnresolvedSection{initial: Rc<SectionSpec>},
     Addressed{position: Rc<ExprWrapper>, pss: Rc<RefCell<PartiallyResolvedStructure<'a>>>},
     Sequence(Vec<Rc<RefCell<PartiallyResolvedStructure<'a>>>>),
-    Switch{value: Rc<Expr>, cases: Vec<(Rc<Expr>, Rc<Structure>)>, default: Rc<Structure>, pss: Option<Rc<RefCell<PartiallyResolvedStructure<'a>>>>},
+    Switch{value: Rc<Expr>, cases: Vec<(Rc<ExprWrapper>, Rc<Structure>)>, default: Rc<Structure>, pss: Option<Rc<RefCell<PartiallyResolvedStructure<'a>>>>},
     Repeat{n: Rc<Expr>, structure: Rc<Structure>, seq: Vec<Rc<RefCell<PartiallyResolvedStructure<'a>>>>, finalized: bool}, // seq is used to store the actual structure instances once "n" is determined
     RepeatUntil{end: Rc<Expr>, structure: Rc<Structure>, seq: Vec<Rc<RefCell<PartiallyResolvedStructure<'a>>>>, finalized: bool},
-    Chain{next: Rc<Expr>, structure: Rc<Structure>, prs: Rc<RefCell<PartiallyResolvedStructure<'a>>>, seq: Vec<Rc<RefCell<PartiallyResolvedStructure<'a>>>>, finalized: bool}
+    Chain{next: Rc<ExprWrapper>, structure: Rc<Structure>, prs: Rc<RefCell<PartiallyResolvedStructure<'a>>>, seq: Vec<Rc<RefCell<PartiallyResolvedStructure<'a>>>>, finalized: bool}
 }
 
 impl<'a> PartiallyResolvedStructureType<'a> {
@@ -1102,7 +1110,8 @@ struct PartiallyResolvedStructure<'a> {
     import_monikers: HashMap<String, Option<StructureIdent>>,
     exports: HashSet<String>,
     inherited_monikers: HashMap<String, FieldIdent>,
-    index_path: Vec<usize>
+    index_path: Vec<usize>,
+    fname: Option<Rc<String>>
 }
 
 impl<'a> PartiallyResolvedStructure<'a> {
@@ -1195,7 +1204,8 @@ impl<'a> PartiallyResolvedStructure<'a> {
             import_monikers,
             exports: original.exports.keys().map(|v| v.to_string()).collect(),
             inherited_monikers: HashMap::new(),
-            index_path: index
+            index_path: index,
+            fname: original.filename.clone()
         }));
 
         prs_map.insert(id.clone(), prs.clone());
@@ -1652,29 +1662,6 @@ impl<'a> PartiallyResolvedStructure<'a> {
         }
     }
 
-    // fn get_lookup_fn<'b, 'c>(&'c self, vd: &'b ValueDictionary) -> impl Fn(&str) -> Option<ExprValue> + 'b {
-    //     // TODO: MAKE THIS MORE EFFICIENT!!!
-    //     let monikers = self.inherited_monikers.clone();
-    //     let import_monikers = self.import_monikers.clone();
-    //     let self_id = self.id.clone();
-    //     // info!("Looking for {} in {}", key, self.id);
-    //     info!("Monikers for {:?}: {:?}", self.id, monikers);
-    //     info!("Imports for {:?}: {:?}", self.id, import_monikers);
-    //     let lookup = move |alias: &str| match monikers.get(alias) {
-    //         Some(fi) => vd.lookup_field(fi),
-    //         None => {
-    //             if import_monikers.contains_key(alias) {
-    //                 let fi = self_id.clone().get_field_ident(alias.to_string());
-    //                 vd.lookup_field(&fi)
-    //             } else {
-    //                 vd.lookup_str(alias).unwrap_or(None)
-    //             }
-                
-    //         }
-    //     };
-    //     lookup
-    // }
-
     fn try_lookup(&mut self, key: AbstractIdent, vd: &ValueDictionary, prs_map: &mut HashMap<StructureIdent, Rc<RefCell<PartiallyResolvedStructure<'a>>>>) -> Result<DependencyReport<ExprValue>, FileSpecError> {
         info!("Looking for {} in {}", key, self.id);
         let mut result = match key {
@@ -1693,7 +1680,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
                         StructureAttrType::SwitchValue => self.try_get_switch_value(vd),
                         StructureAttrType::SwitchIndex => self.try_get_switch_index(vd, prs_map),
                         StructureAttrType::Repetitions => self.try_get_repetitions(vd, prs_map),
-                        StructureAttrType::SwitchCase(i) => self.try_get_switch_case(i, vd),
+                        StructureAttrType::SwitchCase(i) => self.try_get_switch_case(i, vd, prs_map),
                         StructureAttrType::Break(i) => self.try_get_break(i, vd)
                     }
                 } else {
@@ -2311,7 +2298,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
 
                 Ok(current_best)
             },
-            PartiallyResolvedStructureType::Switch{value, cases, default, ref mut pss} => {
+            PartiallyResolvedStructureType::Switch{value, ref mut pss, ..} => {
                 if let Some(ref mut pss) = pss {
                     // If the swich case is known, then this should be populated. It is all we need
                     let dr = pss.borrow_mut().try_lookup(key.clone(), vd, prs_map)?;
@@ -2477,7 +2464,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
         }
     }
 
-    fn try_get_switch_case(&self, i: usize, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, FileSpecError> {
+    fn try_get_switch_case(&self, i: usize, vd: &ValueDictionary, prs_map: &HashMap<StructureIdent, Rc<RefCell<PartiallyResolvedStructure<'a>>>>) -> Result<DependencyReport<ExprValue>, FileSpecError> {
         // info!("In try_get_switch_case");
         match self.stype.as_ref() {
             PartiallyResolvedStructureType::Switch{cases, ..} => {
@@ -2493,7 +2480,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
                         None => return Ok(DependencyReport::incomplete(parents))
                     };
 
-                    match expr.evaluate_with_args(&vec![arg], &|alias| {self.lookup_str(&vd, alias)}) {
+                    match expr.evaluate_with_args(self.fname.clone(), &vec![arg], &|alias| {self.lookup_str(&vd, alias)}, prs_map) {
                         Ok(v) => {
 
                             // let mut input = String::new();
@@ -2661,6 +2648,8 @@ impl<'a> PartiallyResolvedStructure<'a> {
             }
         };
 
+        let fname = self.fname.clone(); // Need this for the borrow checker
+
         match self.stype.as_mut() {
             PartiallyResolvedStructureType::Repeat{n, structure, ref mut seq, ref mut finalized} => {
                 let n = n.clone(); // Need this for the borrow checker
@@ -2797,7 +2786,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
 
                 // let lookup = last_member.borrow().get_lookup_fn(vd);
 
-                match next.evaluate_expect_position(&|alias| {last_member.borrow().lookup_str(&vd, alias)}) {
+                match next.evaluate_expect_position(fname, &|alias| {last_member.borrow().lookup_str(&vd, alias)}, prs_map) {
                     Ok(v) => {
                         // panic!("Next position: {:?} from {:?}", v, last_member.borrow().id);
                         if !seq.is_empty() {
@@ -2829,11 +2818,8 @@ impl<'a> PartiallyResolvedStructure<'a> {
 
     fn try_get_position(&self, vd: &ValueDictionary, prs_map: &HashMap<StructureIdent, Rc<RefCell<PartiallyResolvedStructure<'a>>>>) -> Result<DependencyReport<ExprValue>, FileSpecError> {
         match self.stype.as_ref() {
-            // PartiallyResolvedStructureType::UnresolvedSection{initial, pss: Some(section)} => {
-            //     Ok(DependencyReport::success(ExprValue::Position(section.get_position())))
-            // },
             PartiallyResolvedStructureType::Addressed{position, ..} => {
-                match position.evaluate_expect_position(&self, &|alias| {self.lookup_str(&vd, alias)}, prs_map) {
+                match position.evaluate_expect_position(self.fname.clone(), &|alias| {self.lookup_str(&vd, alias)}, prs_map) {
                     Ok(value) => {
                         let mut dr = DependencyReport::success(ExprValue::Position(value));
                         let position_id = self.id.get_attr_ident(StructureAttrType::Position);
@@ -3574,10 +3560,24 @@ impl<'a> PartiallyResolvedStructure<'a> {
     }
 }
 
+
 pub struct XmlObject<'a> {
     element: MyStrSpan<'a>,
     attrs: HashMap<&'a str, MyStrSpan<'a>>,
     children: Vec<XmlObject<'a>>
+}
+
+impl<'a> XmlObject<'a> {
+    fn remove_required_attr(&mut self, attr: &str) -> Result<MyStrSpan, ParseXmlError> {
+        match self.attrs.remove(attr) {
+            None => {
+                let err = ParseXmlError::missing_required_attribute(&self.element, attr.to_string());
+                Err(err)
+            },
+            Some(value)=> Ok(value)
+        }
+    }
+    
 }
 
 #[derive(Clone)]
@@ -3621,10 +3621,10 @@ enum StructureType {
     Section(Rc<SectionSpec>),
     Addressed{position: Rc<ExprWrapper>, content: Rc<Structure>},
     Sequence(Vec<Rc<Structure>>),
-    Switch{value: Rc<Expr>, cases: Vec<(Rc<Expr>, Rc<Structure>)>, default: Rc<Structure>},
+    Switch{value: Rc<Expr>, cases: Vec<(Rc<ExprWrapper>, Rc<Structure>)>, default: Rc<Structure>},
     Repeat{n: Rc<Expr>, structure: Rc<Structure>},
     RepeatUntil{end: Rc<Expr>, structure: Rc<Structure>},
-    Chain{next: Rc<Expr>, structure: Rc<Structure>}
+    Chain{next: Rc<ExprWrapper>, structure: Rc<Structure>}
 }
 
 #[derive(Clone)]
@@ -3702,42 +3702,6 @@ impl Structure {
         }
     }
 
-    // pub fn set_fname_rc(&mut self, fname: Rc<String>) -> bool {
-    //     if self.filename.is_some() {
-    //         false
-    //     } else {
-    //         self.filename = Some(fname);
-    //         match &self.stype {
-    //             StructureType::Section(_) => {
-    //                 // Do nothing
-    //             },
-    //             StructureType::Addressed{content, ..} => {
-    //                 content.borrow_mut().set_fname_rc(fname);
-    //             },
-    //             StructureType::Sequence(seq) => {
-    //                 for s in seq {
-    //                     s.borrow_mut().set_fname_rc(fname);
-    //                 }
-    //             },
-    //             StructureType::Switch{cases, default, ..} => {
-    //                 for (_, s) in cases {
-    //                     s.borrow_mut().set_fname_rc(fname);
-    //                 }
-    //                 default.borrow_mut().set_fname_rc(fname);
-    //             },
-    //             StructureType::Repeat{structure, ..} | StructureType::RepeatUntil{structure, ..} | StructureType::Chain{structure, ..} => {
-    //                 structure.set_fname_rc(fname);
-    //             }
-    //         }
-
-    //         true
-    //     }
-    // }
-
-    // pub fn set_fname(&mut self, fname: String) -> bool {
-    //     self.set_fname_rc(Rc::new(fname))
-    // }
-
     fn from_xml_object(mut obj: XmlObject, fname: Option<Rc<String>>) -> Result<Structure, ParseXmlError> {
         if obj.element.as_str() == "use" {
             let url = convert_xml_symbols(obj.attrs.remove("url").unwrap().as_str());
@@ -3763,6 +3727,8 @@ impl Structure {
                 panic!("Unrecognized url format: '{}'", url)
             }
         }
+
+        // Get data that's common to all structural objects
 
         let length = match obj.attrs.remove("length-policy") {
             None => match obj.attrs.remove("length") {
@@ -3796,9 +3762,46 @@ impl Structure {
             None => Expr::value(ExprValue::Position(BitIndex::zero()))
         };
 
+        // Go through children looking for expors, def_fields, and breaks which are common for must structural
+        // objects
+
         let mut exports = HashMap::new();
         let mut def_fields = HashMap::new();
         let mut breaks = Vec::new();
+
+        let mut children = Vec::new();
+
+        for mut child in obj.children.drain(..) {
+            match child.element.as_str() {
+                "export" => {
+                    let export_source = convert_xml_symbols(child.attrs.remove("source").unwrap().as_str());
+                    let export_default = match obj.attrs.remove("default") {
+                        None => None,
+                        Some(expr)=> {
+                            Some(Expr::from_str(&convert_xml_symbols(expr.as_str()))?)
+                        }
+                    };
+                    exports.insert(export_source, export_default);
+                    if !child.children.is_empty() {
+                        panic!("'export' should not have children!")
+                    }
+                },
+                "search" | "anchor" => {
+                    let id = convert_xml_symbols(child.attrs.remove("id").unwrap().as_str());
+                    def_fields.insert(id, DefField::from_xml_object(child)?);
+                },
+                "break" => {
+                    // let condition = Expr::from_str(&convert_xml_symbols(child.attrs.remove("condition").unwrap().as_str()))?;
+                    let condition_ss = child.attrs.remove("condition").unwrap();
+                    let condition = Expr::from_str_span(MyStrSpan::new(condition_ss.start(), condition_ss.as_str()))?;
+                    breaks.push(Break{condition});
+                },
+                _ => children.push(child)
+            }
+        }
+
+
+
         let stype: StructureType;
 
         match obj.element.as_str() {
@@ -3813,32 +3816,10 @@ impl Structure {
                 let mut fields = vec![];
                 let mut id_map = HashMap::new();
 
-                for mut child in obj.children {
-                    match child.element.as_str() {
-                        "export" => {
-                            let export_source = convert_xml_symbols(child.attrs.remove("source").unwrap().as_str());
-                            let export_default = match obj.attrs.remove("default") {
-                                None => None,
-                                Some(expr)=> {
-                                    Some(Expr::from_str(&convert_xml_symbols(expr.as_str()))?)
-                                }
-                            };
-                            exports.insert(export_source, export_default);
-                            if !child.children.is_empty() {
-                                panic!("'export' should not have children!")
-                            }
-                        },
-                        "search" | "anchor" => {
-                            let id = convert_xml_symbols(child.attrs.remove("id").unwrap().as_str());
-                            def_fields.insert(id, DefField::from_xml_object(child)?);
-                        },
-                        _ => {
-                            let field = FieldSpec::from_xml_object(child)?;
-                            id_map.insert(field.id.clone(), fields.len());
-                            fields.push(field);
-                        }
-                    }
-                    
+                for mut child in children {
+                    let field = FieldSpec::from_xml_object(child)?;
+                    id_map.insert(field.id.clone(), fields.len());
+                    fields.push(field);
                 }
 
                 stype = StructureType::Section(Rc::new(SectionSpec {
@@ -3851,84 +3832,36 @@ impl Structure {
 
             },
             "addressed" => {
+                let pos = ExprWrapper::from_xml_str_span(&obj.remove_required_attr("pos")?)?;
+
                 let mut structure = None;
                 let mut structure_element_range = None; // Needed for error message
-                for mut child in obj.children {
-                    match child.element.as_str() {
-                        "export" => {
-                            let export_source = convert_xml_symbols(child.attrs.remove("source").unwrap().as_str());
-                            let export_default = match obj.attrs.remove("default") {
-                                None => None,
-                                Some(expr)=> {
-                                    Some(Expr::from_str(&convert_xml_symbols(expr.as_str()))?)
-                                }
-                            };
-                            exports.insert(export_source, export_default);
-                            if !child.children.is_empty() {
-                                panic!("'export' should not have children!")
-                            }
-                        },
-                        "search" | "anchor" => {
-                            let id = convert_xml_symbols(child.attrs.remove("id").unwrap().as_str());
-                            def_fields.insert(id, DefField::from_xml_object(child)?);
-                        },
-                        _ => {
-                            if structure.is_none() {
-                                structure_element_range = Some(child.element.range());
-                                structure = Some(Structure::from_xml_object(child, fname.clone())?);
-                            } else {
-                                let message = format!("'{}' object has more than one structural child", obj.element.as_str()).to_string();
-                                let mut err = ParseXmlError::new(message);
-                                let message = format!("This '{}' object should only have one child, but at least two were detected", obj.element.as_str()).to_string();
-                                err.push_annotation(obj.element.range(), Some(message));
-                                err.push_annotation(structure_element_range.unwrap(), Some("First structural child is defined here".to_string()));
-                                err.push_annotation(child.element.range(), Some("Second structural child is defined here".to_string()));
-                                err.set_help("Try wrapping children in a 'sequence' object".to_string());
-                                return Err(err)
-                            }
-                        }
+                for mut child in children {
+                    if structure.is_none() {
+                        structure_element_range = Some(child.element.range());
+                        structure = Some(Structure::from_xml_object(child, fname.clone())?);
+                    } else {
+                        let message = format!("'{}' object has more than one structural child", obj.element.as_str()).to_string();
+                        let mut err = ParseXmlError::new(message);
+                        let message = format!("This '{}' object should only have one child, but at least two were detected", obj.element.as_str()).to_string();
+                        err.push_annotation(obj.element.range(), Some(message));
+                        err.push_annotation(structure_element_range.unwrap(), Some("First structural child is defined here".to_string()));
+                        err.push_annotation(child.element.range(), Some("Second structural child is defined here".to_string()));
+                        err.set_help("Try wrapping children in a 'sequence' object".to_string());
+                        return Err(err)
                     }
-                    
                 }
                 if let Some(structure) = structure {
                     let structure = Rc::new(structure);
-                    match obj.attrs.remove("pos") {
-                        None => panic!("'pos' must be specified for 'addressed' element"),
-                        Some(expr)=> {
-                            let pos = ExprWrapper::from_xml_str_span(&expr)?;
-                            stype = StructureType::Addressed{position: Rc::new(pos), content: structure.clone()};
-                        }
-                    }
+                    stype = StructureType::Addressed{position: Rc::new(pos), content: structure.clone()};
                 } else {
                     panic!("'addressed' has no children!")
                 }
             },
             "sequence" => {
                 let mut seq = vec![];
-                for mut child in obj.children {
-                    match child.element.as_str() {
-                        "export" => {
-                            let export_source = convert_xml_symbols(child.attrs.remove("source").unwrap().as_str());
-                            let export_default = match obj.attrs.remove("default") {
-                                None => None,
-                                Some(expr)=> {
-                                    Some(Expr::from_str(&convert_xml_symbols(expr.as_str()))?)
-                                }
-                            };
-                            exports.insert(export_source, export_default);
-                            if !child.children.is_empty() {
-                                panic!("'export' should not have children!")
-                            }
-                        },
-                        "search" | "anchor" => {
-                            let id = convert_xml_symbols(child.attrs.remove("id").unwrap().as_str());
-                            def_fields.insert(id, DefField::from_xml_object(child)?);
-                        },
-                        _ => {
-                            seq.push(Rc::new(Structure::from_xml_object(child, fname.clone())?));
-                        }
-                    }
-                    
+                for mut child in children {
+                    seq.push(Rc::new(Structure::from_xml_object(child, fname.clone())?));
                 }
                 stype = StructureType::Sequence(seq);
             },
@@ -3936,28 +3869,10 @@ impl Structure {
                 let value = Expr::from_str(&convert_xml_symbols(obj.attrs.remove("value").unwrap().as_str()))?;
                 let mut cases = vec![];
                 let mut default = None;
-                for mut child in obj.children {
+                for mut child in children {
                     match child.element.as_str() {
-                        "export" => {
-                            let export_source = convert_xml_symbols(child.attrs.remove("source").unwrap().as_str());
-                            let export_default = match obj.attrs.remove("default") {
-                                None => None,
-                                Some(expr)=> {
-                                    Some(Expr::from_str(&convert_xml_symbols(expr.as_str()))?)
-                                }
-                            };
-                            exports.insert(export_source, export_default);
-                            if !child.children.is_empty() {
-                                panic!("'export' should not have children!")
-                            }
-                        },
-                        "search" | "anchor" => {
-                            let id = convert_xml_symbols(child.attrs.remove("id").unwrap().as_str());
-                            def_fields.insert(id, DefField::from_xml_object(child)?);
-                        },
                         "switch-case" => {
-                            // let check = Expr::from_str(&convert_xml_symbols(child.attrs.remove("check").unwrap().as_str()))?;
-                            let check = expr_from_xml(&child.attrs.remove("check").unwrap())?;
+                            let check = ExprWrapper::from_xml_str_span(&child.remove_required_attr("check")?)?;
                             if child.children.len() != 1 {
                                 panic!("switch-case must have exactly one child")
                             }
@@ -3985,41 +3900,15 @@ impl Structure {
             },
             "repeat" => {
                 let mut structure = None;
-                for mut child in obj.children {
-                    match child.element.as_str() {
-                        "export" => {
-                            let export_source = convert_xml_symbols(child.attrs.remove("source").unwrap().as_str());
-                            let export_default = match obj.attrs.remove("default") {
-                                None => None,
-                                Some(expr)=> {
-                                    Some(Expr::from_str(&convert_xml_symbols(expr.as_str()))?)
-                                }
-                            };
-                            exports.insert(export_source, export_default);
-                            if !child.children.is_empty() {
-                                panic!("'export' should not have children!")
-                            }
-                        },
-                        "search" | "anchor" => {
-                            let id = convert_xml_symbols(child.attrs.remove("id").unwrap().as_str());
-                            def_fields.insert(id, DefField::from_xml_object(child)?);
-                        },
-                        "break" => {
-                            // let condition = Expr::from_str(&convert_xml_symbols(child.attrs.remove("condition").unwrap().as_str()))?;
-                            let condition_ss = child.attrs.remove("condition").unwrap();
-                            let condition = Expr::from_str_span(MyStrSpan::new(condition_ss.start(), condition_ss.as_str()))?;
-                            breaks.push(Break{condition});
-                        }
-                        _ => {
-                            if structure.is_none() {
-                                structure = Some(Structure::from_xml_object(child, fname.clone())?);
-                            } else {
-                                panic!("'repeat' should only have one non-export child!");
-                            }
-                        }
+                for mut child in children {
+                    if structure.is_none() {
+                        structure = Some(Structure::from_xml_object(child, fname.clone())?);
+                    } else {
+                        panic!("'repeat' should only have one non-export child!");
                     }
                     
                 }
+
                 if let Some(structure) = structure {
                     let structure = Rc::new(structure);
                     match (obj.attrs.remove("until"), obj.attrs.remove("n")) {
@@ -4039,50 +3928,20 @@ impl Structure {
                 }
             },
             "chain" => {
+                let next = ExprWrapper::from_xml_str_span(&obj.remove_required_attr("next")?)?;
+
                 let mut structure = None;
-                for mut child in obj.children {
-                    match child.element.as_str() {
-                        "export" => {
-                            let export_source = convert_xml_symbols(child.attrs.remove("source").unwrap().as_str());
-                            let export_default = match obj.attrs.remove("default") {
-                                None => None,
-                                Some(expr)=> {
-                                    Some(Expr::from_str(&convert_xml_symbols(expr.as_str()))?)
-                                }
-                            };
-                            exports.insert(export_source, export_default);
-                            if !child.children.is_empty() {
-                                panic!("'export' should not have children!")
-                            }
-                        },
-                        "search" | "anchor" => {
-                            let id = convert_xml_symbols(child.attrs.remove("id").unwrap().as_str());
-                            def_fields.insert(id, DefField::from_xml_object(child)?);
-                        },
-                        "break" => {
-                            let condition_ss = child.attrs.remove("condition").unwrap();
-                            let condition = Expr::from_str_span(MyStrSpan::new(condition_ss.start(), condition_ss.as_str()))?;
-                            breaks.push(Break{condition});
-                        }
-                        _ => {
-                            if structure.is_none() {
-                                structure = Some(Structure::from_xml_object(child, fname.clone())?);
-                            } else {
-                                panic!("'chain' should only have one non-export child!");
-                            }
-                        }
+                for mut child in children {
+                    if structure.is_none() {
+                        structure = Some(Structure::from_xml_object(child, fname.clone())?);
+                    } else {
+                        panic!("'chain' should only have one non-export child!");
                     }
                     
                 }
                 if let Some(structure) = structure {
                     let structure = Rc::new(structure);
-                    match obj.attrs.remove("next") {
-                        None => panic!("'next' must be specified for 'chain' element"),
-                        Some(expr) => {
-                            let next = Expr::from_str(&convert_xml_symbols(expr.as_str()))?;
-                            stype = StructureType::Chain{next: Rc::new(next), structure};
-                        }
-                    }
+                    stype = StructureType::Chain{next: Rc::new(next), structure};
                 } else {
                     panic!("'chain' has no children!")
                 }
