@@ -135,7 +135,7 @@ impl<'a> StrSpanChars<'a> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum IndexMutation {
     Deletion{start: usize, span: usize},
     Insertion{start: usize, span: usize}
@@ -173,11 +173,17 @@ impl IndexMutation {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct IndexRemap {
     mutations: Vec<IndexMutation>
 }
 
 impl IndexRemap {
+
+    pub fn new() -> IndexRemap {
+        IndexRemap{mutations: vec![]}
+    }
+
     pub fn apply(&self, mut i: usize) -> usize {
         for m in &self.mutations {
             i = m.apply(i);
@@ -282,6 +288,21 @@ impl ExprOp {
         }
     }
 
+    fn name(&self) -> String {
+        match self {
+            ExprOp::Function(f) => format!("{}()", f).to_string(),
+            ExprOp::Mult => "multiply".to_string(),
+            ExprOp::Div => "divide".to_string(),
+            ExprOp::Neg => "negate".to_string(),
+            ExprOp::Add => "add".to_string(),
+            ExprOp::Sub => "subtract".to_string(),
+            ExprOp::Eq => "equal to".to_string(),
+            ExprOp::Le => "less than or equal to".to_string(),
+            ExprOp::Or => "or".to_string(),
+            ExprOp::List => "list".to_string()
+        }
+    }
+
     // Returns true if it is valid for the operator to appear before the
     // first operand (e.g. '+' in '+x + y' or '-' in '-x - y'). Returns
     // false otherwise (e.g. '*x * y' would be invalid)
@@ -339,12 +360,19 @@ impl ExprOp {
         }
     }
 
-    fn apply(&self, args: Vec<ExprValue>) -> Result<ExprValue, ()> {
+    fn apply(&self, expr: &ExprNode, args: Vec<ExprValue>) -> Result<ExprValue, ExprOperationError> {
         match self {
             ExprOp::Add => {
                 let mut args_iter = args.iter();
-                let init = args_iter.next().unwrap().clone();
-                Ok(args_iter.fold(init, |a, b| (&a + b)))
+                let mut init = args_iter.next().unwrap().clone();
+                for (i, arg) in args_iter.enumerate() {
+                    match &init + arg {
+                        Ok(sum) => init = sum,
+                        Err(err) => return Err(err.with_context(expr.clone(), i, Some(i + 1)))
+                    }
+                }
+                Ok(init)
+                // Ok(args_iter.fold(init, |a, b| (&a + b)))
             },
             ExprOp::Sub => {
                 let mut args_iter = args.iter();
@@ -420,6 +448,200 @@ impl ExprOp {
             _ => todo!()
         }
     }
+}
+
+#[derive(Debug)]
+pub enum ExprOperationErrorKind {
+    IncompatibleTypes,
+    ArithmeticException
+}
+
+#[derive(Debug)]
+pub struct SkeletalOperationError {
+    kind: ExprOperationErrorKind,
+    lhs: ExprValue,
+    rhs: Option<ExprValue>,
+}
+
+impl std::fmt::Display for SkeletalOperationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.kind {
+            ExprOperationErrorKind::IncompatibleTypes => {
+                if let Some(rhs) = &self.rhs {
+                    write!(f, "Operation not supported for types '{:?}' and '{:?}'", self.lhs, rhs)
+                } else {
+                    write!(f, "Operation not supported for type '{:?}'", self.lhs)
+                }
+            },
+            ExprOperationErrorKind::ArithmeticException => {
+                if let Some(rhs) = &self.rhs {
+                    write!(f, "Operation on '{:?}' and '{:?}' caused an arithmetic exception", self.lhs, rhs)
+                } else {
+                    write!(f, "Operation on '{:?}' caused an arithmetic exception", self.lhs)
+                }
+            }
+        }
+    }    
+}
+
+impl SkeletalOperationError {
+    fn with_context(self, expr: ExprNode, lhs_index: usize, rhs_index: Option<usize>) -> ExprOperationError {
+        ExprOperationError {
+            kind: self.kind,
+            expr,
+            lhs: self.lhs,
+            rhs: self.rhs,
+            lhs_index,
+            rhs_index,
+            fname: None,
+            message: None,
+            help: None,
+            remap: IndexRemap::new()
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ExprOperationError {
+    kind: ExprOperationErrorKind,
+    expr: ExprNode,
+    lhs: ExprValue,
+    rhs: Option<ExprValue>,
+    lhs_index: usize, // Index within argument list
+    rhs_index: Option<usize>,
+    fname: Option<String>,
+    message: Option<String>,
+    help: Option<String>,
+    remap: IndexRemap
+}
+
+impl ExprOperationError {
+    pub fn remap(&mut self, remap: &IndexRemap) {
+        self.remap.extend(remap.clone());
+    }
+
+    fn details(&self) -> String {
+        if let ExprNode::Op{op, args} = &self.expr {
+            match self.kind {
+                ExprOperationErrorKind::IncompatibleTypes => {
+                    format!("Data type mismatch for '{}'", op.name()).to_string()
+                },
+                ExprOperationErrorKind::ArithmeticException => {
+                    format!("Arithmetic exception encountered during '{}' operation", op.name()).to_string()
+                }
+            }
+        } else {
+            error!("Error raised for non-op expression {:?}", self.expr);
+            todo!();
+        }
+    }
+
+    fn annotations(&self) -> Vec<(Option<String>, std::ops::Range<usize>)> {
+        let mut annotations = vec![];
+        match self.kind {
+            ExprOperationErrorKind::IncompatibleTypes => {
+                if let ExprNode::Op{op, args} = &self.expr {
+                    let lhs_span: std::ops::Range<usize> = self.remap.apply_range(args[self.lhs_index].span.clone().unwrap());
+                    annotations.push((Some(format!("This evaluates to a {}", self.lhs.datatype_as_string()).to_string()), lhs_span));
+                    if let Some(rhs) = &self.rhs {
+                        let rhs_span = self.remap.apply_range(args[self.rhs_index.unwrap()].span.clone().unwrap());
+                        annotations.push((Some(format!("And this evaluates to a {}", rhs.datatype_as_string()).to_string()), rhs_span.clone()));
+                    }
+                    
+                } else {
+                    error!("Incompatible types error raised for non-op expression {:?}", self.expr);
+                }
+            },
+            ExprOperationErrorKind::ArithmeticException => {
+                if let ExprNode::Op{op, args} = &self.expr {
+                    let lhs_span: std::ops::Range<usize> = self.remap.apply_range(args[self.lhs_index].span.clone().unwrap());
+                    annotations.push((Some(format!("This evaluates to {:?}", self.lhs).to_string()), lhs_span));
+                    if let Some(rhs) = &self.rhs {
+                        let rhs_span = self.remap.apply_range(args[self.rhs_index.unwrap()].span.clone().unwrap());
+                        annotations.push((Some(format!("And this evaluates to a {:?}", rhs).to_string()), rhs_span.clone()));
+                    }
+                    
+                } else {
+                    error!("Incompatible types error raised for non-op expression {:?}", self.expr);
+                }
+            }
+        }
+        annotations
+    }
+
+    pub fn set_context(&mut self, context: &str) {
+        if self.message.is_some() {
+            return;
+        }
+        let mut msg = format!("\x1b[0;31mERROR:\x1b[0m {}", self.details()).to_string();
+        if let Some(fname) = &self.fname {
+            let s = format!("\n\x1b[0;96m -->\x1b[0m {}", fname).to_string();
+            msg.push_str(&s)
+        }
+        let mut max_line_num = 0;
+        for (_, r) in &self.annotations() {
+            let (line, _) = get_line_char(context, r.start);
+            if line > max_line_num {
+                max_line_num = line;
+            }
+            let (line, _) = get_line_char(context, r.end);
+            if line > max_line_num {
+                max_line_num = line;
+            }
+        }
+        let line_num_length = format!("{}", max_line_num).len();
+        for (info, r) in &self.annotations() {
+            let (line1, col1) = get_line_char(context, r.start);
+            let (line2, col2) = get_line_char(context, r.end);
+            let line_text = context.lines().nth(line1).unwrap();
+            if let Some(info_string) = info {
+                msg.push_str("\n");
+                msg.push_str(&info_string);
+            }
+            let (line_text, col1, col2) = sample_line(line_text, col1, col2);
+            let s = format!("\n\x1b[0;96m{:2$} | \x1b[0m{}", line1 + 1, line_text, line_num_length).to_string();
+            msg.push_str(&s);
+            let s = format!("\n{}\x1b[0;31m{}\x1b[0m", " ".repeat(col1 + line_num_length + 3), "~".repeat(col2 - col1)).to_string();
+            msg.push_str(&s);
+        }
+        if let Some(help) = &self.help {
+            msg.push_str(format!("\n\x1b[0;32mHELP:\x1b[0m {}", help).as_str());
+        }
+        self.message = Some(msg)
+    }
+}
+
+impl std::fmt::Display for ExprOperationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.kind {
+            ExprOperationErrorKind::IncompatibleTypes => {
+                if let ExprNode::Op{op, args} = &self.expr {
+                    if let Some(rhs) = &self.rhs {
+                        write!(f, "Operation '{}' not supported for types '{:?}' and '{:?}'", op.name(), self.lhs, rhs)
+                    } else {
+                        write!(f, "Operation '{}' not supported for type '{:?}'", op.name(), self.lhs)
+                    }
+                    
+                } else {
+                    error!("Incompatible types error raised for non-op expression {:?}", self.expr);
+                    write!(f, "Incompatible types error raised for non-op expression {:?}", self.expr)
+                }
+            },
+            ExprOperationErrorKind::ArithmeticException => {
+                if let ExprNode::Op{op, args} = &self.expr {
+                    if let Some(rhs) = &self.rhs {
+                        write!(f, "Performing '{}' on '{:?}' and '{:?}' caused an arithmetic exception", op.name(), self.lhs, rhs)
+                    } else {
+                        write!(f, "Operation '{}' on '{:?}' caused an arithmetic exception", op.name(), self.lhs)
+                    }
+                    
+                } else {
+                    error!("Arithmetic error raised for non-op expression {:?}", self.expr);
+                    write!(f, "Arithmetic error raised for non-op expression {:?}", self.expr)
+                }
+            }
+        }
+    }    
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -533,16 +755,22 @@ impl std::ops::Neg for ExprValue {
 }
 
 impl std::ops::Add<ExprValue> for ExprValue {
-    type Output = ExprValue;
+    type Output = Result<ExprValue, SkeletalOperationError>;
     fn add(self, rhs: ExprValue) -> Self::Output {
         match (self, rhs) {
             (ExprValue::Integer(left), ExprValue::Integer(right)) => {
-                ExprValue::Integer(left + right)
+                Ok(ExprValue::Integer(left + right))
             },
             (ExprValue::Position(left), ExprValue::Position(right)) => {
-                ExprValue::Position(left + right)
+                Ok(ExprValue::Position(left + right))
             },
-            _ => todo!()
+            (lhs, rhs) => Err(
+                SkeletalOperationError {
+                    kind: ExprOperationErrorKind::IncompatibleTypes,
+                    lhs,
+                    rhs: Some(rhs)
+                }
+            )
         }
     }
 }
@@ -581,7 +809,7 @@ impl std::ops::Mul<ExprValue> for ExprValue {
 }
 
 impl<'a, 'b> std::ops::Add<&'a ExprValue> for &'b ExprValue {
-    type Output = ExprValue;
+    type Output = Result<ExprValue, SkeletalOperationError>;
     fn add(self, rhs: &'a ExprValue) -> Self::Output {
         self.clone() + rhs.clone()
         
@@ -743,7 +971,9 @@ impl ExprToken {
                 let token_sspan = sspan.slice(sspan.start() + m.start(), sspan.start() + m.end());
                 match usize::from_str(&m.as_str()[1..]) {
                     Ok(i) => {
-                        (ExprToken::Parsed(Expr::Arg(i), token_sspan.range()), m.end())
+                        let mut expr = Expr::arg(i);
+                        expr.span = Some(token_sspan.range());
+                        (ExprToken::Parsed(expr, token_sspan.range()), m.end())
                     },
                     Err(err) => {
                         let error_details = format!("Error while parsing argument index: {}", err).to_string();
@@ -755,20 +985,24 @@ impl ExprToken {
 
                 info!("BitIndex token: {}", m.as_str());
                 let token_sspan = sspan.slice(sspan.start() + m.start(), sspan.start() + m.end());
-                (ExprToken::Parsed(Expr::Value(ExprValue::Position(BitIndex::from_str(m.as_str()).unwrap())), token_sspan.range()), m.end())
+                let mut expr = Expr::value(ExprValue::Position(BitIndex::from_str(m.as_str()).unwrap()));
+                expr.span = Some(token_sspan.range());
+                (ExprToken::Parsed(expr, token_sspan.range()), m.end())
 
             } else if let Some(m) = EXPR_FLOAT_RE.find(sspan.as_str()) {
                 info!("Float token: {}", m.as_str());
 
                 let token_sspan = sspan.slice(sspan.start() + m.start(), sspan.start() + m.end());
                 todo!();
-                //(ExprToken::Parsed(Expr::Value(ExprValue::Float(f64::from_str(m.as_str()))), token_sspan.range()), m.end());
+                //(ExprToken::Parsed(ExprNode::Value(ExprValue::Float(f64::from_str(m.as_str()))), token_sspan.range()), m.end());
 
             } else if let Some(m) = EXPR_INT_RE.find(sspan.as_str()) {
 
                 info!("Int token: {}", m.as_str());
                 let token_sspan = sspan.slice(sspan.start() + m.start(), sspan.start() + m.end());
-                (ExprToken::Parsed(Expr::Value(ExprValue::Integer(i64::from_str(m.as_str()).unwrap())), token_sspan.range()), m.end())
+                let mut expr = Expr::value(ExprValue::Integer(i64::from_str(m.as_str()).unwrap()));
+                expr.span = Some(token_sspan.range());
+                (ExprToken::Parsed(expr, token_sspan.range()), m.end())
                 
             } else if let Some(m) = EXPR_OP_RE.find(sspan.as_str()) {
 
@@ -812,12 +1046,71 @@ impl ExprToken {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum Expr {
+pub enum ExprNode {
     Op{op: ExprOp, args: Vec<Expr>},
     Value(ExprValue),
     Var(String),
     Arg(usize),
     Empty
+}
+
+impl ExprNode {
+    pub fn evaluate_with_args(&self, arguments: &Vec<ExprValue>, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<ExprValue, ExprEvalError> {
+        match self {
+            ExprNode::Op{op, args} => {
+                let mut eval_args = Vec::new();
+                for arg in args {
+                    eval_args.push(arg.evaluate_with_args(arguments, lookup)?)
+                }
+                Ok(op.apply(&self, eval_args)?)
+                
+            },
+            ExprNode::Value(v) => Ok(v.clone()),
+            ExprNode::Var(s) => match lookup(s) {
+                Some(result) => Ok(result),
+                None => Err(ExprEvalError::LookupError{key: s.clone()})
+            },
+            ExprNode::Arg(n) => {
+                if *n < arguments.len() {
+                    Ok(arguments[*n].clone())
+                } else {
+                    Err(ExprEvalError::ArgumentCountError{accessed: *n, provided: arguments.len()})
+                }
+            },
+            ExprNode::Empty => todo!()
+        }
+    }
+
+    pub fn vars(&self) -> HashSet<String> {
+        match self {
+            ExprNode::Op{op, args} => {
+                let mut args_iter = args.iter();
+                let init = args_iter.next().unwrap().clone();
+                args_iter.fold(init.vars(), |mut a, b| {a.extend(b.vars()); a})
+            },
+            ExprNode::Value(_) => HashSet::new(),
+            ExprNode::Var(s) => {
+                let mut vars = HashSet::new();
+                vars.insert(s.to_string());
+                vars
+            },
+            ExprNode::Arg(_) | ExprNode::Empty => HashSet::new(),
+        }
+    }
+
+
+
+    // fn from_str_span(input: MyStrSpan) -> Result<ExprNode, ParseExprError> {
+    //     let tokens = ExprNode::tokens_from_str_span(&input)?;
+    //     ExprNode::from_tokens(&input, tokens)
+        
+    // }
+}
+
+#[derive(Clone, Debug, Eq)]
+pub struct Expr {
+    inner: ExprNode,
+    span: Option<std::ops::Range<usize>>
 }
 
 impl Expr {
@@ -826,29 +1119,7 @@ impl Expr {
     }
 
     pub fn evaluate_with_args(&self, arguments: &Vec<ExprValue>, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<ExprValue, ExprEvalError> {
-        match self {
-            Expr::Op{op, args} => {
-                let mut eval_args = Vec::new();
-                for arg in args {
-                    eval_args.push(arg.evaluate_with_args(arguments, lookup)?)
-                }
-                Ok(op.apply(eval_args).unwrap())
-                
-            },
-            Expr::Value(v) => Ok(v.clone()),
-            Expr::Var(s) => match lookup(s) {
-                Some(result) => Ok(result),
-                None => Err(ExprEvalError::LookupError{key: s.clone()})
-            },
-            Expr::Arg(n) => {
-                if *n < arguments.len() {
-                    Ok(arguments[*n].clone())
-                } else {
-                    Err(ExprEvalError::ArgumentCountError{accessed: *n, provided: arguments.len()})
-                }
-            },
-            Expr::Empty => todo!()
-        }
+        self.inner.evaluate_with_args(arguments, lookup)
     }
 
     pub fn evaluate_expect_position(&self, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<BitIndex, ExprEvalError> {
@@ -869,26 +1140,51 @@ impl Expr {
         }
     }
 
-    pub fn vars(&self) -> HashSet<String> {
-        match self {
-            Expr::Op{op, args} => {
-                let mut args_iter = args.iter();
-                let init = args_iter.next().unwrap().clone();
-                args_iter.fold(init.vars(), |mut a, b| {a.extend(b.vars()); a})
-            },
-            Expr::Value(_) => HashSet::new(),
-            Expr::Var(s) => {
-                let mut vars = HashSet::new();
-                vars.insert(s.to_string());
-                vars
-            },
-            Expr::Arg(_) | Expr::Empty => HashSet::new(),
+    pub fn from_str_span(input: MyStrSpan) -> Result<Expr, ParseExprError> {
+        let tokens = Expr::tokens_from_str_span(&input)?;
+        let mut expr = Expr::from_tokens(&input, tokens)?;
+        expr.span = Some(input.range());
+        Ok(expr)
+        
+    }
+
+    pub fn value(v: ExprValue) -> Expr {
+        Expr {
+            inner: ExprNode::Value(v),
+            span: None
         }
     }
 
-    pub fn from_str_span(input: MyStrSpan) -> Result<Expr, ParseExprError> {
-        let tokens = Expr::tokens_from_str_span(&input)?;
-        Expr::from_tokens(&input, tokens)
+    pub fn var(name: String) -> Expr {
+        Expr {
+            inner: ExprNode::Var(name),
+            span: None
+        }
+    }
+
+    pub fn arg(i: usize) -> Expr {
+        Expr {
+            inner: ExprNode::Arg(i),
+            span: None
+        }
+    }
+
+    fn empty() -> Expr {
+        Expr {
+            inner: ExprNode::Empty,
+            span: None
+        }
+    }
+
+    fn op(op: ExprOp, args: Vec<Expr>) -> Expr {
+        Expr {
+            inner: ExprNode::Op{op, args},
+            span: None
+        }
+    }
+
+    pub fn vars(&self) -> HashSet<String> {
+        self.inner.vars()
     }
 
     // Parses a token stream from tokens_from_str_span into an Expr object
@@ -899,7 +1195,7 @@ impl Expr {
             // If there are no tokens, then just return Empty. This could happen in
             // a situation like a negation operation, where the operator is not preceded
             // by any tokens.
-            return Ok(Expr::Empty);
+            return Ok(Expr::empty());
 
         } else if tokens.len() == 1 {
             // If there is just one token, then how it gets converted depends on what 
@@ -920,13 +1216,20 @@ impl Expr {
                     let err = ParseExprError::new(rng.clone(), format!("Unexpected operator encountered: {}", input.slice(rng.start, rng.end).as_str()).to_string());
                     return Err(err)
                 },
-                ExprToken::Parsed(expr, _) => {
-                    // If the token is already a parsed expression, just return the expression
+                ExprToken::Parsed(expr, rng) => {
+                    // If the token is already a parsed expression, just return the expression.
+                    // The range in the token should match the expression's span.
+                    if expr.span != Some(rng) {
+                        error!("Expression span doesn't match token range");
+                    }
                     return Ok(expr)
                 },
-                ExprToken::Var(s, _) => {
-                    // If the token is a variable literal, return a variable expression
-                    return Ok(Expr::Var(s))
+                ExprToken::Var(s, rng) => {
+                    // If the token is a variable literal, return a variable expression with 
+                    // the character range from the token
+                    let mut expr = Expr::var(s);
+                    expr.span = Some(rng);
+                    return Ok(expr)
                 }
             }
 
@@ -939,22 +1242,24 @@ impl Expr {
             let token_1 = tokens.pop().unwrap();
             let token_0 = tokens.pop().unwrap();
             match (token_0, token_1) {
-                (ExprToken::Var(s, _), ExprToken::Delimited(rng)) => {
+                (ExprToken::Var(s, var_rng), ExprToken::Delimited(del_rng)) => {
                     // If the two tokens are a variable followed by a parenthetical,
                     // then it represents a function call. Check if the content of
                     // the parenthetical is a list, and if so decompose it into multiple
                     // arguments (e.g. atan2(x, y)). If not, supply it as a single argument
                     // (e.g. cos(x)).
                     let op = ExprOp::Function(s);
-                    let sspan = MyStrSpan::from_range(input, rng);
-                    let function_args = Expr::from_str_span(sspan)?;
-                    let args = match function_args {
-                        Expr::Op{op, args} if matches!(op, ExprOp::List) => {
+                    let sspan = MyStrSpan::from_range(input, del_rng.clone());
+                    let function_args: Expr = Expr::from_str_span(sspan)?;
+                    let args = match function_args.inner {
+                        ExprNode::Op{op, args} if matches!(op, ExprOp::List) => {
                             args
                         },
-                        function_args => vec![function_args]
+                        _ => vec![function_args]
                     };
-                    return Ok(Expr::Op{op, args})
+                    let mut expr = Expr::op(op, args);
+                    expr.span = Some(var_rng.start..del_rng.end);
+                    return Ok(expr)
                 },
                 (token_0, token_1) => {
                     // If the two tokens do not represent a function call, recompose the
@@ -964,7 +1269,7 @@ impl Expr {
             }
         }
 
-       
+        
         // This block loops through the tokens and determines if there is an operator in 
         // the stream (op_present) and finds the highest priority of all of the operators
         // it encounters (op_priority). This is used in later processing to ensure that
@@ -1055,7 +1360,7 @@ impl Expr {
                                     let err = ParseExprError::new(rng, "Non-postfix operator encountered in postfix location".to_string());
                                     return Err(err)
                                 } else {
-                                    // expr_args.push(Expr::Empty);
+                                    // expr_args.push(ExprNode::Empty);
                                 }
                             } else if !op.is_nonpostfix() {
                                 // Untested case
@@ -1106,7 +1411,7 @@ impl Expr {
                                     let err = ParseExprError::new(rng.clone(), "Non-consecutive operator encountered in consecutive location".to_string());
                                     return Err(err)
                                 } else {
-                                    // expr_args.push(Expr::Empty);
+                                    // expr_args.push(ExprNode::Empty);
                                 }
                             } else if !op.is_stringable() {
                                 // Untested case
@@ -1161,7 +1466,7 @@ impl Expr {
                 let err = ParseExprError::new(last_op_pos.unwrap(), "Non-prefix operator encountered in prefix location".to_string());
                 return Err(err);
             } else {
-                // expr_args.push(Expr::Empty);
+                // expr_args.push(ExprNode::Empty);
             }
             
         } else if !current_op.is_nonprefix() {
@@ -1178,9 +1483,13 @@ impl Expr {
         }
 
         // Reverse the order of the arguments that have been accumulated since they were accumulated in a reversed iterator and return 
-        // the resulting expression
+        // the resulting expression. Derive the span from the span between the start of the first argument and end of the last argument.
         expr_args = expr_args.into_iter().rev().collect();
-        Ok(Expr::Op{op: current_op, args: expr_args})
+        let span_start = expr_args.first().unwrap().span.clone().unwrap().start;
+        let span_end = expr_args.last().unwrap().span.clone().unwrap().end;
+        let mut expr = Expr::op(current_op, expr_args);
+        expr.span = Some(span_start..span_end);
+        Ok(expr)
     }
 
     /// Converts a string span into a vector of tokens, which is intended to be processed
@@ -1214,7 +1523,9 @@ impl Expr {
                     if ch_str == "'" {
                         let string_literal_sspan = input.slice(current_token_start, ch.start());
                         info!("String literal token: '{}'", string_literal_sspan.as_str());
-                        tokens.push(ExprToken::Parsed(Expr::Value(ExprValue::String(current_string_literal)), string_literal_sspan.range()));
+                        let mut expr = Expr::value(ExprValue::String(current_string_literal));
+                        expr.span = Some(string_literal_sspan.range());
+                        tokens.push(ExprToken::Parsed(expr, string_literal_sspan.range()));
                         current_string_literal = String::new();
                         current_token_start = ch.end();
                         in_string_literal = false;
@@ -1306,6 +1617,13 @@ impl Expr {
         info!("Tokens: {:?}", tokens);
         Ok(tokens)
     }
+    
+}
+
+impl PartialEq<Expr> for Expr {
+    fn eq(&self, other: &Expr) -> bool {
+        self.inner == other.inner
+    }
 }
 
 impl FromStr for Expr {
@@ -1320,43 +1638,43 @@ mod expr_parse_tests {
     use super::*;
     #[test]
     fn expr_parse_tests() {
-        let add_arg1 = Expr::Op{op: ExprOp::Add, args: vec![Expr::Var("x".to_string()), Expr::Value(ExprValue::Integer(5))]}; // x + 5
+        let add_arg1 = Expr::op(ExprOp::Add, vec![Expr::var("x".to_string()), Expr::value(ExprValue::Integer(5))]); // x + 5
         assert_eq!(Expr::from_str("x + 5").unwrap(), add_arg1);
-        let mul_arg1 = Expr::Op{op: ExprOp::Mult, args: vec![Expr::Value(ExprValue::Integer(3)), Expr::Var("x".to_string())]}; // 3 * x
-        let mul_arg2 = Expr::Op{op: ExprOp::Mult, args: vec![Expr::Value(ExprValue::Integer(5)), Expr::Arg(12), add_arg1]}; // 5 * $12 * (x + 5)
-        let add_arg2 = Expr::Op{op: ExprOp::Add, args: vec![mul_arg1, mul_arg2]}; // 3 * x + 5 * $12 * (x + 5)
-        let eq_arg1 = Expr::Op{op: ExprOp::Eq, args: vec![add_arg2.clone(), Expr::Value(ExprValue::String("hello?".to_string()))]};
+        let mul_arg1 = Expr::op(ExprOp::Mult, vec![Expr::value(ExprValue::Integer(3)), Expr::var("x".to_string())]); // 3 * x
+        let mul_arg2 = Expr::op(ExprOp::Mult, vec![Expr::value(ExprValue::Integer(5)), Expr::arg(12), add_arg1]); // 5 * $12 * (x + 5)
+        let add_arg2 = Expr::op(ExprOp::Add, vec![mul_arg1, mul_arg2]); // 3 * x + 5 * $12 * (x + 5)
+        let eq_arg1 = Expr::op(ExprOp::Eq, vec![add_arg2.clone(), Expr::value(ExprValue::String("hello?".to_string()))]);
         assert_eq!(Expr::from_str("3 * x + 5 * $12 * (x + 5) == 'hello?'").unwrap(), eq_arg1);
-        let eq_arg2 = Expr::Op{op: ExprOp::Eq, args: vec![add_arg2.clone(), Expr::Value(ExprValue::String("escape'test".to_string()))]};
+        let eq_arg2 = Expr::op(ExprOp::Eq, vec![add_arg2.clone(), Expr::value(ExprValue::String("escape'test".to_string()))]);
         assert_eq!(Expr::from_str(r"3 * x + 5 * $12 * (x + 5) == 'escape\'test'").unwrap(), eq_arg2);
-        let bp1 = Expr::Value(ExprValue::Position(BitIndex::new(5, 3)));
+        let bp1 = Expr::value(ExprValue::Position(BitIndex::new(5, 3)));
         assert_eq!(Expr::from_str("5B3b").unwrap(), bp1);
-        let atan2 = Expr::Op{op: ExprOp::Function("atan2".to_string()), args: vec![add_arg2, Expr::Var("y".to_string())]};
+        let atan2 = Expr::op(ExprOp::Function("atan2".to_string()), vec![add_arg2, Expr::var("y".to_string())]);
         assert_eq!(Expr::from_str("atan2(3 * x + 5 * $12 * (x + 5), y)").unwrap(), atan2);
-        let sub_arg1 = Expr::Op{op: ExprOp::Sub, args: vec![
-            Expr::Op{op: ExprOp::Neg, args: vec![Expr::Var("x".to_string())]}, 
-            Expr::Value(ExprValue::Integer(5)), 
-            Expr::Op{op: ExprOp::Neg, args: vec![Expr::Arg(10)]}
-            ]}; // -x - 5 - -$10
+        let sub_arg1 = Expr::op(ExprOp::Sub, vec![
+            Expr::op(ExprOp::Neg, vec![Expr::var("x".to_string())]), 
+            Expr::value(ExprValue::Integer(5)), 
+            Expr::op(ExprOp::Neg, vec![Expr::arg(10)])
+            ]); // -x - 5 - -$10
         assert_eq!(Expr::from_str("-x - 5 - -$10").unwrap(), sub_arg1);
     }
 
     #[test]
     fn order_of_operations() {
-        let mul_arg1 = Expr::Op{op: ExprOp::Mult, args: vec![Expr::Value(ExprValue::Integer(5)), Expr::Value(ExprValue::Integer(3))]}; // 5 * 3
-        let div_arg1 = Expr::Op{op: ExprOp::Div, args: vec![mul_arg1, Expr::Var("x".to_string())]}; // 5 * 3 / x
-        let mul_arg2 = Expr::Op{op: ExprOp::Mult, args: vec![div_arg1, Expr::Value(ExprValue::Integer(2))]}; // 5 * 3 / x * 2
+        let mul_arg1 = Expr::op(ExprOp::Mult, vec![Expr::value(ExprValue::Integer(5)), Expr::value(ExprValue::Integer(3))]); // 5 * 3
+        let div_arg1 = Expr::op(ExprOp::Div, vec![mul_arg1, Expr::var("x".to_string())]); // 5 * 3 / x
+        let mul_arg2 = Expr::op(ExprOp::Mult, vec![div_arg1, Expr::value(ExprValue::Integer(2))]); // 5 * 3 / x * 2
         // println!("Message: {}", Expr::from_str("5 * 3 / x * 2").unwrap_err().make_message("5 * 3 / x * 2"));
         assert_eq!(Expr::from_str("5 * 3 / x * 2").unwrap(), mul_arg2.clone());
-        let mul_arg3 = Expr::Op{op: ExprOp::Mult, args: vec![Expr::Value(ExprValue::Integer(3)), Expr::Value(ExprValue::Integer(2))]}; // 3 * 2
-        let div_arg2 = Expr::Op{op: ExprOp::Div, args: vec![mul_arg3, Expr::Op{op: ExprOp::Neg, args: vec![Expr::Var("x".to_string())]}]}; // 3 * 2 / -x
-        let mul_arg4 = Expr::Op{op: ExprOp::Mult, args: vec![div_arg2, Expr::Value(ExprValue::Integer(6))]}; // 3 * 2 / -x * 6
+        let mul_arg3 = Expr::op(ExprOp::Mult, vec![Expr::value(ExprValue::Integer(3)), Expr::value(ExprValue::Integer(2))]); // 3 * 2
+        let div_arg2 = Expr::op(ExprOp::Div, vec![mul_arg3, Expr::op(ExprOp::Neg, vec![Expr::var("x".to_string())])]); // 3 * 2 / -x
+        let mul_arg4 = Expr::op(ExprOp::Mult, vec![div_arg2, Expr::value(ExprValue::Integer(6))]); // 3 * 2 / -x * 6
         assert_eq!(Expr::from_str("3 * 2 / -x * 6").unwrap(), mul_arg4.clone());
-        let add_arg1 = Expr::Op{op: ExprOp::Add, args: vec![mul_arg2, mul_arg4, Expr::Op{op: ExprOp::Neg, args: vec![Expr::Var("y".to_string())]}]}; // 5 * 3 / x * 2 + 3 * 2 / -x * 6 + -y
+        let add_arg1 = Expr::op(ExprOp::Add, vec![mul_arg2, mul_arg4, Expr::op(ExprOp::Neg, vec![Expr::var("y".to_string())])]); // 5 * 3 / x * 2 + 3 * 2 / -x * 6 + -y
         assert_eq!(Expr::from_str("5 * 3 / x * 2 + 3 * 2 / -x * 6 + -y").unwrap(), add_arg1.clone());
-        let sub_arg1 = Expr::Op{op: ExprOp::Sub, args: vec![add_arg1, Expr::Value(ExprValue::Integer(5))]}; // 5 * 3 / x * 2 + 3 * 2 / -x * 6 + -y - 5
+        let sub_arg1 = Expr::op(ExprOp::Sub, vec![add_arg1, Expr::value(ExprValue::Integer(5))]); // 5 * 3 / x * 2 + 3 * 2 / -x * 6 + -y - 5
         assert_eq!(Expr::from_str("5 * 3 / x * 2 + 3 * 2 / -x * 6 + -y - 5").unwrap(), sub_arg1.clone());
-        let add_arg2 = Expr::Op{op: ExprOp::Add, args: vec![sub_arg1, Expr::Op{op: ExprOp::Neg, args:vec![Expr::Var("z".to_string())]}]}; // 5 * 3 / x * 2 + 3 * 2 / -x * 6 + -y - 5 + -z
+        let add_arg2 = Expr::op(ExprOp::Add, vec![sub_arg1, Expr::op(ExprOp::Neg, vec![Expr::var("z".to_string())])]); // 5 * 3 / x * 2 + 3 * 2 / -x * 6 + -y - 5 + -z
         assert_eq!(Expr::from_str("5 * 3 / x * 2 + 3 * 2 / -x * 6 + -y - 5 + -z").unwrap(), add_arg2);
     }
 
@@ -1393,7 +1711,48 @@ pub enum ExprEvalError {
     LookupError{key: String},
     ArgumentCountError{accessed: usize, provided: usize},
     DataTypeMismatch{found: String, expected: String},
-    ParseError{details: String}
+    ParseError{details: String},
+    OperationError(ExprOperationError)
+}
+
+impl ExprEvalError {
+    pub fn set_fname(&mut self, fname: String) {
+        if let ExprEvalError::OperationError(ref mut err) = self {
+            err.fname = Some(fname);
+        }
+        
+    }
+
+    pub fn remap(&mut self, remap: &IndexRemap) {
+        if let ExprEvalError::OperationError(ref mut err) = self {
+            err.remap(remap);
+        }
+    }
+
+    pub fn try_get_message(&self) -> Option<String> {
+        if let ExprEvalError::OperationError(err) = self {
+            err.message.clone()
+        } else {
+            None
+        }
+    }
+
+    pub fn get_message(&mut self, context: &str) -> String {
+        if let ExprEvalError::OperationError(ref mut err) = self {
+            if err.message.is_none() {
+                err.set_context(context);
+            }
+            err.message.as_ref().unwrap().clone()
+        } else {
+            format!("{}", self).to_string()
+        }
+    }
+
+    pub fn set_context(&mut self, context: &str) {
+        if let ExprEvalError::OperationError(ref mut err) = self {
+            err.set_context(context);
+        }
+    }
 }
 
 impl std::fmt::Display for ExprEvalError {
@@ -1402,8 +1761,15 @@ impl std::fmt::Display for ExprEvalError {
             ExprEvalError::LookupError{key} => write!(f, "Lookup of '{}' failed", key),
             ExprEvalError::ArgumentCountError{accessed, provided} => write!(f, "Expression attempted to use argument #{} but only {} were provided.", accessed, provided),
             ExprEvalError::DataTypeMismatch{found, expected} => write!(f, "Data type mismatch: '{}' found, '{}' expeced", found, expected),
-            ExprEvalError::ParseError{details} => write!(f, "Parse error: {}", details)
+            ExprEvalError::ParseError{details} => write!(f, "Parse error: {}", details),
+            ExprEvalError::OperationError(err) => err.fmt(f)
         }
         
     }    
+}
+
+impl From<ExprOperationError> for ExprEvalError {
+    fn from(err: ExprOperationError) -> Self {
+        ExprEvalError::OperationError(err)
+    }
 }

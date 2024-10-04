@@ -57,6 +57,100 @@ pub struct BinaryField {
 
 use crate::expr::{MyStrSpan, IndexRemap, ExprValue, Expr, ExprEvalError, ParseExprError};
 
+struct ExprWrapper {
+    inner: Expr,
+    remap: IndexRemap,
+    default: bool
+}
+
+impl ExprWrapper {
+    fn from_xml_str_span(input: &MyStrSpan) -> Result<ExprWrapper, ParseXmlError> {
+        let mut new: String = input.as_str().to_string();
+        let mut remap = IndexRemap::from_str_span(input);
+        for (from, to) in vec![("&lt;", "<"), ("&gt;", ">"), ("&apos;", "'"), ("&quot;", "\""), ("&amp;", "&")] {
+            let new_remap: IndexRemap;
+            (new, new_remap) = IndexRemap::from_replacement(&new, from, to);
+            remap.extend(new_remap);
+        }
+        remap = remap.inverted();
+        match Expr::from_str_span(MyStrSpan::new(0, &new)) {
+            Ok(expr) => {
+                Ok(ExprWrapper {
+                    inner: expr,
+                    remap,
+                    default: false
+                })
+            },
+            Err(err) => {
+                let mut new_annotations = vec![];
+                for (s, rng) in err.annotations {
+                    new_annotations.push((s.clone(), remap.apply_range(rng)));
+                }
+                Err(ParseXmlError{
+                    details: err.details,
+                    annotations: new_annotations,
+                    help: err.help,
+                    fname: None,
+                    message: None
+                })
+            }
+        }
+    }
+
+    pub fn from_default(expr: Expr) -> ExprWrapper {
+        ExprWrapper {
+            inner: expr,
+            remap: IndexRemap::new(),
+            default: true
+        }
+    }
+
+    pub fn evaluate<'a>(&self, parent: &PartiallyResolvedStructure<'a>, lookup: &dyn Fn(&str) -> Option<ExprValue>, prs_map: &HashMap<StructureIdent, Rc<RefCell<PartiallyResolvedStructure<'a>>>>) -> Result<ExprValue, ExprEvalError> {
+        self.evaluate_with_args(parent, &vec![], lookup, prs_map)
+    }
+
+    pub fn evaluate_with_args<'a>(&self, parent: &PartiallyResolvedStructure<'a>, arguments: &Vec<ExprValue>, lookup: &dyn Fn(&str) -> Option<ExprValue>, prs_map: &HashMap<StructureIdent, Rc<RefCell<PartiallyResolvedStructure<'a>>>>) -> Result<ExprValue, ExprEvalError> {
+        match self.inner.evaluate_with_args(arguments, lookup) {
+            Ok(ev) => Ok(ev),
+            Err(mut err) => {
+                if let Some(fname) = parent.get_fname(prs_map) {
+                    let text = std::fs::read_to_string(&fname).unwrap();
+                    err.remap(&self.remap);
+                    err.set_fname(fname);
+                    err.set_context(&text);
+                }
+                Err(err)
+                    
+            }
+        }
+    }
+
+    pub fn evaluate_expect_position<'a>(&self, parent: &PartiallyResolvedStructure<'a>, lookup: &dyn Fn(&str) -> Option<ExprValue>, prs_map: &HashMap<StructureIdent, Rc<RefCell<PartiallyResolvedStructure<'a>>>>) -> Result<BitIndex, ExprEvalError> {
+        match self.evaluate(parent, lookup, prs_map)? {
+            ExprValue::Position(bp) => Ok(bp),
+            other => Err(ExprEvalError::DataTypeMismatch{found: other.datatype_as_string(), expected: "Position".to_string()})
+        }
+    }
+
+    pub fn evaluate_expect_integer<'a>(&self, parent: &PartiallyResolvedStructure<'a>, lookup: &dyn Fn(&str) -> Option<ExprValue>, prs_map: &HashMap<StructureIdent, Rc<RefCell<PartiallyResolvedStructure<'a>>>>) -> Result<i64, ExprEvalError> {
+        match self.evaluate(parent, lookup, prs_map)? {
+            ExprValue::Integer(i) => Ok(i),
+            other => Err(ExprEvalError::DataTypeMismatch{found: other.datatype_as_string(), expected: "Integer".to_string()})
+        }
+    }
+
+    pub fn evaluate_expect_bool<'a>(&self, parent: &PartiallyResolvedStructure<'a>, lookup: &dyn Fn(&str) -> Option<ExprValue>, prs_map: &HashMap<StructureIdent, Rc<RefCell<PartiallyResolvedStructure<'a>>>>) -> Result<bool, ExprEvalError> {
+        match self.evaluate(parent, lookup, prs_map)? {
+            ExprValue::Bool(b) => Ok(b),
+            other => Err(ExprEvalError::DataTypeMismatch{found: other.datatype_as_string(), expected: "Bool".to_string()})
+        }
+    }
+
+    pub fn vars(&self) -> HashSet<String> {
+        self.inner.vars()
+    }
+}
+
 // impl From<ParseAbstractIdentError> for ExprEvalError {
 //     fn from(err: ParseAbstractIdentError) -> Self {
 //         ExprEvalError::ParseError{
@@ -72,6 +166,17 @@ pub enum FileSpecError {
     IdentNotFound(AbstractIdent),
     IdentNotValid(AbstractIdent),
     IdentParseError(ParseAbstractIdentError)
+}
+
+impl FileSpecError {
+    pub fn try_get_message(&self) -> Option<String> {
+        match self {
+            FileSpecError::ExprEvalError(err) => {
+                err.try_get_message()
+            },
+            _ => None
+        }
+    }
 }
 
 impl From<std::io::Error> for FileSpecError {
@@ -234,7 +339,7 @@ fn convert_xml_symbols(s: &str) -> String {
 fn expr_from_xml(s: &MyStrSpan) -> Result<Expr, ParseXmlError> {
     let mut new: String = s.as_str().to_string();
     let mut remap = IndexRemap::from_str_span(s);
-    for (from, to) in vec![("&lt;", "<"), ("&gt;", ">")] {
+    for (from, to) in vec![("&lt;", "<"), ("&gt;", ">"), ("&apos;", "'"), ("&quot;", "\""), ("&amp;", "&")] {
         let new_remap: IndexRemap;
         (new, new_remap) = IndexRemap::from_replacement(&new, from, to);
         remap.extend(new_remap);
@@ -516,15 +621,15 @@ impl FieldSpec {
         };
         let offset = match obj.attrs.remove("offset") {
             Some(s) => Expr::from_str(&convert_xml_symbols(s.as_str()))?,
-            None => Expr::Value(ExprValue::Position(BitIndex::zero()))
+            None => Expr::value(ExprValue::Position(BitIndex::zero()))
         };
         let alignment = match obj.attrs.remove("align") {
             Some(s) => Expr::from_str(&convert_xml_symbols(s.as_str()))?,
-            None => Expr::Value(ExprValue::Position(BitIndex::bytes(1)))
+            None => Expr::value(ExprValue::Position(BitIndex::bytes(1)))
         };
         let alignment_base = match obj.attrs.remove("align-base") {
             Some(s) => Expr::from_str(&convert_xml_symbols(s.as_str()))?,
-            None => Expr::Value(ExprValue::Position(BitIndex::zero()))
+            None => Expr::value(ExprValue::Position(BitIndex::zero()))
         };
         let valid = match obj.attrs.remove("valid") {
             Some(s) => Some(Expr::from_str(&convert_xml_symbols(s.as_str()))?),
@@ -961,7 +1066,7 @@ enum DataSource {
 
 enum PartiallyResolvedStructureType<'a> {
     UnresolvedSection{initial: Rc<SectionSpec>},
-    Addressed{position: Rc<Expr>, pss: Rc<RefCell<PartiallyResolvedStructure<'a>>>},
+    Addressed{position: Rc<ExprWrapper>, pss: Rc<RefCell<PartiallyResolvedStructure<'a>>>},
     Sequence(Vec<Rc<RefCell<PartiallyResolvedStructure<'a>>>>),
     Switch{value: Rc<Expr>, cases: Vec<(Rc<Expr>, Rc<Structure>)>, default: Rc<Structure>, pss: Option<Rc<RefCell<PartiallyResolvedStructure<'a>>>>},
     Repeat{n: Rc<Expr>, structure: Rc<Structure>, seq: Vec<Rc<RefCell<PartiallyResolvedStructure<'a>>>>, finalized: bool}, // seq is used to store the actual structure instances once "n" is determined
@@ -1073,7 +1178,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
                 let mut prs_index = index.clone();
                 prs_index.push(0);
                 let prs = PartiallyResolvedStructure::new_indexed(structure.clone(), id.clone(), prs_index, prs_map);
-                let structure = Structure::wrap_addressed(structure.clone(), Expr::Value(ExprValue::Bool(false))); // The "address" put in here 
+                let structure = Structure::wrap_addressed(structure.clone(), Expr::value(ExprValue::Bool(false))); // The "address" put in here 
                 // must never be used, hence why it's a boolean
                 PartiallyResolvedStructureType::Chain{next: next.clone(), structure: Rc::new(structure), prs, seq: Vec::new(), finalized: false}
             }
@@ -1153,6 +1258,25 @@ impl<'a> PartiallyResolvedStructure<'a> {
             }
         }
         Ok(new)
+    }
+
+    fn get_fname(&self, prs_map: &HashMap<StructureIdent, Rc<RefCell<PartiallyResolvedStructure<'a>>>>) -> Option<String> {
+        match &self.original.filename {
+            Some(fname) => Some(fname.to_string()),
+            None => None
+        } 
+        // let mut prs_id = self.id.clone();
+        // loop {
+        //     if let Some(prs) = prs_map.get(&prs_id) {
+        //         if let Some(fname) = &prs.borrow().original.filename {
+        //             return Some(fname.clone())
+        //         } else {
+        //             prs_id = prs.borrow().parent_id.clone();
+        //         }
+        //     } else {
+        //         return None
+        //     }
+        // }
     }
 
     /// Attempts to find the actual field that field_name refers to in the context of `self`. This 
@@ -1557,7 +1681,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
             AbstractIdent::StructureAttr(ref sai) => {
                 if sai.structure == self.id {
                     match sai.attr {
-                        StructureAttrType::Position => self.try_get_position(vd),
+                        StructureAttrType::Position => self.try_get_position(vd, prs_map),
                         StructureAttrType::Align => self.try_get_alignment(vd),
                         StructureAttrType::AlignBase => self.try_get_alignment_base(vd),
                         StructureAttrType::StartPad => self.try_get_start_pad(vd),
@@ -2684,7 +2808,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
                         let mut child = PartiallyResolvedStructure::new_indexed(structure.clone(), self.id.clone(), child_index, prs_map);
                         // panic!("PRS: {:?}", prs_map.get(&child.borrow().id).unwrap().borrow().id);
                         if let PartiallyResolvedStructureType::Addressed{ref mut position, ..} = child.borrow_mut().stype.as_mut() {
-                            *position = Rc::new(Expr::Value(ExprValue::Position(v)));
+                            *position = Rc::new(ExprWrapper::from_default(Expr::value(ExprValue::Position(v))));
                         } else {
                             unreachable!()
                         }
@@ -2703,13 +2827,13 @@ impl<'a> PartiallyResolvedStructure<'a> {
         }
     }
 
-    fn try_get_position(&self, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, FileSpecError> {
+    fn try_get_position(&self, vd: &ValueDictionary, prs_map: &HashMap<StructureIdent, Rc<RefCell<PartiallyResolvedStructure<'a>>>>) -> Result<DependencyReport<ExprValue>, FileSpecError> {
         match self.stype.as_ref() {
             // PartiallyResolvedStructureType::UnresolvedSection{initial, pss: Some(section)} => {
             //     Ok(DependencyReport::success(ExprValue::Position(section.get_position())))
             // },
             PartiallyResolvedStructureType::Addressed{position, ..} => {
-                match position.evaluate_expect_position(&|alias| {self.lookup_str(&vd, alias)}) {
+                match position.evaluate_expect_position(&self, &|alias| {self.lookup_str(&vd, alias)}, prs_map) {
                     Ok(value) => {
                         let mut dr = DependencyReport::success(ExprValue::Position(value));
                         let position_id = self.id.get_attr_ident(StructureAttrType::Position);
@@ -3471,14 +3595,14 @@ impl DefField {
                 let find = convert_xml_symbols(obj.attrs.remove("find").unwrap().as_str());
                 let n = match obj.attrs.remove("n") {
                     Some(expr) => Expr::from_str(&convert_xml_symbols(expr.as_str()))?,
-                    None => Expr::Value(ExprValue::Integer(0))
+                    None => Expr::value(ExprValue::Integer(0))
                 };
                 Ok(DefField::Search{start, find, n})
             },
             "anchor" => {
                 let offset = match obj.attrs.remove("offset") {
                     Some(expr) => Expr::from_str(&convert_xml_symbols(expr.as_str()))?,
-                    None => Expr::Value(ExprValue::Position(BitIndex::zero()))
+                    None => Expr::value(ExprValue::Position(BitIndex::zero()))
                 };
                 Ok(DefField::Anchor{offset})
             },
@@ -3495,7 +3619,7 @@ struct Break {
 #[derive(Clone)]
 enum StructureType {
     Section(Rc<SectionSpec>),
-    Addressed{position: Rc<Expr>, content: Rc<Structure>},
+    Addressed{position: Rc<ExprWrapper>, content: Rc<Structure>},
     Sequence(Vec<Rc<Structure>>),
     Switch{value: Rc<Expr>, cases: Vec<(Rc<Expr>, Rc<Structure>)>, default: Rc<Structure>},
     Repeat{n: Rc<Expr>, structure: Rc<Structure>},
@@ -3513,7 +3637,8 @@ pub struct Structure {
     exports: HashMap<String, Option<Expr>>,
     def_fields: HashMap<String, DefField>,
     breaks: Vec<Break>,
-    stype: StructureType
+    stype: StructureType,
+    filename: Option<Rc<String>>
 }
 
 impl Structure {
@@ -3555,13 +3680,13 @@ impl Structure {
     fn wrap_addressed(inner: Rc<Structure>, position: Expr) -> Structure {
         let id = inner.id.clone() + "#wrapper";
         let name = inner.name.clone();
-        let alignment = Expr::Value(ExprValue::Position(BitIndex::bits(1))); // Smallest increment possible
-        let alignment_base = Expr::Value(ExprValue::Position(BitIndex::zero())); // Doesn't matter
+        let alignment = Expr::value(ExprValue::Position(BitIndex::bits(1))); // Smallest increment possible
+        let alignment_base = Expr::value(ExprValue::Position(BitIndex::zero())); // Doesn't matter
         let length = LengthPolicy::FitContents; // This won't work if inner's length is Expand, but that isn't really valid for chain children anyway
         let exports = inner.exports.clone(); // Need to have the same exports so they can tunnel through
         let def_fields = HashMap::new();
         let breaks = vec![];
-        let stype = StructureType::Addressed{position: Rc::new(position), content: inner};
+        let stype = StructureType::Addressed{position: Rc::new(ExprWrapper::from_default(position)), content: inner};
 
         Structure {
             id,
@@ -3572,16 +3697,53 @@ impl Structure {
             exports,
             def_fields,
             breaks,
-            stype
+            stype,
+            filename: None
         }
     }
 
-    fn from_xml_object(mut obj: XmlObject) -> Result<Structure, ParseXmlError> {
+    // pub fn set_fname_rc(&mut self, fname: Rc<String>) -> bool {
+    //     if self.filename.is_some() {
+    //         false
+    //     } else {
+    //         self.filename = Some(fname);
+    //         match &self.stype {
+    //             StructureType::Section(_) => {
+    //                 // Do nothing
+    //             },
+    //             StructureType::Addressed{content, ..} => {
+    //                 content.borrow_mut().set_fname_rc(fname);
+    //             },
+    //             StructureType::Sequence(seq) => {
+    //                 for s in seq {
+    //                     s.borrow_mut().set_fname_rc(fname);
+    //                 }
+    //             },
+    //             StructureType::Switch{cases, default, ..} => {
+    //                 for (_, s) in cases {
+    //                     s.borrow_mut().set_fname_rc(fname);
+    //                 }
+    //                 default.borrow_mut().set_fname_rc(fname);
+    //             },
+    //             StructureType::Repeat{structure, ..} | StructureType::RepeatUntil{structure, ..} | StructureType::Chain{structure, ..} => {
+    //                 structure.set_fname_rc(fname);
+    //             }
+    //         }
+
+    //         true
+    //     }
+    // }
+
+    // pub fn set_fname(&mut self, fname: String) -> bool {
+    //     self.set_fname_rc(Rc::new(fname))
+    // }
+
+    fn from_xml_object(mut obj: XmlObject, fname: Option<Rc<String>>) -> Result<Structure, ParseXmlError> {
         if obj.element.as_str() == "use" {
             let url = convert_xml_symbols(obj.attrs.remove("url").unwrap().as_str());
             if let Some((fname, struct_id)) = url.split_once("#") {
                 let text = std::fs::read_to_string(&fname).unwrap();
-                let s = match Structure::from_xml(&text) {
+                let s = match Structure::from_xml(&text, Some(Rc::new(fname.to_string()))) {
                     Ok(s) => Rc::new(s),
                     Err(mut err) => {
                         err.set_fname(fname.to_string());
@@ -3591,7 +3753,9 @@ impl Structure {
                 };
                 if let Some(child) = s.get_child_by_id(struct_id) {
                     std::mem::drop(s);
-                    return Ok(Rc::into_inner(child).unwrap())
+                    let mut s = Rc::into_inner(child).unwrap();
+                    // s.set_fname(fname.to_string());
+                    return Ok(s)
                 } else {
                     panic!("Structure does not contain id '{}'", struct_id)
                 }
@@ -3625,11 +3789,11 @@ impl Structure {
         };
         let alignment = match obj.attrs.remove("align") {
             Some(s) => Expr::from_str(&convert_xml_symbols(s.as_str()))?,
-            None => Expr::Value(ExprValue::Position(BitIndex::bytes(1)))
+            None => Expr::value(ExprValue::Position(BitIndex::bytes(1)))
         };
         let alignment_base = match obj.attrs.remove("align-base") {
             Some(s) => Expr::from_str(&convert_xml_symbols(s.as_str()))?,
-            None => Expr::Value(ExprValue::Position(BitIndex::zero()))
+            None => Expr::value(ExprValue::Position(BitIndex::zero()))
         };
 
         let mut exports = HashMap::new();
@@ -3711,7 +3875,7 @@ impl Structure {
                         _ => {
                             if structure.is_none() {
                                 structure_element_range = Some(child.element.range());
-                                structure = Some(Structure::from_xml_object(child)?);
+                                structure = Some(Structure::from_xml_object(child, fname.clone())?);
                             } else {
                                 let message = format!("'{}' object has more than one structural child", obj.element.as_str()).to_string();
                                 let mut err = ParseXmlError::new(message);
@@ -3731,7 +3895,7 @@ impl Structure {
                     match obj.attrs.remove("pos") {
                         None => panic!("'pos' must be specified for 'addressed' element"),
                         Some(expr)=> {
-                            let pos = Expr::from_str(&convert_xml_symbols(expr.as_str()))?;
+                            let pos = ExprWrapper::from_xml_str_span(&expr)?;
                             stype = StructureType::Addressed{position: Rc::new(pos), content: structure.clone()};
                         }
                     }
@@ -3761,7 +3925,7 @@ impl Structure {
                             def_fields.insert(id, DefField::from_xml_object(child)?);
                         },
                         _ => {
-                            seq.push(Rc::new(Structure::from_xml_object(child)?));
+                            seq.push(Rc::new(Structure::from_xml_object(child, fname.clone())?));
                         }
                     }
                     
@@ -3797,7 +3961,7 @@ impl Structure {
                             if child.children.len() != 1 {
                                 panic!("switch-case must have exactly one child")
                             }
-                            let s = Structure::from_xml_object(child.children.into_iter().nth(0).unwrap())?;
+                            let s = Structure::from_xml_object(child.children.into_iter().nth(0).unwrap(), fname.clone())?;
                             cases.push((Rc::new(check), Rc::new(s)));
                         },
                         "switch-else" => {
@@ -3807,7 +3971,7 @@ impl Structure {
                             if child.children.len() != 1 {
                                 panic!("switch-else must have exactly one child")
                             }
-                            let s = Structure::from_xml_object(child.children.into_iter().nth(0).unwrap())?;
+                            let s = Structure::from_xml_object(child.children.into_iter().nth(0).unwrap(), fname.clone())?;
                             default = Some(Rc::new(s));
                         },
                         _ => todo!()
@@ -3848,7 +4012,7 @@ impl Structure {
                         }
                         _ => {
                             if structure.is_none() {
-                                structure = Some(Structure::from_xml_object(child)?);
+                                structure = Some(Structure::from_xml_object(child, fname.clone())?);
                             } else {
                                 panic!("'repeat' should only have one non-export child!");
                             }
@@ -3902,7 +4066,7 @@ impl Structure {
                         }
                         _ => {
                             if structure.is_none() {
-                                structure = Some(Structure::from_xml_object(child)?);
+                                structure = Some(Structure::from_xml_object(child, fname.clone())?);
                             } else {
                                 panic!("'chain' should only have one non-export child!");
                             }
@@ -3936,12 +4100,13 @@ impl Structure {
                 exports,
                 def_fields,
                 breaks,
-                stype
+                stype,
+                filename: fname
             }
         )
     }
 
-    pub fn from_xml(input: &str) -> Result<Structure, ParseXmlError> {
+    pub fn from_xml(input: &str, fname: Option<Rc<String>>) -> Result<Structure, ParseXmlError> {
         let mut objects = Vec::<XmlObject>::new();
         let mut node_stack = Vec::<(XmlObject, MyStrSpan)>::new();
         let mut attr_map = HashMap::<&str, MyStrSpan>::new();
@@ -4120,7 +4285,7 @@ impl Structure {
         }
     
         if objects.len() == 1 {
-            Structure::from_xml_object(objects.into_iter().nth(0).unwrap())
+            Structure::from_xml_object(objects.into_iter().nth(0).unwrap(), fname.clone())
         } else {
             panic!("Wrong number of objects in XML!")
         }
@@ -4766,7 +4931,7 @@ impl<'a> FileMap<'a> {
                             let mut child = prs_map.get(&sai.structure).unwrap().clone();
 
                             loop {
-                                let dr = child.borrow_mut().try_lookup(target.clone(), &vd, &mut prs_map).unwrap();
+                                let dr = child.borrow_mut().try_lookup(target.clone(), &vd, &mut prs_map)?;
                                 match dr.result {
                                     DepResult::Success(v) => {
                                         vd.insert_struct_attr(sai.clone(), v);
@@ -4896,8 +5061,11 @@ impl<'a> FileMap<'a> {
 pub fn make_png() -> Structure {
     let fname = "png-spec.xml".to_string();
     let s = std::fs::read_to_string(&fname).unwrap();
-    match Structure::from_xml(&s) {
-        Ok(s) => s,
+    match Structure::from_xml(&s, Some(Rc::new(fname.clone()))) {
+        Ok(mut s) => {
+            // s.set_fname(fname);
+            s
+        },
         Err(mut err) => {
             err.set_fname(fname);
             let error_string = err.get_message(&s);

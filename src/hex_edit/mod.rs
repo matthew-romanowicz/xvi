@@ -1024,9 +1024,20 @@ impl<'a> HexEdit<'a> {
                 Ok(string) => string,
                 Err(err) => return ActionResult::error(format!("Could not read file '{}'", fname).to_string())
             };
-            let s = Structure::from_xml(&xml).unwrap();
+            let mut s = Structure::from_xml(&xml, Some(Rc::new(fname))).unwrap();
+            // s.set_fname(fname);
             let mut fs = FileMap::new(Rc::new(s));
-            fs.initialize(&mut self.file_manager);
+            match fs.initialize(&mut self.file_manager) {
+                Ok(()) => {},
+                Err(err) => {
+                    if let Some(msg) = err.try_get_message() {
+                        println!("{}", msg);
+                        panic!()
+                    } else {
+                        panic!("No message available")
+                    }
+                }
+            }
             self.file_spec = Some(fs);
         } else {
             self.file_spec = None;
