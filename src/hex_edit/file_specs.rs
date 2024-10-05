@@ -1074,12 +1074,14 @@ enum DataSource {
 
 enum PartiallyResolvedStructureType<'a> {
     UnresolvedSection{initial: Rc<SectionSpec>},
+    Segment,
     Addressed{position: Rc<ExprWrapper>, pss: Rc<RefCell<PartiallyResolvedStructure<'a>>>},
     Sequence(Vec<Rc<RefCell<PartiallyResolvedStructure<'a>>>>),
     Switch{value: Rc<Expr>, cases: Vec<(Rc<ExprWrapper>, Rc<Structure>)>, default: Rc<Structure>, pss: Option<Rc<RefCell<PartiallyResolvedStructure<'a>>>>},
     Repeat{n: Rc<Expr>, structure: Rc<Structure>, seq: Vec<Rc<RefCell<PartiallyResolvedStructure<'a>>>>, finalized: bool}, // seq is used to store the actual structure instances once "n" is determined
     RepeatUntil{end: Rc<Expr>, structure: Rc<Structure>, seq: Vec<Rc<RefCell<PartiallyResolvedStructure<'a>>>>, finalized: bool},
-    Chain{next: Rc<ExprWrapper>, structure: Rc<Structure>, prs: Rc<RefCell<PartiallyResolvedStructure<'a>>>, seq: Vec<Rc<RefCell<PartiallyResolvedStructure<'a>>>>, finalized: bool}
+    Chain{next: Rc<ExprWrapper>, structure: Rc<Structure>, prs: Rc<RefCell<PartiallyResolvedStructure<'a>>>, seq: Vec<Rc<RefCell<PartiallyResolvedStructure<'a>>>>, finalized: bool},
+    Assembly{segments: Vec<String>, structure: Rc<Structure>, prs: Rc<RefCell<PartiallyResolvedStructure<'a>>>}
 }
 
 impl<'a> PartiallyResolvedStructureType<'a> {
@@ -1087,12 +1089,14 @@ impl<'a> PartiallyResolvedStructureType<'a> {
     fn name(&self) -> String {
         match self {
             PartiallyResolvedStructureType::UnresolvedSection{..} => "section".to_string(),
+            PartiallyResolvedStructureType::Segment{..} => "segment".to_string(),
             PartiallyResolvedStructureType::Addressed{..} => "addressed".to_string(),
             PartiallyResolvedStructureType::Sequence{..} => "sequence".to_string(),
             PartiallyResolvedStructureType::Switch{..} => "switch".to_string(),
             PartiallyResolvedStructureType::Repeat{..} => "repeat".to_string(),
             PartiallyResolvedStructureType::RepeatUntil{..} => "repeat-until".to_string(),
-            PartiallyResolvedStructureType::Chain{..} => "chain".to_string()
+            PartiallyResolvedStructureType::Chain{..} => "chain".to_string(),
+            PartiallyResolvedStructureType::Assembly{..} => "assembly".to_string(),
         }
     }
 }
@@ -1133,6 +1137,9 @@ impl<'a> PartiallyResolvedStructure<'a> {
         let stype = match &original.stype {
             StructureType::Section(section) => {
                 PartiallyResolvedStructureType::UnresolvedSection{initial: section.clone()}
+            },
+            StructureType::Segment => {
+                PartiallyResolvedStructureType::Segment
             },
             StructureType::Addressed{position, content} => {
                 for name in content.exports.keys() {
@@ -1190,6 +1197,15 @@ impl<'a> PartiallyResolvedStructure<'a> {
                 let structure = Structure::wrap_addressed(structure.clone(), Expr::value(ExprValue::Bool(false))); // The "address" put in here 
                 // must never be used, hence why it's a boolean
                 PartiallyResolvedStructureType::Chain{next: next.clone(), structure: Rc::new(structure), prs, seq: Vec::new(), finalized: false}
+            },
+            StructureType::Assembly{segments, structure} => {
+                for name in structure.exports.keys() {
+                    import_monikers.insert(name.clone(), None);
+                }
+                let mut child_index = index.clone();
+                child_index.push(0);
+                let prs = PartiallyResolvedStructure::new_indexed(structure.clone(), id.clone(), child_index, prs_map);
+                PartiallyResolvedStructureType::Assembly{segments: segments.clone(), structure: structure.clone(), prs}
             }
         };
 
@@ -1275,18 +1291,20 @@ impl<'a> PartiallyResolvedStructure<'a> {
             Some(fname) => Some(fname.to_string()),
             None => None
         } 
-        // let mut prs_id = self.id.clone();
-        // loop {
-        //     if let Some(prs) = prs_map.get(&prs_id) {
-        //         if let Some(fname) = &prs.borrow().original.filename {
-        //             return Some(fname.clone())
-        //         } else {
-        //             prs_id = prs.borrow().parent_id.clone();
-        //         }
-        //     } else {
-        //         return None
-        //     }
-        // }
+    }
+
+    /// Returns a boolean that indicates whether or not this structure type is "inline", where inline means that
+    /// it's contents is located in the location where the structure is defined. This is distinguished from 
+    /// structure types such as "addressed", where the structure's content is not actually in the location where
+    /// the structure appears in the file spec. This is used in determining the offset to whatever structure is
+    /// defined after this one in a repeat or sequence.
+    fn is_inline(&self) -> bool {
+        match self.stype.as_ref() {
+            PartiallyResolvedStructureType::Addressed{..} | PartiallyResolvedStructureType::Assembly{..} => {
+                false
+            },
+            _ => true
+        }
     }
 
     /// Attempts to find the actual field that field_name refers to in the context of `self`. This 
@@ -1500,6 +1518,12 @@ impl<'a> PartiallyResolvedStructure<'a> {
                     parents.insert(repetitions_id.to_abstract());
                     return Ok(DependencyReport::incomplete(parents))
                 }
+            },
+            PartiallyResolvedStructureType::Segment => {
+                Ok(DependencyReport::success(FileRegion::Segment(self.id.clone(), start..end)))
+            },
+            PartiallyResolvedStructureType::Assembly{..} => {
+                todo!()
             }
         }   
     }
@@ -2235,7 +2259,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
         let mut current_position_key = self.id.get_attr_ident(StructureAttrType::Position);
 
         match self.stype.as_mut() {
-            PartiallyResolvedStructureType::UnresolvedSection{..} => {
+            PartiallyResolvedStructureType::UnresolvedSection{..} | PartiallyResolvedStructureType::Segment => {
                 
                 Ok(DependencyReport::does_not_exist())
 
@@ -2293,7 +2317,9 @@ impl<'a> PartiallyResolvedStructure<'a> {
                         Err(FileSpecError::IdentNotFound(_)) => {todo!("Not sure if this is right...")},
                         Err(err) => return Err(err)
                     }
-                    current_position_key = structure.borrow().id.get_attr_ident(StructureAttrType::End);
+                    if structure.borrow().is_inline() {
+                        current_position_key = structure.borrow().id.get_attr_ident(StructureAttrType::End);
+                    }
                 }
 
                 Ok(current_best)
@@ -2356,7 +2382,9 @@ impl<'a> PartiallyResolvedStructure<'a> {
                         Err(FileSpecError::IdentNotFound(_)) => {todo!("Not sure if this is right...")},
                         Err(err) => return Err(err)
                     }
-                    current_position_key = structure.borrow().id.get_attr_ident(StructureAttrType::End);
+                    if structure.borrow().is_inline() {
+                        current_position_key = structure.borrow().id.get_attr_ident(StructureAttrType::End);
+                    }
                 } 
 
                 Ok(current_best)
@@ -2432,6 +2460,26 @@ impl<'a> PartiallyResolvedStructure<'a> {
 
                 Ok(current_best)
 
+            },
+            PartiallyResolvedStructureType::Assembly{ref mut prs, ..} => {
+                // prs.borrow_mut().try_lookup(key.clone(), vd, prs_map)
+
+                let dr = prs.borrow_mut().try_lookup(key.clone(), vd, prs_map)?;
+
+                // This block is to account for children not knowing their own position. This
+                // catches that case and populates the dependency report itself.
+                if matches!(dr.result, DepResult::DoesNotExist) && key == prs.borrow().id.get_attr_ident(StructureAttrType::Position).to_abstract() {
+                    match vd.lookup_struct_attr(&current_position_key) {
+                        Some(pos) => {
+                            let mut dr = DependencyReport::success(pos);
+                            dr.add_pc_pairs(HashSet::from([current_position_key.to_abstract()]), HashSet::from([key]));
+                            Ok(dr)
+                        },
+                        None => Ok(DependencyReport::incomplete(HashSet::from([current_position_key.to_abstract()])))
+                    }
+                } else {
+                    Ok(dr)
+                }
             }
         }
     }
@@ -2964,6 +3012,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
         }
     }
 
+
     fn try_get_spare_length(&self, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, FileSpecError> {
 
         match self.length {
@@ -3036,7 +3085,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
     fn try_resolve_import(&self, key: String) -> Result<DependencyReport<StructureIdent>, FileSpecError> {
         info!("Trying to resolve import in {:?}", self.id);
         match self.stype.as_ref() {
-            PartiallyResolvedStructureType::UnresolvedSection{initial} => {
+            PartiallyResolvedStructureType::UnresolvedSection{..} | PartiallyResolvedStructureType::Segment => {
 
                 if self.exports.contains(&key) {
                     Ok(DependencyReport::success(self.id.clone()))
@@ -3169,6 +3218,15 @@ impl<'a> PartiallyResolvedStructure<'a> {
 
                 Ok(current_best)
 
+            },
+            PartiallyResolvedStructureType::Assembly{structure, prs, ..} => {
+                if structure.exports.contains_key(&key) {
+                    prs.borrow().try_resolve_import(key.clone())
+                } else {
+                    info!("Structure exports does not contain key!");
+                    Ok(DependencyReport::does_not_exist())
+                }
+
             }
         }
     }
@@ -3243,22 +3301,24 @@ impl<'a> PartiallyResolvedStructure<'a> {
                 let mut length = BitIndex::zero();
                 let mut parents = HashSet::new();
                 for structure in structures {
-                    let start_pad_id = structure.borrow().id.clone().get_attr_ident(StructureAttrType::StartPad);
-                    let length_id = structure.borrow().id.clone().get_attr_ident(StructureAttrType::Length);
-                    parents.insert(start_pad_id.clone().to_abstract());
-                    parents.insert(length_id.clone().to_abstract());
+                    if structure.borrow().is_inline() {
+                        let start_pad_id = structure.borrow().id.clone().get_attr_ident(StructureAttrType::StartPad);
+                        let length_id = structure.borrow().id.clone().get_attr_ident(StructureAttrType::Length);
+                        parents.insert(start_pad_id.clone().to_abstract());
+                        parents.insert(length_id.clone().to_abstract());
 
-                    match vd.lookup_struct_attr(&start_pad_id) {
-                        Some(value) => {
-                            length = length + value.expect_position()?;
-                        },
-                        None => return Ok(DependencyReport::incomplete(parents))
-                    }
-                    match vd.lookup_struct_attr(&length_id) {
-                        Some(value) => {
-                            length = length + value.expect_position()?;
-                        },
-                        None => return Ok(DependencyReport::incomplete(parents))
+                        match vd.lookup_struct_attr(&start_pad_id) {
+                            Some(value) => {
+                                length = length + value.expect_position()?;
+                            },
+                            None => return Ok(DependencyReport::incomplete(parents))
+                        }
+                        match vd.lookup_struct_attr(&length_id) {
+                            Some(value) => {
+                                length = length + value.expect_position()?;
+                            },
+                            None => return Ok(DependencyReport::incomplete(parents))
+                        }
                     }
                 }
                 let mut dr = DependencyReport::success(ExprValue::Position(length));
@@ -3271,33 +3331,42 @@ impl<'a> PartiallyResolvedStructure<'a> {
                 // by finding that the lengths of all cases are identical
                 let mut parents = HashSet::new();
 
+                let switch_value_id = self.id.get_attr_ident(StructureAttrType::SwitchValue).to_abstract();
+                parents.insert(switch_value_id);
+
                 if let Some(pss) = pss {
-                    let struct_length_id = pss.borrow().id.get_attr_ident(StructureAttrType::Length);
-                    let struct_start_pad_id = pss.borrow().id.get_attr_ident(StructureAttrType::StartPad);
-                    parents.insert(struct_length_id.clone().to_abstract());
-                    parents.insert(struct_start_pad_id.clone().to_abstract());
-    
-                    let length = match vd.lookup_struct_attr(&struct_length_id) {
-                        Some(bp) => bp.expect_position()?,
-                        None => { 
-                            return Ok(DependencyReport::incomplete(parents))
-                        }
-                    };
-    
-                    let start_pad = match vd.lookup_struct_attr(&struct_start_pad_id) {
-                        Some(bp) => bp.expect_position()?,
-                        None => {
-                            return Ok(DependencyReport::incomplete(parents))
-                        }
-                    };
-                    let mut dr = DependencyReport::success(ExprValue::Position(length + start_pad));
-                    let contents_length_id = self.id.get_attr_ident(StructureAttrType::Position).to_abstract();
-                    dr.add_pc_pairs(parents, HashSet::from([contents_length_id]));
-                    return Ok(dr)
+                    if pss.borrow().is_inline() {
+                        let struct_length_id = pss.borrow().id.get_attr_ident(StructureAttrType::Length);
+                        let struct_start_pad_id = pss.borrow().id.get_attr_ident(StructureAttrType::StartPad);
+                        parents.insert(struct_length_id.clone().to_abstract());
+                        parents.insert(struct_start_pad_id.clone().to_abstract());
+        
+                        let length = match vd.lookup_struct_attr(&struct_length_id) {
+                            Some(bp) => bp.expect_position()?,
+                            None => { 
+                                return Ok(DependencyReport::incomplete(parents))
+                            }
+                        };
+        
+                        let start_pad = match vd.lookup_struct_attr(&struct_start_pad_id) {
+                            Some(bp) => bp.expect_position()?,
+                            None => {
+                                return Ok(DependencyReport::incomplete(parents))
+                            }
+                        };
+                        let mut dr = DependencyReport::success(ExprValue::Position(length + start_pad));
+                        let contents_length_id = self.id.get_attr_ident(StructureAttrType::Position).to_abstract();
+                        dr.add_pc_pairs(parents, HashSet::from([contents_length_id]));
+                        return Ok(dr)
+                    } else {
+                        let mut dr = DependencyReport::success(ExprValue::Position(BitIndex::zero()));
+                        let contents_length_id = self.id.get_attr_ident(StructureAttrType::Position).to_abstract();
+                        dr.add_pc_pairs(parents, HashSet::from([contents_length_id]));
+                        return Ok(dr)
+                    }
                 } else {
                     // todo!()
-                    let switch_value_id = self.id.get_attr_ident(StructureAttrType::SwitchValue).to_abstract();
-                    return Ok(DependencyReport::incomplete(HashSet::from([switch_value_id])))
+                    return Ok(DependencyReport::incomplete(parents))
                 }
 
             },
@@ -3320,24 +3389,25 @@ impl<'a> PartiallyResolvedStructure<'a> {
                 if *finalized {
                     // If finalized, just treat it like a Sequence
                     for structure in seq {
+                        if structure.borrow().is_inline() {
+                            let struct_length_id = structure.borrow().id.get_attr_ident(StructureAttrType::Length);
+                            let struct_start_pad_id = structure.borrow().id.get_attr_ident(StructureAttrType::StartPad);
+                            parents.insert(struct_length_id.clone().to_abstract());
+                            parents.insert(struct_start_pad_id.clone().to_abstract());
 
-                        let struct_length_id = structure.borrow().id.get_attr_ident(StructureAttrType::Length);
-                        let struct_start_pad_id = structure.borrow().id.get_attr_ident(StructureAttrType::StartPad);
-                        parents.insert(struct_length_id.clone().to_abstract());
-                        parents.insert(struct_start_pad_id.clone().to_abstract());
+                            match vd.lookup_struct_attr(&struct_start_pad_id) {
+                                Some(value) => {
+                                    length = length + value.expect_position()?;
+                                },
+                                None => return Ok(DependencyReport::incomplete(parents))
+                            }
 
-                        match vd.lookup_struct_attr(&struct_start_pad_id) {
-                            Some(value) => {
-                                length = length + value.expect_position()?;
-                            },
-                            None => return Ok(DependencyReport::incomplete(parents))
-                        }
-
-                        match vd.lookup_struct_attr(&struct_length_id) {
-                            Some(value) => {
-                                length = length + value.expect_position()?;
-                            },
-                            None => return Ok(DependencyReport::incomplete(parents))
+                            match vd.lookup_struct_attr(&struct_length_id) {
+                                Some(value) => {
+                                    length = length + value.expect_position()?;
+                                },
+                                None => return Ok(DependencyReport::incomplete(parents))
+                            }
                         }
                     }
 
@@ -3386,6 +3456,11 @@ impl<'a> PartiallyResolvedStructure<'a> {
                 }
 
             },
+            PartiallyResolvedStructureType::Assembly{..} | PartiallyResolvedStructureType::Segment => {
+                error!("Trying to get contents length of {:?}", self.id);
+                let contents_length_id = self.id.get_attr_ident(StructureAttrType::Position).to_abstract();
+                Err(FileSpecError::IdentNotValid(contents_length_id))
+            }
         }        
     }
 
@@ -3427,6 +3502,133 @@ impl<'a> PartiallyResolvedStructure<'a> {
         }
     }
 
+    /// Attempts to find the closest common ancestor between `self` and `other`. Returns an integer representing
+    /// the number of generations back the ancestor is from 'self' as well as the ancestor's identity. Only fails if `other` 
+    /// is not in `prs_map` or there is somehow no common ancestor.
+    // fn common_ancestor(&self, other: StructureIdent, prs_map: &HashMap<StructureIdent, Rc<RefCell<PartiallyResolvedStructure<'a>>>>) -> Result<(usize, StructureIdent), FileSpecError> {
+    //     let mut other_ancestors = HashSet::new();
+    //     let mut current = other;
+    //     let mut next;
+    //     loop {
+    //         match prs_map.get(current) {
+    //             Some(prs) => next = prs.parent_id.clone(),
+    //             None => break // Indicates that the parent is the file, which is not the prs_map
+    //         }
+    //         other_ancestors.insert(current);
+    //         current = next;
+    //     }
+
+    //     let mut generation = 0;
+    //     current = self.id.clone();
+    //     loop {
+    //         if other_ancestors.contains_key(&current) {
+    //             return Ok((generation, current))
+    //         }
+    //         match prs_map.get(current) {
+    //             Some(prs) => current = prs.parent_id.clone(),
+    //             None => {
+    //                 // Indicates that the parent is the file, which is not the prs_map
+    //                 // return Err(FileSpecError::IdentNotFound())
+    //                 panic!("No common ancestor between {:?} and {:?}", self.id, other);
+    //             }
+    //         }
+    //     }
+    // }
+
+
+    fn nearest_cousins(&self, id: String, prs_map: &HashMap<StructureIdent, Rc<RefCell<PartiallyResolvedStructure<'a>>>>) -> Result<Vec<StructureIdent>, FileSpecError> {
+
+        let mut ancestor_id = self.id.clone();
+        let mut cousin: Option<Rc<Structure>> = None;
+        loop {
+            if let Some(ancestor) = prs_map.get(&ancestor_id) {
+                if let Some(child) = ancestor.borrow().original.get_child_by_id(&id) {
+                    cousin = Some(child);
+                    break;
+                } else {
+                    ancestor_id = ancestor.borrow().parent_id.clone();
+                }
+            } else {
+                break;
+            }
+        }
+
+        if let Some(cousin) = cousin {
+            let mut cousins = Vec::new();
+            for prs in prs_map.values() {
+                if Rc::ptr_eq(&cousin, &prs.borrow().original) {
+                    cousins.push(prs.borrow().id.clone());
+                }
+            }
+            Ok(cousins)
+        } else {
+            panic!("{:?} has no cousins with id {}", self.id, id);
+        }
+
+    }  
+
+    fn try_get_data(&self, fm: &mut crate::FileManager, vd: &ValueDictionary, prs_map: &HashMap<StructureIdent, 
+                Rc<RefCell<PartiallyResolvedStructure<'a>>>>) -> Result<DependencyReport<BitField>, FileSpecError> {
+
+        match self.stype.as_ref() {
+            PartiallyResolvedStructureType::Assembly{segments, ..} => {
+                warn!("Getting segments: {:?}", segments);
+                let mut members_set = HashSet::new();
+                let mut parents = HashSet::new();
+                for segment in segments {
+                    for member_id in self.nearest_cousins(segment.clone(), prs_map)? {
+                        let start_id = prs_map.get(&member_id).unwrap().borrow().id.clone().get_attr_ident(StructureAttrType::Start);
+                        parents.insert(start_id.clone().to_abstract());
+                        let end_id = prs_map.get(&member_id).unwrap().borrow().id.clone().get_attr_ident(StructureAttrType::End);
+                        parents.insert(end_id.clone().to_abstract());
+
+                        members_set.insert((start_id, end_id, member_id));
+                    }
+                }
+
+                warn!("members_set: {:?}", members_set);
+
+                let mut members = Vec::new();
+                for (start_id, end_id, member_id) in members_set.into_iter() {
+                    let start = match vd.lookup_struct_attr(&start_id) {
+                        Some(ev) => ev.expect_position()?,
+                        None => return Ok(DependencyReport::incomplete(parents))
+                    };
+
+                    let end = match vd.lookup_struct_attr(&end_id) {
+                        Some(ev) => ev.expect_position()?,
+                        None => return Ok(DependencyReport::incomplete(parents))
+                    };
+
+                    members.push((start, end, member_id));
+                }
+                members.sort_by_key(|item| item.0);
+
+                info!("Members: {:?}", members);
+
+                let mut data = BitField::from_vec(vec![]);
+
+                for (start, end, member_id) in members.into_iter() {
+                    let span = end - start;
+                    let mut buffer = vec![0; end.ceil().byte() - start.byte()];
+                    fm.get_bytes(start.byte(), &mut buffer)?;
+                    let mut bf = BitField::from_vec(buffer) << start.bit() as usize;
+                    bf.truncate(&span);
+
+                    data.extend(&bf);
+                }
+
+                let dr = DependencyReport::success(data);
+                // TODO: Add dependencies
+                Ok(dr)
+                
+            },
+            _ => todo!()
+        }
+
+        
+    }
+
     fn unknowns(&self, vd: &ValueDictionary) -> Result<(HashSet<AbstractIdent>, HashSet<AbstractIdent>), FileSpecError> { // (Unknowns that need to be found to resolve fields, unknowns that need to be found to get more unknowns)
         let mut unks = HashSet::new();
         let mut expand_deps = HashSet::new();
@@ -3435,7 +3637,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
         unks.insert(self.id.get_attr_ident(StructureAttrType::Length).to_abstract());
 
         match self.stype.as_ref() {
-            PartiallyResolvedStructureType::UnresolvedSection{..} => {
+            PartiallyResolvedStructureType::UnresolvedSection{..} | PartiallyResolvedStructureType::Segment => {
                 
                 // for field in &initial.fields {
                 //     let field_id = self.id.get_field_ident(field.id.clone());
@@ -3553,7 +3755,13 @@ impl<'a> PartiallyResolvedStructure<'a> {
                     expand_deps.insert(self.id.get_attr_ident(StructureAttrType::Repetitions).to_abstract());
                 }
 
-            }
+            },
+            PartiallyResolvedStructureType::Assembly{prs, ..} => {
+                let (new_unks, new_expand_deps) = prs.borrow().unknowns(vd)?;
+                unks.extend(new_unks);
+                expand_deps.extend(new_expand_deps);
+                
+            },
         }
         
         Ok((unks, expand_deps))
@@ -3619,12 +3827,14 @@ struct Break {
 #[derive(Clone)]
 enum StructureType {
     Section(Rc<SectionSpec>),
+    Segment,
     Addressed{position: Rc<ExprWrapper>, content: Rc<Structure>},
     Sequence(Vec<Rc<Structure>>),
     Switch{value: Rc<Expr>, cases: Vec<(Rc<ExprWrapper>, Rc<Structure>)>, default: Rc<Structure>},
     Repeat{n: Rc<Expr>, structure: Rc<Structure>},
     RepeatUntil{end: Rc<Expr>, structure: Rc<Structure>},
-    Chain{next: Rc<ExprWrapper>, structure: Rc<Structure>}
+    Chain{next: Rc<ExprWrapper>, structure: Rc<Structure>},
+    Assembly{segments: Vec<String>, structure: Rc<Structure>}
 }
 
 #[derive(Clone)]
@@ -3650,7 +3860,7 @@ impl Structure {
             Some(self.clone())
         } else {
             match &self.stype {
-                StructureType::Section(_) => None,
+                StructureType::Section(_) | StructureType::Segment => None,
                 StructureType::Addressed{content, ..} => content.get_child_by_id(id),
                 StructureType::Sequence(seq) => {
                     for s in seq {
@@ -3670,7 +3880,7 @@ impl Structure {
                     }
                     default.get_child_by_id(id)
                 },
-                StructureType::Repeat{structure, ..} | StructureType::RepeatUntil{structure, ..} | StructureType::Chain{structure, ..} => {
+                StructureType::Repeat{structure, ..} | StructureType::RepeatUntil{structure, ..} | StructureType::Chain{structure, ..} | StructureType::Assembly{structure, ..} => {
                     structure.get_child_by_id(id)
                 }
             }
@@ -3831,6 +4041,9 @@ impl Structure {
 
 
             },
+            "segment" => {
+                stype = StructureType::Segment;
+            },
             "addressed" => {
                 let pos = ExprWrapper::from_xml_str_span(&obj.remove_required_attr("pos")?)?;
 
@@ -3946,6 +4159,26 @@ impl Structure {
                     panic!("'chain' has no children!")
                 }
             },
+            "assembly" => {
+                let segments = obj.remove_required_attr("segments")?.as_str().split(',').map(|s| s.trim().to_string()).collect::<Vec<String>>();
+
+                let mut structure = None;
+                for mut child in children {
+                    if structure.is_none() {
+                        structure = Some(Structure::from_xml_object(child, fname.clone())?);
+                    } else {
+                        panic!("'assembly' should only have one non-export child!");
+                    }
+                    
+                }
+
+                if let Some(structure) = structure {
+                    let structure = Rc::new(structure);
+                    stype = StructureType::Assembly{segments, structure};
+                } else {
+                    panic!("'assembly' has no children!")
+                }
+            }
             _ => todo!()
         }
 
@@ -4362,6 +4595,7 @@ pub enum FileRegion {
     Field(FieldIdent),
     FieldPad(FieldIdent),
     StructurePad(StructureIdent),
+    Segment(StructureIdent, std::ops::Range<BitIndex>),
     Spare(StructureIdent, std::ops::Range<BitIndex>)
 }
 
@@ -4733,7 +4967,7 @@ impl<'a> FileMap<'a> {
 
                     },
                     AbstractIdent::FieldAttr(ref fai) => {
-                        info!("Target is a Field");
+                        info!("Target is a Field Attribute");
 
                         let child = prs_map.get(&fai.field.structure).unwrap().clone();
 
@@ -5629,6 +5863,87 @@ mod png_tests {
 
         let subifd_struct = StructureIdent::new_indexed("exif_ifd".to_string(), vec![1, index, 1, 0, 2, 0, 0, 0]);
         validate_ifd(png, fm, subifd_struct, subifd);
+    }
+
+    #[test]
+    fn idat_ps2n0g08() {
+        let (mut png, mut fm) = start_file(r"tests/ps2n0g08.png");
+
+        let assembly_body_id = StructureIdent::new_indexed("idat_assembly".to_string(), vec![2]);
+
+        let idat = BitField::from_vec(vec![
+            0x78, 0x9c, 0x63, 0x64, 0x60, 0x24, 0x00, 0x14, 0x08, 0xc8, 0xb3, 0x0c, 0x05, 0x05, 0x8c, 
+            0x0f, 0x08, 0x29, 0xf8, 0xf7, 0x1f, 0x3f, 0x60, 0x79, 0x30, 0x1c, 0x14, 0x30, 0xca, 0x11, 
+            0x90, 0x67, 0x64, 0xa2, 0x79, 0x5c, 0x0c, 0x06, 0x05, 0x8c, 0x8f, 0xf0, 0xca, 0xfe, 0xff, 
+            0xcf, 0xf8, 0x87, 0xe6, 0x71, 0x31, 0x18, 0x14, 0x30, 0xca, 0xe0, 0x95, 0x65, 0x64, 0x04, 
+            0x00, 0x50, 0xe5, 0xfe, 0x71
+        ]);
+
+        loop {
+            let assembly_body = png.prs_map.get(&assembly_body_id).unwrap();
+            let data = assembly_body.borrow().try_get_data(&mut fm, &png.value_dict, &png.prs_map).unwrap();
+            match data.result {
+                DepResult::Success(data) => {
+                    // panic!("Data retreived: {:?}", data.len())
+                    assert_eq!(idat, data);
+                    break;
+                },
+                DepResult::Incomplete(deps) | DepResult::MightExist(deps) => {
+                    png.get_data(deps.into_iter().collect(), &mut fm).unwrap();
+                },
+                DepResult::DoesNotExist => {
+                    panic!("Data does not exist")
+                }
+            }
+        }
+
+        
+    }
+
+    #[test]
+    fn idat_oi4n2c16() {
+        let (mut png, mut fm) = start_file(r"tests/oi4n2c16.png");
+
+        let assembly_body_id = StructureIdent::new_indexed("idat_assembly".to_string(), vec![2]);
+
+        let idat = BitField::from_vec(vec![
+            0x78, 0x9c, 0xd5, 0x96, 0xc1, 0x0a, 0x83, 0x30, 0x10, 0x44, 0xa7, 0xe0, 0x41, 0x7f, 0xcb, 
+            0x7e, 0xb7, 0xfd, 0xad, 0xf6, 0x96, 0x1e, 0x06, 0x03, 0x92, 0x86, 0x26, 0x66, 0x93, 0xcc, 
+            0x7a, 0x18, 0x86, 0x45, 0xe4, 0x3d, 0xd6, 0xa0, 0x8f, 0x10, 0x42, 0x00, 0x3e, 0x2f, 0xe0, 
+            0x9a, 0xef, 0x64, 0x72, 0x73, 0x7e, 0x18, 0x3d, 0x27, 0x33, 0x5f, 0xce, 0xe2, 0xf3, 0x5a, 
+            0x77, 0xb7, 0x02, 0xeb, 0xce, 0x74, 0x28, 0x70, 0xa2, 0x33, 0x97, 0xf3, 0xed, 0xf2, 0x70, 
+            0x5d, 0xd1, 0x01, 0x60, 0xf3, 0xb2, 0x81, 0x5f, 0xe8, 0xec, 0xf2, 0x02, 0x79, 0x74, 0xa6, 
+            0xb0, 0xc0, 0x3f, 0x74, 0xa6, 0xe4, 0x19, 0x28, 0x43, 0xe7, 0x5c, 0x6c, 0x03, 0x35, 0xe8, 
+            0xec, 0x32, 0x02, 0xf5, 0xe8, 0x4c, 0x01, 0x81, 0xbb, 0xe8, 0xcc, 0xa9, 0x67, 0xa0, 0x0d, 
+            0x9d, 0xf3, 0x49, 0x1b, 0xb0, 0x40, 0x67, 0x1f, 0x2e, 0x60, 0x87, 0xce, 0x1c, 0x28, 0x60, 
+            0x8d, 0x1e, 0x05, 0xf8, 0xc7, 0xee, 0x0f, 0x1d, 0x00, 0xb6, 0x67, 0xe7, 0x0d, 0xf4, 0x44, 
+            0x67, 0xef, 0x26, 0xd0, 0x1f, 0xbd, 0x9b, 0xc0, 0x28, 0xf4, 0x28, 0x60, 0xf7, 0x1d, 0x18, 
+            0x8b, 0xce, 0xfb, 0x8d, 0x36, 0x30, 0x03, 0x9d, 0xbd, 0x59, 0x60, 0x1e, 0x7a, 0xb3, 0xc0, 
+            0x6c, 0xf4, 0x28, 0x50, 0x7f, 0x06, 0x34, 0xd0, 0x39, 0xaf, 0xdc, 0x80, 0x12, 0x3a, 0x7b, 
+            0xb1, 0x80, 0x1e, 0x7a, 0xb1, 0x80, 0x2a, 0x7a, 0x14, 0xc8, 0x9f, 0x01, 0x6d, 0x74, 0xce, 
+            0x33, 0x1b, 0xf0, 0x80, 0xce, 0x9e, 0x08, 0xf8, 0x41, 0x4f, 0x04, 0xbc, 0xa1, 0x33, 0xbf, 
+            0xe6, 0x42, 0xfe, 0x5e
+        ]);
+
+        loop {
+            let assembly_body = png.prs_map.get(&assembly_body_id).unwrap();
+            let data = assembly_body.borrow().try_get_data(&mut fm, &png.value_dict, &png.prs_map).unwrap();
+            match data.result {
+                DepResult::Success(data) => {
+                    // panic!("Data retreived: {:?}", data.len())
+                    assert_eq!(idat, data);
+                    break;
+                },
+                DepResult::Incomplete(deps) | DepResult::MightExist(deps) => {
+                    png.get_data(deps.into_iter().collect(), &mut fm).unwrap();
+                },
+                DepResult::DoesNotExist => {
+                    panic!("Data does not exist")
+                }
+            }
+        }
+
+        
     }
 
     #[test]

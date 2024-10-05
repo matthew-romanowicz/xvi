@@ -1717,6 +1717,11 @@ impl<'a> HexEdit<'a> {
                         self.current_field = Some((rng, true));
                         let s_name = fs.structure_name(struct_id);
                         Some(format!("[{}] Spare", s_name).to_string())
+                    },
+                    FileRegion::Segment(struct_id, rng) => {
+                        self.current_field = Some((rng, true));
+                        let s_name = fs.structure_name(struct_id);
+                        Some(format!("[{}] Segment", s_name).to_string())
                     }
                     _ => todo!()
                 }
