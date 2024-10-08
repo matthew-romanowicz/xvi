@@ -57,6 +57,7 @@ pub struct BinaryField {
 
 use crate::expr::{MyStrSpan, IndexRemap, ExprValue, Expr, ExprEvalError, ParseExprError};
 
+#[derive(Clone)]
 struct ExprWrapper {
     inner: Expr,
     remap: IndexRemap,
@@ -105,11 +106,11 @@ impl ExprWrapper {
         }
     }
 
-    pub fn evaluate<'a>(&self, fname: Option<Rc<String>>, lookup: &dyn Fn(&str) -> Option<ExprValue>, prs_map: &HashMap<StructureIdent, Rc<RefCell<PartiallyResolvedStructure<'a>>>>) -> Result<ExprValue, ExprEvalError> {
-        self.evaluate_with_args(fname, &vec![], lookup, prs_map)
+    pub fn evaluate<'a>(&self, fname: Option<Rc<String>>, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<ExprValue, ExprEvalError> {
+        self.evaluate_with_args(fname, &vec![], lookup)
     }
 
-    pub fn evaluate_with_args<'a>(&self, fname: Option<Rc<String>>, arguments: &Vec<ExprValue>, lookup: &dyn Fn(&str) -> Option<ExprValue>, prs_map: &HashMap<StructureIdent, Rc<RefCell<PartiallyResolvedStructure<'a>>>>) -> Result<ExprValue, ExprEvalError> {
+    pub fn evaluate_with_args<'a>(&self, fname: Option<Rc<String>>, arguments: &Vec<ExprValue>, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<ExprValue, ExprEvalError> {
         match self.inner.evaluate_with_args(arguments, lookup) {
             Ok(ev) => Ok(ev),
             Err(mut err) => {
@@ -125,22 +126,22 @@ impl ExprWrapper {
         }
     }
 
-    pub fn evaluate_expect_position<'a>(&self, fname: Option<Rc<String>>, lookup: &dyn Fn(&str) -> Option<ExprValue>, prs_map: &HashMap<StructureIdent, Rc<RefCell<PartiallyResolvedStructure<'a>>>>) -> Result<BitIndex, ExprEvalError> {
-        match self.evaluate(fname, lookup, prs_map)? {
+    pub fn evaluate_expect_position<'a>(&self, fname: Option<Rc<String>>, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<BitIndex, ExprEvalError> {
+        match self.evaluate(fname, lookup)? {
             ExprValue::Position(bp) => Ok(bp),
             other => Err(ExprEvalError::DataTypeMismatch{found: other.datatype_as_string(), expected: "Position".to_string()})
         }
     }
 
-    pub fn evaluate_expect_integer<'a>(&self, fname: Option<Rc<String>>, lookup: &dyn Fn(&str) -> Option<ExprValue>, prs_map: &HashMap<StructureIdent, Rc<RefCell<PartiallyResolvedStructure<'a>>>>) -> Result<i64, ExprEvalError> {
-        match self.evaluate(fname, lookup, prs_map)? {
+    pub fn evaluate_expect_integer<'a>(&self, fname: Option<Rc<String>>, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<i64, ExprEvalError> {
+        match self.evaluate(fname, lookup)? {
             ExprValue::Integer(i) => Ok(i),
             other => Err(ExprEvalError::DataTypeMismatch{found: other.datatype_as_string(), expected: "Integer".to_string()})
         }
     }
 
-    pub fn evaluate_expect_bool<'a>(&self, fname: Option<Rc<String>>, lookup: &dyn Fn(&str) -> Option<ExprValue>, prs_map: &HashMap<StructureIdent, Rc<RefCell<PartiallyResolvedStructure<'a>>>>) -> Result<bool, ExprEvalError> {
-        match self.evaluate(fname, lookup, prs_map)? {
+    pub fn evaluate_expect_bool<'a>(&self, fname: Option<Rc<String>>, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<bool, ExprEvalError> {
+        match self.evaluate(fname, lookup)? {
             ExprValue::Bool(b) => Ok(b),
             other => Err(ExprEvalError::DataTypeMismatch{found: other.datatype_as_string(), expected: "Bool".to_string()})
         }
@@ -344,34 +345,6 @@ fn convert_xml_symbols(s: &str) -> String {
     out
 }
 
-fn expr_from_xml(s: &MyStrSpan) -> Result<Expr, ParseXmlError> {
-    let mut new: String = s.as_str().to_string();
-    let mut remap = IndexRemap::from_str_span(s);
-    for (from, to) in vec![("&lt;", "<"), ("&gt;", ">"), ("&apos;", "'"), ("&quot;", "\""), ("&amp;", "&")] {
-        let new_remap: IndexRemap;
-        (new, new_remap) = IndexRemap::from_replacement(&new, from, to);
-        remap.extend(new_remap);
-    }
-    match Expr::from_str_span(MyStrSpan::new(0, &new)) {
-        Ok(Expr) => Ok(Expr),
-        Err(err) => {
-            remap = remap.inverted();
-            let mut new_annotations = vec![];
-            for (s, rng) in err.annotations {
-                new_annotations.push((s.clone(), remap.apply_range(rng)));
-            }
-            Err(ParseXmlError{
-                details: err.details,
-                annotations: new_annotations,
-                help: err.help,
-                fname: None,
-                message: None
-            })
-        }
-    }
-
-}
-
 use crate::Endianness;
 use crate::{BinaryFormat, UIntFormat};
 
@@ -559,58 +532,6 @@ impl FieldSpec {
         }
     }
 
-    fn parse(&self, position: BitIndex, fm: &mut crate::hex_edit::FileManager, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<BinaryField, FileSpecError> {
-        let alignment_base = self.alignment_base.evaluate_expect_position(lookup)?;
-        let alignment = self.alignment.evaluate_expect_position(lookup)?;
-        let length = self.length.evaluate_expect_position(lookup)?;
-        let offset = self.offset.evaluate_expect_position(lookup)?;
-
-        let remainder = (&position + &offset - alignment_base).rem_euclid(&alignment);
-        let position = position + offset + remainder;
-
-
-        todo!()
-    }
-
-    fn get_position(&self, initial_position: BitIndex, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<BitIndex, FileSpecError> {
-        let alignment_base = self.alignment_base.evaluate_expect_position(lookup)?;
-        let alignment = self.alignment.evaluate_expect_position(lookup)?;
-        let length = self.length.evaluate_expect_position(lookup)?;
-        let position = initial_position + self.offset.evaluate_expect_position(lookup)?;
-
-        info!("alignment_base={:?}, alignment={:?} length={:?}, position={:?}", alignment_base, alignment, length, position);
-
-        info!("diff: {:?}", &position - &alignment_base);
-
-        let remainder = (&position - &alignment_base).rem_euclid(&alignment);
-
-        info!("remainder: {:?}", remainder);
-        if remainder.is_zero() {
-            Ok(position)
-        } else {
-            Ok(position + alignment - remainder)
-        }
-    }
-
-    fn get_length(&self, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<BitIndex, ExprEvalError> {
-        self.length.evaluate_expect_position(lookup)
-    }
-
-    // A dependency on the section start or end of previous field is implicit
-    fn start_dependencies(&self) -> HashSet<String> {
-        let mut deps = self.offset.vars();
-        deps.extend(self.alignment.vars());
-        deps.extend(self.alignment_base.vars());
-        deps
-    }
-
-    // A dependency on the section start or end of previous field is implicit
-    fn end_dependencies(&self) -> HashSet<String> {
-        let mut deps = self.start_dependencies();
-        deps.extend(self.length.vars());
-        deps
-    }
-
     fn from_xml_object(mut obj: XmlObject) -> Result<FieldSpec, ParseXmlError> {
         if obj.element.as_str() != "field" {
             panic!("Trying to parse field from non-field element")
@@ -763,11 +684,6 @@ impl<T> DependencyReport<T> {
     }
 }
 
-enum ExprOrOther<T> {
-    Expr(Expr),
-    Other(T)
-}
-
 use lazy_static::lazy_static;
 lazy_static! {
     static ref KEY_RE: regex::Regex = regex::Regex::new(r"^(?<structure>\w+)\.(?<attribute>\w+)(?<index>[\d+])?$").unwrap();
@@ -781,7 +697,7 @@ lazy_static! {
 enum LengthPolicy {
     FitContents,
     Expand,
-    Expr(Expr)
+    Expr(ExprWrapper)
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
@@ -1077,9 +993,9 @@ enum PartiallyResolvedStructureType<'a> {
     Segment,
     Addressed{position: Rc<ExprWrapper>, pss: Rc<RefCell<PartiallyResolvedStructure<'a>>>},
     Sequence(Vec<Rc<RefCell<PartiallyResolvedStructure<'a>>>>),
-    Switch{value: Rc<Expr>, cases: Vec<(Rc<ExprWrapper>, Rc<Structure>)>, default: Rc<Structure>, pss: Option<Rc<RefCell<PartiallyResolvedStructure<'a>>>>},
-    Repeat{n: Rc<Expr>, structure: Rc<Structure>, seq: Vec<Rc<RefCell<PartiallyResolvedStructure<'a>>>>, finalized: bool}, // seq is used to store the actual structure instances once "n" is determined
-    RepeatUntil{end: Rc<Expr>, structure: Rc<Structure>, seq: Vec<Rc<RefCell<PartiallyResolvedStructure<'a>>>>, finalized: bool},
+    Switch{value: Rc<ExprWrapper>, cases: Vec<(Rc<ExprWrapper>, Rc<Structure>)>, default: Rc<Structure>, pss: Option<Rc<RefCell<PartiallyResolvedStructure<'a>>>>},
+    Repeat{n: Rc<ExprWrapper>, structure: Rc<Structure>, seq: Vec<Rc<RefCell<PartiallyResolvedStructure<'a>>>>, finalized: bool}, // seq is used to store the actual structure instances once "n" is determined
+    RepeatUntil{end: Rc<ExprWrapper>, structure: Rc<Structure>, seq: Vec<Rc<RefCell<PartiallyResolvedStructure<'a>>>>, finalized: bool},
     Chain{next: Rc<ExprWrapper>, structure: Rc<Structure>, prs: Rc<RefCell<PartiallyResolvedStructure<'a>>>, seq: Vec<Rc<RefCell<PartiallyResolvedStructure<'a>>>>, finalized: bool},
     Assembly{segments: Vec<String>, structure: Rc<Structure>, prs: Rc<RefCell<PartiallyResolvedStructure<'a>>>}
 }
@@ -1105,8 +1021,8 @@ struct PartiallyResolvedStructure<'a> {
     id: StructureIdent,
     original: Rc<Structure>,
     parent_id: StructureIdent,
-    alignment: Expr,
-    alignment_base: Expr,
+    alignment: ExprWrapper,
+    alignment_base: ExprWrapper,
     // start: Option<BitIndex>,
     length: LengthPolicy,
     // end: Option<BitIndex>,
@@ -1692,7 +1608,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
             AbstractIdent::StructureAttr(ref sai) => {
                 if sai.structure == self.id {
                     match sai.attr {
-                        StructureAttrType::Position => self.try_get_position(vd, prs_map),
+                        StructureAttrType::Position => self.try_get_position(vd),
                         StructureAttrType::Align => self.try_get_alignment(vd),
                         StructureAttrType::AlignBase => self.try_get_alignment_base(vd),
                         StructureAttrType::StartPad => self.try_get_start_pad(vd),
@@ -1704,7 +1620,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
                         StructureAttrType::SwitchValue => self.try_get_switch_value(vd),
                         StructureAttrType::SwitchIndex => self.try_get_switch_index(vd, prs_map),
                         StructureAttrType::Repetitions => self.try_get_repetitions(vd, prs_map),
-                        StructureAttrType::SwitchCase(i) => self.try_get_switch_case(i, vd, prs_map),
+                        StructureAttrType::SwitchCase(i) => self.try_get_switch_case(i, vd),
                         StructureAttrType::Break(i) => self.try_get_break(i, vd)
                     }
                 } else {
@@ -1915,25 +1831,59 @@ impl<'a> PartiallyResolvedStructure<'a> {
         }       
     }
 
+    /// Attempts to determine the start position of a field and returns the result as
+    /// a dependency report. The start position is calculated by looking up and summing the 
+    /// field's start pad and position. Accordingly, the dependencies in the dependency report
+    /// will be the position and start pad attributes of the field. 
+    ///
+    /// Note that in this context, "start" is different from "position". "position" refers to
+    /// the location where the field is intended to start, and "start" is the actual location
+    /// where the field starts, accounting for alignment. "start pad" is the difference between
+    /// the two.
+    ///
+    /// If `self` is not a `UnresolvedSection`, then this returns a IdentNotValid error.
     fn try_get_field_start(&self, field_id: FieldIdent, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, FileSpecError> {
+
+        #[cfg(test)] {
+            // Panic during tests if the field does not belong to self.
+            if self.id != field_id.structure {
+                panic!("try_get_field_start called with field that does not belong to self")
+            }
+        }
+
         match self.stype.as_ref() {
             PartiallyResolvedStructureType::UnresolvedSection{initial} => {
 
+                #[cfg(test)] {
+                    // Panic during tests if the field does not exist in the initial SectionSpec
+                    if !initial.id_map.contains_key(&field_id.id) {
+                        panic!("try_get_field_start called with field that belongs to self but is not in self's field list")
+                    }
+                }
+
+                // Get the start pad and position ids to add to the parents list and also 
+                // for the lookup
                 let start_pad_id = field_id.clone().get_attr_ident(FieldAttrType::StartPad);
                 let position_id = field_id.clone().get_attr_ident(FieldAttrType::Position);
 
                 let parents = HashSet::from([start_pad_id.clone().to_abstract(), position_id.clone().to_abstract()]);
 
+                // Attempt to lookup the field's start pad. If it fails, return an incomplete
+                // dependency report
                 let start_pad = match vd.lookup_field_attr(&start_pad_id) {
                     Some(ev) => ev.expect_position()?,
                     None => return Ok(DependencyReport::incomplete(parents))
                 };
         
+                // Attempt to lookup the field's position. If it fails, return an incomplete
+                // dependency report
                 let position = match vd.lookup_field_attr(&position_id) {
                     Some(ev) => ev.expect_position()?,
                     None => return Ok(DependencyReport::incomplete(parents))
                 };
         
+                // Create a successful dependency report with the sum of the position and start
+                // pad, and add those two attributes as parents.
                 let mut dr = DependencyReport::success(ExprValue::Position(position + start_pad));
                 let start_id = field_id.clone().get_attr_ident(FieldAttrType::Start).to_abstract();
                 dr.add_pc_pairs(parents, HashSet::from([start_id]));
@@ -1941,55 +1891,105 @@ impl<'a> PartiallyResolvedStructure<'a> {
 
             },
             _ => {
+                // If self isn't a UnresolvedSection, then it can't have fields. The field_id 
+                // must be invalid.
                 let target_id = field_id.clone().get_attr_ident(FieldAttrType::Start).to_abstract();
                 Err(FileSpecError::IdentNotValid(target_id))
             }
         }       
     }
 
+    /// Attempts to determine the start pad of a field and returns the result as  a dependency 
+    /// report. The start pad is determined by first looking up the following attributes for the 
+    /// field: alignment, alignment-base, and position. Once those values have been acquired, the
+    /// alignment-base is subtracted from the position, and the compliment of the remainder of 
+    /// that difference divided (modulo) by the alignment is the start pad. Accordingly, the 
+    /// dependencies in the dependency report will be the alignment, alignment-base, and position 
+    /// of the field.
+    ///
+    /// Note that in this context, "start" is different from "position". "position" refers to
+    /// the location where the field is intended to start, and "start" is the actual location
+    /// where the field starts, accounting for alignment. "start pad" is the difference between
+    /// the two. The "start" location is the smallest location greater than "position" whose
+    /// difference from the "alignment-base" is divisible by the "alignment".
+    ///
+    /// If `self` is not a `UnresolvedSection`, then this returns a IdentNotValid error.
     fn try_get_field_start_pad(&self, field_id: FieldIdent, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, FileSpecError> {
+
+        #[cfg(test)] {
+            // Panic during tests if the field does not belong to self.
+            if self.id != field_id.structure {
+                panic!("try_get_field_start called with field that does not belong to self")
+            }
+        }
 
         match self.stype.as_ref() {
             PartiallyResolvedStructureType::UnresolvedSection{initial} => {
 
+                #[cfg(test)] {
+                    // Panic during tests if the field does not exist in the initial SectionSpec
+                    if !initial.id_map.contains_key(&field_id.id) {
+                        panic!("try_get_field_start called with field that belongs to self but is not in self's field list")
+                    }
+                }
+
+                // Get the alignment, alignment-base, and position ids to add to the parents list 
+                // and also for the lookup
                 let alignment_id = field_id.clone().get_attr_ident(FieldAttrType::Align);
                 let alignment_base_id = field_id.clone().get_attr_ident(FieldAttrType::AlignBase);
                 let position_id = field_id.clone().get_attr_ident(FieldAttrType::Position);
 
-                let parents = HashSet::from([alignment_id.clone().to_abstract(), alignment_base_id.clone().to_abstract(),
-                                            position_id.clone().to_abstract()]);
+                let parents = HashSet::from([
+                    alignment_id.clone().to_abstract(), 
+                    alignment_base_id.clone().to_abstract(),
+                    position_id.clone().to_abstract()
+                ]);
 
-
+                // Attempt to lookup the field's alignment. If it fails, return an incomplete
+                // dependency report
                 let alignment = match vd.lookup_field_attr(&alignment_id) {
                     Some(ev) => ev.expect_position()?,
                     None => return Ok(DependencyReport::incomplete(parents))
                 };
         
+                // Attempt to lookup the field's alignment-base. If it fails, return an incomplete
+                // dependency report
                 let alignment_base = match vd.lookup_field_attr(&alignment_base_id) {
                     Some(ev) => ev.expect_position()?,
                     None => return Ok(DependencyReport::incomplete(parents))
                 };
         
+                // Attempt to lookup the field's position. If it fails, return an incomplete
+                // dependency report
                 let position = match vd.lookup_field_attr(&position_id) {
                     Some(ev) => ev.expect_position()?,
                     None => return Ok(DependencyReport::incomplete(parents))
                 };
         
+                // The `remainder` here is the offset from the position to the largest aligned location
+                // less than the position. But we want the offset to the smallest aligned location 
+                // that is greater than the position
                 let remainder = (&position - &alignment_base).rem_euclid(&alignment);
         
-                let sp = if remainder.is_zero() {
+                // If the remainder is zero, then the position is already aligned and the start pad is 
+                // zero. Otherwise, it's the compliment of the remainder.
+                let start_pad = if remainder.is_zero() {
                     BitIndex::zero()
                 } else {
                     alignment - remainder
                 };
         
-                let mut dr = DependencyReport::success(ExprValue::Position(sp));
+                // Create a successful dependency report with the start pad value that was determined, 
+                // and add those three attributes as parents.
+                let mut dr = DependencyReport::success(ExprValue::Position(start_pad));
                 let start_pad_id = field_id.clone().get_attr_ident(FieldAttrType::StartPad).to_abstract();
                 dr.add_pc_pairs(parents, HashSet::from([start_pad_id]));
                 Ok(dr)
 
             },
             _ => {
+                // If self isn't a UnresolvedSection, then it can't have fields. The field_id 
+                // must be invalid.
                 let target_id = field_id.clone().get_attr_ident(FieldAttrType::StartPad).to_abstract();
                 Err(FileSpecError::IdentNotValid(target_id))
             }
@@ -2192,7 +2192,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
         if self.original.def_fields.contains_key(&field_id.id) {
             match &self.original.def_fields[&field_id.id] {
                 DefField::Search{start, ..} => {
-                    match start.evaluate_expect_position(&|alias| {self.lookup_str(&vd, alias)}) {
+                    match start.evaluate_expect_position(self.fname.clone(), &|alias| {self.lookup_str(&vd, alias)}) {
                         Ok(value) => {
                             let mut dr = DependencyReport::success(ExprValue::Position(value));
                             let search_start_id = field_id.clone().get_attr_ident(FieldAttrType::SearchStart);
@@ -2214,7 +2214,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
         if self.original.def_fields.contains_key(&field_id.id) {
             match &self.original.def_fields[&field_id.id] {
                 DefField::Search{n, ..} => {
-                    match n.evaluate_expect_integer(&|alias| {self.lookup_str(&vd, alias)}) {
+                    match n.evaluate_expect_integer(self.fname.clone(), &|alias| {self.lookup_str(&vd, alias)}) {
                         Ok(value) => {
                             let mut dr = DependencyReport::success(ExprValue::Integer(value));
                             let search_n_id = field_id.clone().get_attr_ident(FieldAttrType::SearchN);
@@ -2236,7 +2236,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
         if self.original.def_fields.contains_key(&field_id.id) {
             match &self.original.def_fields[&field_id.id] {
                 DefField::Anchor{offset} => {
-                    match offset.evaluate_expect_position(&|alias| {self.lookup_str(&vd, alias)}) {
+                    match offset.evaluate_expect_position(self.fname.clone(), &|alias| {self.lookup_str(&vd, alias)}) {
                         Ok(value) => {
                             let mut dr = DependencyReport::success(ExprValue::Position(value));
                             let anchor_offset_id = field_id.clone().get_attr_ident(FieldAttrType::AnchorOffset);
@@ -2488,7 +2488,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
         match self.stype.as_ref() {
             PartiallyResolvedStructureType::Switch{value, ..} => {
                 let parents = self.convert_expr_vars(value.vars())?;
-                match value.evaluate(&|alias| {self.lookup_str(&vd, alias)}) {
+                match value.evaluate(self.fname.clone(), &|alias| {self.lookup_str(&vd, alias)}) {
                     Ok(v) => {
 
                         // let mut input = String::new();
@@ -2512,7 +2512,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
         }
     }
 
-    fn try_get_switch_case(&self, i: usize, vd: &ValueDictionary, prs_map: &HashMap<StructureIdent, Rc<RefCell<PartiallyResolvedStructure<'a>>>>) -> Result<DependencyReport<ExprValue>, FileSpecError> {
+    fn try_get_switch_case(&self, i: usize, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, FileSpecError> {
         // info!("In try_get_switch_case");
         match self.stype.as_ref() {
             PartiallyResolvedStructureType::Switch{cases, ..} => {
@@ -2528,7 +2528,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
                         None => return Ok(DependencyReport::incomplete(parents))
                     };
 
-                    match expr.evaluate_with_args(self.fname.clone(), &vec![arg], &|alias| {self.lookup_str(&vd, alias)}, prs_map) {
+                    match expr.evaluate_with_args(self.fname.clone(), &vec![arg], &|alias| {self.lookup_str(&vd, alias)}) {
                         Ok(v) => {
 
                             // let mut input = String::new();
@@ -2544,7 +2544,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
                         Err(err) => Err(FileSpecError::from(err))
                     }
                 } else {
-                    panic!("Switch case out of bounds: {}", i);
+                    error!("Switch case out of bounds: {}", i);
                     Ok(DependencyReport::does_not_exist())
                 }
 
@@ -2655,7 +2655,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
 
         for b in &self.original.breaks {
             let expr = &b.condition;
-            match expr.evaluate(&|alias| {last_prs.borrow().lookup_str(&vd, alias)}) {
+            match expr.evaluate(self.fname.clone(), &|alias| {last_prs.borrow().lookup_str(&vd, alias)}) {
                 Ok(v) => {
 
                     // let mut input = String::new();
@@ -2689,7 +2689,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
 
         let n_value = match self.stype.as_ref() { // Need this for the borrow checker
             PartiallyResolvedStructureType::Repeat{n, ..} => {
-                Some(n.evaluate_expect_integer(&|alias| {self.lookup_str(&vd, alias)}))
+                Some(n.evaluate_expect_integer(self.fname.clone(), &|alias| {self.lookup_str(&vd, alias)}))
             },
             _ => {
                 None
@@ -2834,7 +2834,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
 
                 // let lookup = last_member.borrow().get_lookup_fn(vd);
 
-                match next.evaluate_expect_position(fname, &|alias| {last_member.borrow().lookup_str(&vd, alias)}, prs_map) {
+                match next.evaluate_expect_position(fname, &|alias| {last_member.borrow().lookup_str(&vd, alias)}) {
                     Ok(v) => {
                         // panic!("Next position: {:?} from {:?}", v, last_member.borrow().id);
                         if !seq.is_empty() {
@@ -2864,10 +2864,10 @@ impl<'a> PartiallyResolvedStructure<'a> {
         }
     }
 
-    fn try_get_position(&self, vd: &ValueDictionary, prs_map: &HashMap<StructureIdent, Rc<RefCell<PartiallyResolvedStructure<'a>>>>) -> Result<DependencyReport<ExprValue>, FileSpecError> {
+    fn try_get_position(&self, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, FileSpecError> {
         match self.stype.as_ref() {
             PartiallyResolvedStructureType::Addressed{position, ..} => {
-                match position.evaluate_expect_position(self.fname.clone(), &|alias| {self.lookup_str(&vd, alias)}, prs_map) {
+                match position.evaluate_expect_position(self.fname.clone(), &|alias| {self.lookup_str(&vd, alias)}) {
                     Ok(value) => {
                         let mut dr = DependencyReport::success(ExprValue::Position(value));
                         let position_id = self.id.get_attr_ident(StructureAttrType::Position);
@@ -2887,7 +2887,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
     }
 
     fn try_get_alignment(&self, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, FileSpecError> {
-        match self.alignment.evaluate_expect_position(&|alias| {self.lookup_str(&vd, alias)}) {
+        match self.alignment.evaluate_expect_position(self.fname.clone(), &|alias| {self.lookup_str(&vd, alias)}) {
             Ok(value) => {
                 let mut dr = DependencyReport::success(ExprValue::Position(value));
                 let alignment_id = self.id.get_attr_ident(StructureAttrType::Align).to_abstract();
@@ -2900,7 +2900,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
     }
 
     fn try_get_alignment_base(&self, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, FileSpecError> {
-        match self.alignment_base.evaluate_expect_position(&|alias| {self.lookup_str(&vd, alias)}) {
+        match self.alignment_base.evaluate_expect_position(self.fname.clone(), &|alias| {self.lookup_str(&vd, alias)}) {
             Ok(value) => {
                 let mut dr = DependencyReport::success(ExprValue::Position(value));
                 let alignment_base_id = self.id.get_attr_ident(StructureAttrType::AlignBase).to_abstract();
@@ -2987,7 +2987,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
             LengthPolicy::Expr(expr) => {
                 let parents = self.convert_expr_vars(expr.vars())?;
                 
-                match expr.evaluate(&|alias| {self.lookup_str(&vd, alias)}) {
+                match expr.evaluate(self.fname.clone(), &|alias| {self.lookup_str(&vd, alias)}) {
                     Ok(v) => {
                         let mut dr = DependencyReport::success(v);
                         let length_id = self.id.get_attr_ident(StructureAttrType::Length).to_abstract();
@@ -3241,7 +3241,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
                         return Ok(DependencyReport::does_not_exist())
                     },
                     LengthPolicy::Expr(expr) => {
-                        match expr.evaluate_expect_position(&|alias| {self.lookup_str(&vd, alias)}) {
+                        match expr.evaluate_expect_position(self.fname.clone(), &|alias| {self.lookup_str(&vd, alias)}) {
                             Ok(value) => {
                                 let mut dr = DependencyReport::success(ExprValue::Position(value));
                                 let contents_length_id = self.id.get_attr_ident(StructureAttrType::ContentsLength).to_abstract();
@@ -3467,7 +3467,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
     fn try_get_end(&self, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, FileSpecError> {
         match self.stype.as_ref() {
             PartiallyResolvedStructureType::RepeatUntil{end, ..} => {
-                match end.evaluate_expect_position(&|alias| {self.lookup_str(&vd, alias)}) {
+                match end.evaluate_expect_position(self.fname.clone(), &|alias| {self.lookup_str(&vd, alias)}) {
                     Ok(value) => {
                         let mut dr = DependencyReport::success(ExprValue::Position(value));
                         let end_id = self.id.get_attr_ident(StructureAttrType::End).to_abstract();
@@ -3790,8 +3790,8 @@ impl<'a> XmlObject<'a> {
 
 #[derive(Clone)]
 enum DefField {
-    Search{start: Expr, find: String, n: Expr},
-    Anchor{offset: Expr},
+    Search{start: ExprWrapper, find: String, n: ExprWrapper},
+    Anchor{offset: ExprWrapper},
     Compute(Expr)
 }
 
@@ -3799,18 +3799,18 @@ impl DefField {
     fn from_xml_object(mut obj: XmlObject) -> Result<DefField, ParseXmlError> {
         match obj.element.as_str() {
             "search" => {
-                let start = Expr::from_str(&convert_xml_symbols(obj.attrs.remove("start").unwrap().as_str()))?;
+                let start = ExprWrapper::from_xml_str_span(&obj.remove_required_attr("start")?)?;
                 let find = convert_xml_symbols(obj.attrs.remove("find").unwrap().as_str());
                 let n = match obj.attrs.remove("n") {
-                    Some(expr) => Expr::from_str(&convert_xml_symbols(expr.as_str()))?,
-                    None => Expr::value(ExprValue::Integer(0))
+                    Some(expr) => ExprWrapper::from_xml_str_span(&expr)?,
+                    None => ExprWrapper::from_default(Expr::value(ExprValue::Integer(0)))
                 };
                 Ok(DefField::Search{start, find, n})
             },
             "anchor" => {
                 let offset = match obj.attrs.remove("offset") {
-                    Some(expr) => Expr::from_str(&convert_xml_symbols(expr.as_str()))?,
-                    None => Expr::value(ExprValue::Position(BitIndex::zero()))
+                    Some(expr) => ExprWrapper::from_xml_str_span(&expr)?,
+                    None => ExprWrapper::from_default(Expr::value(ExprValue::Position(BitIndex::zero())))
                 };
                 Ok(DefField::Anchor{offset})
             },
@@ -3821,7 +3821,7 @@ impl DefField {
 
 #[derive(Clone)]
 struct Break {
-    condition: Expr
+    condition: ExprWrapper
 }
 
 #[derive(Clone)]
@@ -3830,9 +3830,9 @@ enum StructureType {
     Segment,
     Addressed{position: Rc<ExprWrapper>, content: Rc<Structure>},
     Sequence(Vec<Rc<Structure>>),
-    Switch{value: Rc<Expr>, cases: Vec<(Rc<ExprWrapper>, Rc<Structure>)>, default: Rc<Structure>},
-    Repeat{n: Rc<Expr>, structure: Rc<Structure>},
-    RepeatUntil{end: Rc<Expr>, structure: Rc<Structure>},
+    Switch{value: Rc<ExprWrapper>, cases: Vec<(Rc<ExprWrapper>, Rc<Structure>)>, default: Rc<Structure>},
+    Repeat{n: Rc<ExprWrapper>, structure: Rc<Structure>},
+    RepeatUntil{end: Rc<ExprWrapper>, structure: Rc<Structure>},
     Chain{next: Rc<ExprWrapper>, structure: Rc<Structure>},
     Assembly{segments: Vec<String>, structure: Rc<Structure>}
 }
@@ -3841,8 +3841,8 @@ enum StructureType {
 pub struct Structure {
     id: String,
     name: String,
-    alignment: Expr,
-    alignment_base: Expr,
+    alignment: ExprWrapper,
+    alignment_base: ExprWrapper,
     length: LengthPolicy,
     exports: HashMap<String, Option<Expr>>,
     def_fields: HashMap<String, DefField>,
@@ -3890,8 +3890,8 @@ impl Structure {
     fn wrap_addressed(inner: Rc<Structure>, position: Expr) -> Structure {
         let id = inner.id.clone() + "#wrapper";
         let name = inner.name.clone();
-        let alignment = Expr::value(ExprValue::Position(BitIndex::bits(1))); // Smallest increment possible
-        let alignment_base = Expr::value(ExprValue::Position(BitIndex::zero())); // Doesn't matter
+        let alignment = ExprWrapper::from_default(Expr::value(ExprValue::Position(BitIndex::bits(1)))); // Smallest increment possible
+        let alignment_base = ExprWrapper::from_default(Expr::value(ExprValue::Position(BitIndex::zero()))); // Doesn't matter
         let length = LengthPolicy::FitContents; // This won't work if inner's length is Expand, but that isn't really valid for chain children anyway
         let exports = inner.exports.clone(); // Need to have the same exports so they can tunnel through
         let def_fields = HashMap::new();
@@ -3943,12 +3943,12 @@ impl Structure {
         let length = match obj.attrs.remove("length-policy") {
             None => match obj.attrs.remove("length") {
                 None => LengthPolicy::FitContents,
-                Some(s) => LengthPolicy::Expr(Expr::from_str(&convert_xml_symbols(s.as_str()))?)
+                Some(s) => LengthPolicy::Expr(ExprWrapper::from_xml_str_span(&s)?)
             },
             Some(s) => match convert_xml_symbols(s.as_str()).as_str() {
                 "expr" => match obj.attrs.remove("length") {
                     None => panic!("Length policy is expr but no length specified"),
-                    Some(s) => LengthPolicy::Expr(Expr::from_str(&convert_xml_symbols(s.as_str()))?)
+                    Some(s) => LengthPolicy::Expr(ExprWrapper::from_xml_str_span(&s)?)
                 },
                 "expand" => LengthPolicy::Expand,
                 "fit" => LengthPolicy::FitContents,
@@ -3964,12 +3964,12 @@ impl Structure {
             None => String::new()
         };
         let alignment = match obj.attrs.remove("align") {
-            Some(s) => Expr::from_str(&convert_xml_symbols(s.as_str()))?,
-            None => Expr::value(ExprValue::Position(BitIndex::bytes(1)))
+            Some(s) => ExprWrapper::from_xml_str_span(&s)?,
+            None => ExprWrapper::from_default(Expr::value(ExprValue::Position(BitIndex::bytes(1))))
         };
         let alignment_base = match obj.attrs.remove("align-base") {
-            Some(s) => Expr::from_str(&convert_xml_symbols(s.as_str()))?,
-            None => Expr::value(ExprValue::Position(BitIndex::zero()))
+            Some(s) => ExprWrapper::from_xml_str_span(&s)?,
+            None => ExprWrapper::from_default(Expr::value(ExprValue::Position(BitIndex::zero())))
         };
 
         // Go through children looking for expors, def_fields, and breaks which are common for must structural
@@ -4002,8 +4002,9 @@ impl Structure {
                 },
                 "break" => {
                     // let condition = Expr::from_str(&convert_xml_symbols(child.attrs.remove("condition").unwrap().as_str()))?;
-                    let condition_ss = child.attrs.remove("condition").unwrap();
-                    let condition = Expr::from_str_span(MyStrSpan::new(condition_ss.start(), condition_ss.as_str()))?;
+                    // let condition_ss = child.attrs.remove("condition").unwrap();
+                    // let condition = Expr::from_str_span(MyStrSpan::new(condition_ss.start(), condition_ss.as_str()))?;
+                    let condition = ExprWrapper::from_xml_str_span(&child.remove_required_attr("condition")?)?;
                     breaks.push(Break{condition});
                 },
                 _ => children.push(child)
@@ -4079,7 +4080,8 @@ impl Structure {
                 stype = StructureType::Sequence(seq);
             },
             "switch" => {
-                let value = Expr::from_str(&convert_xml_symbols(obj.attrs.remove("value").unwrap().as_str()))?;
+                // TODO: Make it some that value is not required
+                let value = ExprWrapper::from_xml_str_span(&obj.remove_required_attr("value")?)?;
                 let mut cases = vec![];
                 let mut default = None;
                 for mut child in children {
@@ -4127,11 +4129,11 @@ impl Structure {
                     match (obj.attrs.remove("until"), obj.attrs.remove("n")) {
                         (None, None) => panic!("'until' or 'n' must be specified for 'repeat' element"),
                         (Some(expr), None) => {
-                            let end = Expr::from_str(&convert_xml_symbols(expr.as_str()))?;
+                            let end = ExprWrapper::from_xml_str_span(&expr)?;
                             stype = StructureType::RepeatUntil{end: Rc::new(end), structure};
                         },
                         (None, Some(expr)) => {
-                            let n = Expr::from_str(&convert_xml_symbols(expr.as_str()))?;
+                            let n = ExprWrapper::from_xml_str_span(&expr)?;
                             stype = StructureType::Repeat{n: Rc::new(n), structure};
                         },
                         (Some(_), Some(_)) => panic!("Both 'until' and 'n' specified for 'repeat' element. One must be removed.")
@@ -4349,8 +4351,6 @@ impl Structure {
                         },
                         _ => todo!("{:?}", err)
                     }
-                    todo!("{:?}", err)
-                    // panic!("Malformed XML");
                 }
                 _ => panic!("Unrecognized Token: {:?}", token)
             }
@@ -4499,8 +4499,6 @@ impl ValueDictionary {
 
 #[derive(Default)]
 struct DepGraph {
-    lookup_self: Vec<usize>,
-    lookup_path: Vec<String>,
     dep_roots: HashSet<AbstractIdent>,
     dep_map: HashMap<AbstractIdent, Rc<RefCell<DepNode>>>
 }
@@ -4508,8 +4506,6 @@ struct DepGraph {
 impl DepGraph {
     fn new() -> DepGraph {
         DepGraph {
-            lookup_self: Vec::new(),
-            lookup_path: Vec::new(),
             dep_roots: HashSet::new(),
             dep_map: HashMap::new()
         }
@@ -4600,8 +4596,6 @@ pub enum FileRegion {
 }
 
 pub struct FileMap<'a> {
-    // structure: Structure,
-    fields: Vec<UnparsedBinaryField>,
     dep_graph: DepGraph,
     value_dict: ValueDictionary,
     prs: Rc<RefCell<PartiallyResolvedStructure<'a>>>,
@@ -4619,8 +4613,6 @@ impl<'a> FileMap<'a> {
         prs.borrow_mut().initialize_inherited_monikers(&prs_map, initial_monikers);
 
         FileMap {
-            // structure,
-            fields: vec![],
             dep_graph: DepGraph::new(),
             value_dict: ValueDictionary::new(),
             prs,
@@ -4628,7 +4620,7 @@ impl<'a> FileMap<'a> {
         }
     }
 
-    pub fn region_at(&mut self, index: BitIndex, fm: &mut crate::FileManager) -> FileRegion {
+    pub fn region_at(&mut self, index: BitIndex, fm: &mut crate::FileManager) -> Result<FileRegion, FileSpecError> {
         let temp_result: FileRegion;
         loop {
             let vd = std::mem::take(&mut self.value_dict);
@@ -4641,11 +4633,11 @@ impl<'a> FileMap<'a> {
                             temp_result = fr;
                             break;
                         },
-                        _ => return fr
+                        _ => return Ok(fr)
                     }
                 },
                 DepResult::Incomplete(deps) | DepResult::MightExist(deps) => {
-                    self.get_data(deps.into_iter().collect(), fm);
+                    self.get_data(deps.into_iter().collect(), fm)?;
                 },
                 DepResult::DoesNotExist => panic!("Field does not exist!"),
             }
@@ -4663,7 +4655,7 @@ impl<'a> FileMap<'a> {
                     self.value_dict = vd;
                     match dr.result {
                         DepResult::Success(fr) => {
-                            return fr
+                            return Ok(fr)
                         },
                         DepResult::Incomplete(deps) | DepResult::MightExist(deps) => {
                             targets.extend(deps);
@@ -4674,9 +4666,9 @@ impl<'a> FileMap<'a> {
                 }
             }
             if targets.is_empty() {
-                return temp_result
+                return Ok(temp_result)
             }
-            self.get_data(targets, fm);
+            self.get_data(targets, fm)?;
             targets = vec![];
         }
     }
@@ -4992,7 +4984,7 @@ impl<'a> FileMap<'a> {
                                 dg.add_dependancies(target, deps.into_iter().collect());
                             },
                             DepResult::DoesNotExist => {
-                                todo!("Field Attribute does not exist: {:?}", target);
+                                error!("Field Attribute does not exist: {:?}", target);
                                 return Err(FileSpecError::IdentNotFound(target))
                                 
                             }
@@ -5281,7 +5273,7 @@ mod png_tests {
         let s = Rc::new(make_png());
         let mut png = FileMap::new(s);
         let mut fm = crate::FileManager::new(filename.to_string(), crate::FileManagerType::ReadOnly, false).unwrap();
-        png.initialize(&mut fm);
+        png.initialize(&mut fm).unwrap();
         (png, fm)
     }
 
@@ -5307,7 +5299,7 @@ mod png_tests {
             results.push(ExprValue::Integer(chunk.2 as i64));
         }
 
-        png.get_data(targets.clone(), fm);
+        png.get_data(targets.clone(), fm).unwrap();
 
         for (target, result) in targets.iter().zip(results.into_iter()) {
             assert_eq!(png.value_dict.lookup_any(&target).unwrap(), result);
@@ -5335,7 +5327,7 @@ mod png_tests {
             ihdr_interlace_method.clone(),
         ];
 
-        png.get_data(targets.clone(), fm);
+        png.get_data(targets.clone(), fm).unwrap();
 
         assert_eq!(png.value_dict.lookup_any(&ihdr_width).unwrap(), ExprValue::Integer(ihdr.width as i64));
         assert_eq!(png.value_dict.lookup_any(&ihdr_height).unwrap(), ExprValue::Integer(ihdr.height as i64));
@@ -5356,7 +5348,7 @@ mod png_tests {
             plte_reps.clone()
         ];
 
-        png.get_data(targets.clone(), fm);
+        png.get_data(targets.clone(), fm).unwrap();
 
         assert_eq!(png.value_dict.lookup_any(&plte_reps).unwrap(), ExprValue::Integer(rgb.len() as i64));
 
@@ -5368,7 +5360,7 @@ mod png_tests {
             targets.push(plte_pallette.clone().get_field_ident("plte_blue".to_string()).to_abstract());
         }
 
-        png.get_data(targets.clone(), fm);
+        png.get_data(targets.clone(), fm).unwrap();
 
         let mut target_index = 0;
         for (r, g, b) in rgb {
@@ -5390,7 +5382,7 @@ mod png_tests {
                     trns_gray.clone()
                 ];
 
-                png.get_data(targets.clone(), fm);
+                png.get_data(targets.clone(), fm).unwrap();
 
                 assert_eq!(png.value_dict.lookup_any(&trns_gray).unwrap(), ExprValue::Integer(k as i64));
             },
@@ -5406,7 +5398,7 @@ mod png_tests {
                     trns_blue.clone()
                 ];
 
-                png.get_data(targets.clone(), fm);
+                png.get_data(targets.clone(), fm).unwrap();
 
                 assert_eq!(png.value_dict.lookup_any(&trns_red).unwrap(), ExprValue::Integer(r as i64));
                 assert_eq!(png.value_dict.lookup_any(&trns_green).unwrap(), ExprValue::Integer(g as i64));
@@ -5420,7 +5412,7 @@ mod png_tests {
                     trns_reps.clone()
                 ];
 
-                png.get_data(targets.clone(), fm);
+                png.get_data(targets.clone(), fm).unwrap();
 
                 assert_eq!(png.value_dict.lookup_any(&trns_reps).unwrap(), ExprValue::Integer(v.len() as i64));
 
@@ -5431,7 +5423,7 @@ mod png_tests {
                     targets.push(trns_alpha)
                 }
 
-                png.get_data(targets.clone(), fm);
+                png.get_data(targets.clone(), fm).unwrap();
 
                 for (target, alpha) in targets.iter().zip(v.into_iter()) {
                     assert_eq!(png.value_dict.lookup_any(target).unwrap(), ExprValue::Integer(alpha as i64));
@@ -5448,7 +5440,7 @@ mod png_tests {
             gama_gamma.clone()
         ];
 
-        png.get_data(targets.clone(), fm);
+        png.get_data(targets.clone(), fm).unwrap();
 
         assert_eq!(png.value_dict.lookup_any(&gama_gamma).unwrap(), ExprValue::Integer(gamma as i64));
     }
@@ -5463,7 +5455,7 @@ mod png_tests {
                     sbit_gray.clone()
                 ];
 
-                png.get_data(targets.clone(), fm);
+                png.get_data(targets.clone(), fm).unwrap();
 
                 assert_eq!(png.value_dict.lookup_any(&sbit_gray).unwrap(), ExprValue::Integer(k as i64));
             },
@@ -5479,7 +5471,7 @@ mod png_tests {
                     sbit_blue.clone()
                 ];
 
-                png.get_data(targets.clone(), fm);
+                png.get_data(targets.clone(), fm).unwrap();
 
                 assert_eq!(png.value_dict.lookup_any(&sbit_red).unwrap(), ExprValue::Integer(r as i64));
                 assert_eq!(png.value_dict.lookup_any(&sbit_green).unwrap(), ExprValue::Integer(g as i64));
@@ -5495,7 +5487,7 @@ mod png_tests {
                     sbit_alpha.clone()
                 ];
 
-                png.get_data(targets.clone(), fm);
+                png.get_data(targets.clone(), fm).unwrap();
 
                 assert_eq!(png.value_dict.lookup_any(&sbit_gray).unwrap(), ExprValue::Integer(k as i64));
                 assert_eq!(png.value_dict.lookup_any(&sbit_alpha).unwrap(), ExprValue::Integer(a as i64));
@@ -5514,7 +5506,7 @@ mod png_tests {
                     sbit_alpha.clone()
                 ];
 
-                png.get_data(targets.clone(), fm);
+                png.get_data(targets.clone(), fm).unwrap();
 
                 assert_eq!(png.value_dict.lookup_any(&sbit_red).unwrap(), ExprValue::Integer(r as i64));
                 assert_eq!(png.value_dict.lookup_any(&sbit_green).unwrap(), ExprValue::Integer(g as i64));
@@ -5534,7 +5526,7 @@ mod png_tests {
                     bkgd_gray.clone()
                 ];
 
-                png.get_data(targets.clone(), fm);
+                png.get_data(targets.clone(), fm).unwrap();
 
                 assert_eq!(png.value_dict.lookup_any(&bkgd_gray).unwrap(), ExprValue::Integer(k as i64));
             },
@@ -5550,7 +5542,7 @@ mod png_tests {
                     bkgd_blue.clone()
                 ];
 
-                png.get_data(targets.clone(), fm);
+                png.get_data(targets.clone(), fm).unwrap();
 
                 assert_eq!(png.value_dict.lookup_any(&bkgd_red).unwrap(), ExprValue::Integer(r as i64));
                 assert_eq!(png.value_dict.lookup_any(&bkgd_green).unwrap(), ExprValue::Integer(g as i64));
@@ -5564,7 +5556,7 @@ mod png_tests {
                     bkgd_alpha.clone()
                 ];
 
-                png.get_data(targets.clone(), fm);
+                png.get_data(targets.clone(), fm).unwrap();
 
                 assert_eq!(png.value_dict.lookup_any(&bkgd_alpha).unwrap(), ExprValue::Integer(a as i64));
             }
@@ -5584,7 +5576,7 @@ mod png_tests {
             splt_reps.clone()
         ];
 
-        png.get_data(targets.clone(), fm);
+        png.get_data(targets.clone(), fm).unwrap();
 
         assert_eq!(png.value_dict.lookup_any(&splt_name).unwrap(), ExprValue::String(name.to_string()));
         assert_eq!(png.value_dict.lookup_any(&splt_depth).unwrap(), ExprValue::Integer(depth as i64));
@@ -5600,7 +5592,7 @@ mod png_tests {
             targets.push(splt_pallette.get_field_ident("splt_freq".to_string()).to_abstract());
         }
 
-        png.get_data(targets.clone(), fm);
+        png.get_data(targets.clone(), fm).unwrap();
 
         let mut target_index = 0;
         for (r, g, b, a, f) in rgbaf {
@@ -5622,7 +5614,7 @@ mod png_tests {
             hist_reps.clone()
         ];
 
-        png.get_data(targets.clone(), fm);
+        png.get_data(targets.clone(), fm).unwrap();
 
         assert_eq!(png.value_dict.lookup_any(&hist_reps).unwrap(), ExprValue::Integer(freqs.len() as i64));
 
@@ -5632,7 +5624,7 @@ mod png_tests {
             targets.push(hist_entry.get_field_ident("hist_freq".to_string()).to_abstract());
         }
 
-        png.get_data(targets.clone(), fm);
+        png.get_data(targets.clone(), fm).unwrap();
 
         for (target, f) in targets.iter().zip(freqs.into_iter()) {
             assert_eq!(png.value_dict.lookup_any(target).unwrap(), ExprValue::Integer(f as i64));
@@ -5659,7 +5651,7 @@ mod png_tests {
             time_second.clone(),
         ];
 
-        png.get_data(targets.clone(), fm);
+        png.get_data(targets.clone(), fm).unwrap();
 
         assert_eq!(png.value_dict.lookup_any(&time_year).unwrap(), ExprValue::Integer(time.year as i64));
         assert_eq!(png.value_dict.lookup_any(&time_month).unwrap(), ExprValue::Integer(time.month as i64));
@@ -5677,7 +5669,7 @@ mod png_tests {
 
         let targets = vec![ifd0_reps.clone()];
 
-        png.get_data(targets.clone(), fm);
+        png.get_data(targets.clone(), fm).unwrap();
 
         assert_eq!(png.value_dict.lookup_any(&ifd0_reps).unwrap(), ExprValue::Integer(ifd0.len() as i64));
 
@@ -5694,7 +5686,7 @@ mod png_tests {
                 ifd_format.clone(),
                 ifd_num.clone()
             ];
-            png.get_data(targets.clone(), fm);
+            png.get_data(targets.clone(), fm).unwrap();
             assert_eq!(png.value_dict.lookup_any(&ifd_tag).unwrap(), ExprValue::Integer(ifd.tag as i64));
             assert_eq!(png.value_dict.lookup_any(&ifd_format).unwrap(), ExprValue::Integer(ifd.data.format() as i64));
             assert_eq!(png.value_dict.lookup_any(&ifd_num).unwrap(), ExprValue::Integer(ifd.data.num() as i64));
@@ -5714,14 +5706,14 @@ mod png_tests {
                         let ifd_entry_value = ifd_entry_data.get_field_ident("exif_ifd_ascii".to_string()).to_abstract();
                         targets.push(ifd_entry_addr.clone());
                         targets.push(ifd_entry_value.clone());
-                        png.get_data(targets.clone(), fm);
+                        png.get_data(targets.clone(), fm).unwrap();
                         assert_eq!(png.value_dict.lookup_any(&ifd_entry_addr).unwrap(), ExprValue::Integer(addr as i64));
                         assert_eq!(png.value_dict.lookup_any(&ifd_entry_value).unwrap(), ExprValue::String(s.clone()));
                     } else {
                         // let ifd_entry_data = StructureIdent::new_indexed("exif_ifd_ascii_body".to_string(), vec![1, index, 1, 0, 1, 0, 1, i, 1, 0, 0]);
                         let ifd_entry_data = ifd_entry_body.get_child_ident("exif_ifd_ascii_body".to_string(), vec![0, 0]);
                         targets.push(ifd_entry_data.get_field_ident("exif_ifd_ascii".to_string()).to_abstract());
-                        png.get_data(targets.clone(), fm);
+                        png.get_data(targets.clone(), fm).unwrap();
                         assert_eq!(png.value_dict.lookup_any(&targets[0]).unwrap(), ExprValue::String(s.clone()));
                     }
                 },
@@ -5730,18 +5722,18 @@ mod png_tests {
                         let ifd_entry_addr_section = ifd_entry_body.get_child_ident("exif_ifd_address_u16_section".to_string(), vec![0, 0, 0]);
                         let ifd_entry_addr = ifd_entry_addr_section.get_field_ident("exif_ifd_address_u16".to_string()).to_abstract();
                         targets.push(ifd_entry_addr);
-                        for (j, x) in v.iter().enumerate() {
+                        for j in 0..v.len() {
                             let ifd_entry_data = ifd_entry_body.get_child_ident("exif_ifd_u16_body_addressed".to_string(), vec![0, 0, 1, 0, j]);
                             let ifd_entry_value = ifd_entry_data.get_field_ident("exif_ifd_u16".to_string()).to_abstract();
                             targets.push(ifd_entry_value);
                         }
-                        png.get_data(targets.clone(), fm);
+                        png.get_data(targets.clone(), fm).unwrap();
                         assert_eq!(png.value_dict.lookup_any(&targets[0]).unwrap(), ExprValue::Integer(addr as i64));
                         for (target, x) in targets.iter().skip(1).zip(v.iter()) {
                             assert_eq!(png.value_dict.lookup_any(&target).unwrap(), ExprValue::Integer(*x as i64));
                         }
                     } else {
-                        for (j, x) in v.iter().enumerate() {
+                        for j in 0..v.len() {
                             let field_tag = match ifd.tag {
                                 259 => "exif_compression".to_string(),
                                 _ => "exif_ifd_u16".to_string()
@@ -5749,7 +5741,7 @@ mod png_tests {
                             let ifd_entry_data = ifd_entry_body.get_child_ident("exif_ifd_u16_body".to_string(), vec![0, 0, 0, j]);
                             targets.push(ifd_entry_data.get_field_ident(field_tag).to_abstract());
                         }
-                        png.get_data(targets.clone(), fm);
+                        png.get_data(targets.clone(), fm).unwrap();
                         for (target, x) in targets.iter().zip(v.iter()) {
                             assert_eq!(png.value_dict.lookup_any(&target).unwrap(), ExprValue::Integer(*x as i64));
                         }
@@ -5761,19 +5753,19 @@ mod png_tests {
                         let ifd_entry_addr_section = ifd_entry_body.get_child_ident("exif_ifd_address_u32_section".to_string(), vec![0, 0, 0]);
                         let ifd_entry_addr = ifd_entry_addr_section.get_field_ident("exif_ifd_address_u32".to_string()).to_abstract();
                         targets.push(ifd_entry_addr);
-                        for (j, x) in v.iter().enumerate() {
+                        for j in 0..v.len() {
                             // let ifd_entry_data = StructureIdent::new_indexed("exif_ifd_u32_body_addressed".to_string(), vec![1, index, 1, 0, 1, 0, 1, i, 1, 0, 0, 1, 0, j]);
                             let ifd_entry_data = ifd_entry_body.get_child_ident("exif_ifd_u32_body_addressed".to_string(), vec![0, 0, 1, 0, j]);
                             let ifd_entry_value = ifd_entry_data.get_field_ident("exif_ifd_u32".to_string()).to_abstract();
                             targets.push(ifd_entry_value);
                         }
-                        png.get_data(targets.clone(), fm);
+                        png.get_data(targets.clone(), fm).unwrap();
                         assert_eq!(png.value_dict.lookup_any(&targets[0]).unwrap(), ExprValue::Integer(addr as i64));
                         for (target, x) in targets.iter().skip(1).zip(v.iter()) {
                             assert_eq!(png.value_dict.lookup_any(&target).unwrap(), ExprValue::Integer(*x as i64));
                         }
                     } else {
-                        for (j, x) in v.iter().enumerate() {
+                        for j in 0..v.len() {
                             let field_tag = match ifd.tag {
                                 513 => "exif_jpeg_offset".to_string(),
                                 514 => "exif_jpeg_byte_count".to_string(),
@@ -5784,7 +5776,7 @@ mod png_tests {
                             let ifd_entry_data = ifd_entry_body.get_child_ident("exif_ifd_u32_body".to_string(), vec![0, 0, 0, j]);
                             targets.push(ifd_entry_data.get_field_ident(field_tag).to_abstract());
                         }
-                        png.get_data(targets.clone(), fm);
+                        png.get_data(targets.clone(), fm).unwrap();
                         for (target, x) in targets.iter().zip(v.iter()) {
                             assert_eq!(png.value_dict.lookup_any(&target).unwrap(), ExprValue::Integer(*x as i64));
                         }
@@ -5796,7 +5788,7 @@ mod png_tests {
                         let ifd_entry_addr_section = ifd_entry_body.get_child_ident("exif_ifd_address_urat_section".to_string(), vec![0, 0, 0]);
                         let ifd_entry_addr = ifd_entry_addr_section.get_field_ident("exif_ifd_address_urat".to_string()).to_abstract();
                         targets.push(ifd_entry_addr);
-                        for (j, x) in v.iter().enumerate() {
+                        for j in 0..v.len() {
                             // let ifd_entry_data = StructureIdent::new_indexed("exif_ifd_urat_body_addressed".to_string(), vec![1, index, 1, 0, 1, 0, 1, i, 1, 0, 0, 1, 0, j]);
                             let ifd_entry_data = ifd_entry_body.get_child_ident("exif_ifd_urat_body_addressed".to_string(), vec![0, 0, 1, 0, j]);
                             let ifd_num_entry_value = ifd_entry_data.get_field_ident("exif_ifd_urat_num".to_string()).to_abstract();
@@ -5804,20 +5796,20 @@ mod png_tests {
                             targets.push(ifd_num_entry_value);
                             targets.push(ifd_den_entry_value);
                         }
-                        png.get_data(targets.clone(), fm);
+                        png.get_data(targets.clone(), fm).unwrap();
                         assert_eq!(png.value_dict.lookup_any(&targets[0]).unwrap(), ExprValue::Integer(addr as i64));
                         for (target, (num, den)) in targets[1..].chunks(2).zip(v.iter()) {
                             assert_eq!(png.value_dict.lookup_any(&target[0]).unwrap(), ExprValue::Integer(*num as i64));
                             assert_eq!(png.value_dict.lookup_any(&target[1]).unwrap(), ExprValue::Integer(*den as i64));
                         }
                     } else {
-                        for (j, x) in v.iter().enumerate() {
+                        for j in 0..v.len() {
                             // let ifd_entry_data = StructureIdent::new_indexed("exif_ifd_urat_body".to_string(), vec![1, index, 1, 0, 1, 0, 1, i, 1, 0, 0, 0, j]);
                             let ifd_entry_data = ifd_entry_body.get_child_ident("exif_ifd_urat_body".to_string(), vec![0, 0, 0, j]);
                             targets.push(ifd_entry_data.get_field_ident("exif_ifd_urat_num".to_string()).to_abstract());
                             targets.push(ifd_entry_data.get_field_ident("exif_ifd_urat_den".to_string()).to_abstract());
                         }
-                        png.get_data(targets.clone(), fm);
+                        png.get_data(targets.clone(), fm).unwrap();
                         for (target, (num, den)) in targets.chunks(2).zip(v.iter()) {
                             assert_eq!(png.value_dict.lookup_any(&target[0]).unwrap(), ExprValue::Integer(*num as i64));
                             assert_eq!(png.value_dict.lookup_any(&target[1]).unwrap(), ExprValue::Integer(*den as i64));
@@ -5833,13 +5825,13 @@ mod png_tests {
                         let ifd_entry_value = ifd_entry_data.get_field_ident("exif_ifd_unk".to_string()).to_abstract();
                         targets.push(ifd_entry_addr.clone());
                         targets.push(ifd_entry_value.clone());
-                        png.get_data(targets.clone(), fm);
+                        png.get_data(targets.clone(), fm).unwrap();
                         assert_eq!(png.value_dict.lookup_any(&ifd_entry_addr).unwrap(), ExprValue::Integer(addr as i64));
                         assert_eq!(png.value_dict.lookup_any(&ifd_entry_value).unwrap(), ExprValue::Bytes(bf));
                     } else {
                         let ifd_entry_data = ifd_entry_body.get_child_ident("exif_ifd_unk_body".to_string(), vec![0, 0]);
                         targets.push(ifd_entry_data.get_field_ident("exif_ifd_unk".to_string()).to_abstract());
-                        png.get_data(targets.clone(), fm);
+                        png.get_data(targets.clone(), fm).unwrap();
                         assert_eq!(png.value_dict.lookup_any(&targets[0]).unwrap(), ExprValue::Bytes(bf));
                     }
                 },

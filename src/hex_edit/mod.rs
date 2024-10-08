@@ -1060,7 +1060,7 @@ impl<'a> HexEdit<'a> {
 
     pub fn set_file_spec(&mut self, fs: Rc<Structure>) {
         let mut fs = FileMap::new(fs);
-        fs.initialize(&mut self.file_manager);
+        fs.initialize(&mut self.file_manager).unwrap();
         self.file_spec = Some(fs)
     }
 
@@ -1687,7 +1687,7 @@ impl<'a> HexEdit<'a> {
         if let Some(ref mut fs) = &mut self.file_spec {
             // self.current_field = fs.field_at(self.cursor_pos, &mut self.file_manager);
             if self.cursor_pos < self.file_manager.len() {
-                let region = fs.region_at(BitIndex::bytes(self.cursor_pos), &mut self.file_manager);
+                let region = fs.region_at(BitIndex::bytes(self.cursor_pos), &mut self.file_manager).unwrap();
 
                 match region {
                     FileRegion::Field(field_id) => {
@@ -1698,7 +1698,7 @@ impl<'a> HexEdit<'a> {
                         self.current_field = Some((field.start..(field.start + field.span), field_valid));
                         for fid in fs.related_fields(field_id.clone()) {
                             let related_field = fs.get_field(fid, &mut self.file_manager).unwrap();
-                            self.related_fields.push((related_field.start..(related_field.start + related_field.span)));
+                            self.related_fields.push(related_field.start..(related_field.start + related_field.span));
                         }
                         let value = field.parse(&mut self.file_manager).unwrap();
                         let field_data = fs.format_field_data(field_id, value).unwrap();

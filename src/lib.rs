@@ -21,7 +21,7 @@ use crate::large_text_view::LargeTextView;
 mod hex_edit;
 use crate::hex_edit::{FileManager, Action, CompoundAction, ActionStack, UpdateDescription, 
         EditMode, ActionResult, ShowType, ByteOperation, FillType, shift_vector, 
-        vector_op, HexEdit, DataSource, Structure, make_png};
+        vector_op, HexEdit, DataSource, Structure};
 pub use crate::hex_edit::FileManagerType;
 
 
@@ -1159,7 +1159,7 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
                                 }
                             },
                             CommandInstruction::Refresh => {
-                                ///resize_term(0, 0);
+                                //resize_term(0, 0);
                                 endwin();
                                 window = initscr();
                                 window.refresh();

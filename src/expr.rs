@@ -283,8 +283,7 @@ impl ExprOp {
             ExprOp::Eq => 3,
             ExprOp::Le => 3,
             ExprOp::Or => 4,
-            ExprOp::List => 5,
-            _ => todo!()
+            ExprOp::List => 5
         }
     }
 
@@ -521,7 +520,7 @@ impl ExprOperationError {
     }
 
     fn details(&self) -> String {
-        if let ExprNode::Op{op, args} = &self.expr {
+        if let ExprNode::Op{op, ..} = &self.expr {
             match self.kind {
                 ExprOperationErrorKind::IncompatibleTypes => {
                     format!("Data type mismatch for '{}'", op.name()).to_string()
@@ -540,7 +539,7 @@ impl ExprOperationError {
         let mut annotations = vec![];
         match self.kind {
             ExprOperationErrorKind::IncompatibleTypes => {
-                if let ExprNode::Op{op, args} = &self.expr {
+                if let ExprNode::Op{args, ..} = &self.expr {
                     let lhs_span: std::ops::Range<usize> = self.remap.apply_range(args[self.lhs_index].span.clone().unwrap());
                     annotations.push((Some(format!("This evaluates to a {}", self.lhs.datatype_as_string()).to_string()), lhs_span));
                     if let Some(rhs) = &self.rhs {
@@ -553,7 +552,7 @@ impl ExprOperationError {
                 }
             },
             ExprOperationErrorKind::ArithmeticException => {
-                if let ExprNode::Op{op, args} = &self.expr {
+                if let ExprNode::Op{args, ..} = &self.expr {
                     let lhs_span: std::ops::Range<usize> = self.remap.apply_range(args[self.lhs_index].span.clone().unwrap());
                     annotations.push((Some(format!("This evaluates to {:?}", self.lhs).to_string()), lhs_span));
                     if let Some(rhs) = &self.rhs {
