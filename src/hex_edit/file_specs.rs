@@ -491,11 +491,11 @@ impl IntegerEnum {
 struct FieldSpec {
     id: String,
     name: String,
-    offset: Expr,
-    length: Expr,
-    alignment: Expr,
-    alignment_base: Expr,
-    valid: Option<Expr>,
+    offset: ExprWrapper,
+    length: ExprWrapper,
+    alignment: ExprWrapper,
+    alignment_base: ExprWrapper,
+    valid: Option<ExprWrapper>,
     dtype: String,
     endian: Endianness,
     enumeration: Option<IntegerEnum>,
@@ -536,7 +536,7 @@ impl FieldSpec {
         if obj.element.as_str() != "field" {
             panic!("Trying to parse field from non-field element")
         }
-        let length = Expr::from_str(&convert_xml_symbols(obj.attrs.remove("length").unwrap().as_str()))?;
+        let length = ExprWrapper::from_xml_str_span(&obj.remove_required_attr("length")?)?;
         let id = convert_xml_symbols(obj.attrs.remove("id").unwrap().as_str());
         let name = convert_xml_symbols(obj.attrs.remove("name").unwrap().as_str());
         let dtype = convert_xml_symbols(obj.attrs.remove("dtype").unwrap().as_str());
@@ -549,19 +549,19 @@ impl FieldSpec {
             }
         };
         let offset = match obj.attrs.remove("offset") {
-            Some(s) => Expr::from_str(&convert_xml_symbols(s.as_str()))?,
-            None => Expr::value(ExprValue::Position(BitIndex::zero()))
+            Some(s) => ExprWrapper::from_xml_str_span(&s)?,
+            None => ExprWrapper::from_default(Expr::value(ExprValue::Position(BitIndex::zero())))
         };
         let alignment = match obj.attrs.remove("align") {
-            Some(s) => Expr::from_str(&convert_xml_symbols(s.as_str()))?,
-            None => Expr::value(ExprValue::Position(BitIndex::bytes(1)))
+            Some(s) => ExprWrapper::from_xml_str_span(&s)?,
+            None => ExprWrapper::from_default(Expr::value(ExprValue::Position(BitIndex::bytes(1))))
         };
         let alignment_base = match obj.attrs.remove("align-base") {
-            Some(s) => Expr::from_str(&convert_xml_symbols(s.as_str()))?,
-            None => Expr::value(ExprValue::Position(BitIndex::zero()))
+            Some(s) => ExprWrapper::from_xml_str_span(&s)?,
+            None => ExprWrapper::from_default(Expr::value(ExprValue::Position(BitIndex::zero())))
         };
         let valid = match obj.attrs.remove("valid") {
-            Some(s) => Some(Expr::from_str(&convert_xml_symbols(s.as_str()))?),
+            Some(s) => Some(ExprWrapper::from_xml_str_span(&s)?),
             None => None
         };
         let units = match obj.attrs.remove("units") {
@@ -1693,20 +1693,6 @@ impl<'a> PartiallyResolvedStructure<'a> {
                         }
                     } else {
                         self.try_get_field_attr(fai.clone(), vd)
-                        // match fai.attr {
-                        //     FieldAttrType::Start => self.try_get_field_start(fai.field.clone(), vd),
-                        //     FieldAttrType::StartPad => self.try_get_field_start_pad(fai.field.clone(), vd),
-                        //     FieldAttrType::Length => self.try_get_field_length(fai.field.clone(), vd),
-                        //     FieldAttrType::End => self.try_get_field_end(fai.field.clone(), vd),
-                        //     FieldAttrType::Offset => self.try_get_field_offset(fai.field.clone(), vd),
-                        //     FieldAttrType::Position => self.try_get_field_position(fai.field.clone(), vd),
-                        //     FieldAttrType::Align => self.try_get_field_alignment(fai.field.clone(), vd),
-                        //     FieldAttrType::AlignBase => self.try_get_field_alignment_base(fai.field.clone(), vd),
-                        //     FieldAttrType::Valid => self.try_get_field_valid(fai.field.clone(), vd),
-                        //     FieldAttrType::SearchStart => self.try_get_def_search_start(fai.field.clone(), vd),
-                        //     FieldAttrType::SearchN => self.try_get_def_search_n(fai.field.clone(), vd),
-                        //     FieldAttrType::AnchorOffset => self.try_get_def_anchor_offset(fai.field.clone(), vd),
-                        // }
                     }
                 } else {
                     info!("\t Searching in children");
@@ -1782,64 +1768,74 @@ impl<'a> PartiallyResolvedStructure<'a> {
 
     }
 
-    /// Attempts to determine the absolute position of a field and returns the result
-    /// as a dependency report. The position is calculated by adding the field's offset
-    /// to the end of the previous field (or, if it is the first field in the section,
-    /// the start position of the section). Accordingly, the dependencies given in the
-    /// dependency report will be the field's offset and either the start position of
-    /// the section or the end position of the previous field. 
-    ///
-    /// If `self` is not a `UnresolvedSection`, then this returns a IdentNotValid error.
-    fn try_get_field_position(&self, field_id: FieldIdent, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, FileSpecError> {
-        match self.stype.as_ref() {
-            PartiallyResolvedStructureType::UnresolvedSection{initial} => {
-                let field_index = match initial.id_map.get(&field_id.id) {
-                    Some(i) => i,
-                    None => return Ok(DependencyReport::does_not_exist())
-                };
+    /// Attempts to evaluate the given expression as a position and return the result as a dependency 
+    /// report. target_ident will be used as the "child" in the report and any variables in the expression 
+    /// will be used as the "parents". Returns incomplete if there are any variables in the expression 
+    /// that aren't yet in the provided value dictionary. Returns an error if there are any errors 
+    /// evaluating the expression or resolving the variables in the expression or if the expression 
+    /// evaluates to anything other than a position.
+    fn try_evaluate_position_expression(&self, expr: &ExprWrapper, target_ident: AbstractIdent, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, FileSpecError> {
 
-                let field = &initial.fields[*field_index];
+        // Convert the expression's variables to AbstractIdents and keep track of them
+        // to return as dependencies upon success or failure
+        let parents = self.convert_expr_vars(expr.vars())?;
 
-                let offset_id = field_id.clone().get_attr_ident(FieldAttrType::Offset);
-                let mut parents = HashSet::from([offset_id.clone().to_abstract()]);
+        // Attempt to evaluate the expression using self's lookup_str routine
+        match expr.evaluate_expect_position(self.fname.clone(), &|alias| {self.lookup_str(&vd, alias)}) {
 
-                let pre_offset = if *field_index == 0 {
-                    // First field in the structure, must be positioned starting from the structure start
-                    let structure_start_id = self.id.get_attr_ident(StructureAttrType::Start);
-                    parents.insert(structure_start_id.clone().to_abstract());
-                    let structure_start = match vd.lookup_struct_attr(&structure_start_id) {
-                        Some(ev) => ev.expect_position()?,
-                        None => return Ok(DependencyReport::incomplete(parents))
-                    };
-                    structure_start
-                } else {
-                    // Field is positioned starting from previous field's end
-                    let prev_field = self.id.clone().get_field_ident(initial.fields[*field_index - 1].id.clone());
-                    let previous_end_id = prev_field.clone().get_attr_ident(FieldAttrType::End);
-                    parents.insert(previous_end_id.clone().to_abstract());
-                    let previous_end = match vd.lookup_field_attr(&previous_end_id) {
-                        Some(ev) => ev.expect_position()?,
-                        None => return Ok(DependencyReport::incomplete(parents))
-                    };
-                    previous_end
-                };
-
-                let offset = match vd.lookup_field_attr(&offset_id) {
-                    Some(ev) => ev.expect_position()?,
-                    None => return Ok(DependencyReport::incomplete(parents))
-                };
-
-                let mut dr = DependencyReport::success(ExprValue::Position(pre_offset + offset));
-                let field_position_id = field_id.get_attr_ident(FieldAttrType::Position).to_abstract();
-                dr.add_pc_pairs(parents, HashSet::from([field_position_id]));
+            Ok(pos) => {
+                // If the evaluation is successful, construct a successful dependency report 
+                // with the result, add the dependecies found previously, and return it.
+                let mut dr = DependencyReport::success(ExprValue::Position(pos));
+                dr.add_pc_pairs(parents, HashSet::from([target_ident]));
                 Ok(dr)
-
             },
-            _ => {
-                let target_id = field_id.clone().get_attr_ident(FieldAttrType::Position).to_abstract();
-                Err(FileSpecError::IdentNotValid(target_id))
+            Err(ExprEvalError::LookupError{..}) => {
+                // If the evaluation failed due to a lookup error, then one of the dependencies
+                // must not be resolved yet. Return incomplete with the dependency list found
+                // previously
+                Ok(DependencyReport::incomplete(parents))
             }
-        }       
+            Err(err) => {
+                // Any other errors are actual problems with the expression. Return the error.
+                Err(FileSpecError::from(err))
+            }
+        }
+    }
+
+    /// Attempts to evaluate the given expression as a integer and return the result as a dependency 
+    /// report. target_ident will be used as the "child" in the report and any variables in the expression 
+    /// will be used as the "parents". Returns incomplete if there are any variables in the expression 
+    /// that aren't yet in the provided value dictionary. Returns an error if there are any errors 
+    /// evaluating the expression or resolving the variables in the expression or if the expression 
+    /// evaluates to anything other than a integer.
+    fn try_evaluate_integer_expression(&self, expr: &ExprWrapper, target_ident: AbstractIdent, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, FileSpecError> {
+
+        // Convert the expression's variables to AbstractIdents and keep track of them
+        // to return as dependencies upon success or failure
+        let parents = self.convert_expr_vars(expr.vars())?;
+
+        // Attempt to evaluate the expression using self's lookup_str routine
+        match expr.evaluate_expect_integer(self.fname.clone(), &|alias| {self.lookup_str(&vd, alias)}) {
+
+            Ok(i) => {
+                // If the evaluation is successful, construct a successful dependency report 
+                // with the result, add the dependecies found previously, and return it.
+                let mut dr = DependencyReport::success(ExprValue::Integer(i));
+                dr.add_pc_pairs(parents, HashSet::from([target_ident]));
+                Ok(dr)
+            },
+            Err(ExprEvalError::LookupError{..}) => {
+                // If the evaluation failed due to a lookup error, then one of the dependencies
+                // must not be resolved yet. Return incomplete with the dependency list found
+                // previously
+                Ok(DependencyReport::incomplete(parents))
+            }
+            Err(err) => {
+                // Any other errors are actual problems with the expression. Return the error.
+                Err(FileSpecError::from(err))
+            }
+        }
     }
 
     // Attempts to determine the value of a field attribute without looking it up. This is used 
@@ -1848,22 +1844,49 @@ impl<'a> PartiallyResolvedStructure<'a> {
     // needed to determine the value, regardless of whether the value was successfully determined.
     //
     // Returns an InvalidIdentError if the field attribute is related to a real field (not a derived
-    // field) and self is not an UnresovledSection. Returns Ok(DoesNotExist) of self does not contain the 
-    // field id. May return other errors if a problem is encountered in any expression evaluations.
+    // field) and self is not an UnresovledSection or self does not contain the field ID. Also returns
+    // InvalidIdentError if self is related to a derived field and the derived field is either not in 
+    // self or the type of the derived field isn't associated with  the attribute. May return other 
+    // errors if a problem is encountered in any expression evaluations.
     fn try_get_field_attr(&self, target_ident: FieldAttrIdent, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, FileSpecError> {
 
         match target_ident.attr {
 
-            // These first three a defined or derived fields, they aren't associated with actual 
-            // field specs. They have their own methods to determine their values.
-            FieldAttrType::SearchStart => {
-                self.try_get_def_search_start(target_ident.field, vd)
-            },
-            FieldAttrType::SearchN => {
-                self.try_get_def_search_n(target_ident.field, vd)
-            },
-            FieldAttrType::AnchorOffset => {
-                self.try_get_def_anchor_offset(target_ident.field, vd)
+            // These first three are defined or derived fields, they aren't associated with actual 
+            // field specs, they're associated with a DefField structure
+            FieldAttrType::SearchStart | FieldAttrType::SearchN | FieldAttrType::AnchorOffset => {
+
+                // Try to access the field from the def_fields list
+                if let Some(def_field) = self.original.def_fields.get(&target_ident.field.id) {
+                    match target_ident.attr {
+                        FieldAttrType::SearchStart => {
+                            // If the attribute is search start, then it should be related to a Search field. Try
+                            // to evaluate the start expression of a Search field
+                            if let DefField::Search{start, ..} = def_field {
+                                return self.try_evaluate_position_expression(&start, target_ident.to_abstract(), vd)
+                            } 
+                        },
+                        FieldAttrType::SearchN => {
+                            // If the attribute is search n, then it should be related to a Search field. Try
+                            // to evaluate the n expression of a Search field
+                            if let DefField::Search{n, ..} = def_field {
+                                return self.try_evaluate_integer_expression(&n, target_ident.to_abstract(), vd)
+                            } 
+                        },
+                        FieldAttrType::AnchorOffset => {
+                            // If the attribute is anchor offset, then it should be related to a Anchor field. Try
+                            // to evaluate the offset expression of a Anchor field
+                            if let DefField::Anchor{offset} = def_field {
+                                return self.try_evaluate_position_expression(&offset, target_ident.to_abstract(), vd)
+                            } 
+                        },
+                        _ => unreachable!()
+                    }
+                } 
+
+                // If the field isn't in the def_field's list, or the def_field it's associated 
+                // with isn't related to the attribute, then it must be invalid.
+                Err(FileSpecError::IdentNotValid(target_ident.to_abstract()))
             },
 
             // Fields that require accessing data from the FieldSpec in initial
@@ -1887,10 +1910,10 @@ impl<'a> PartiallyResolvedStructure<'a> {
 
                     // Get the index of the field by looking up its name in the initial SectionSpec's
                     // id map. If it's not in the id map, then the field either does not exist or does
-                    // not belong to `self`. In that case, return DoesNotExist
+                    // not belong to `self`. In that case, return an error
                     let field_index = match initial.id_map.get(&target_ident.field.id) {
                         Some(i) => i,
-                        None => return Ok(DependencyReport::does_not_exist())
+                        None => return Err(FileSpecError::IdentNotValid(target_ident.to_abstract()))
                     };
 
                     // Get the field by its index
@@ -1915,7 +1938,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
                                 };
                 
                                 // Evaluate the field's validity check with the field's value as the only argument
-                                match field_valid.evaluate_with_args(&vec![field_value], &|alias| {self.lookup_str(&vd, alias)}) {
+                                match field_valid.evaluate_with_args(self.fname.clone(), &vec![field_value], &|alias| {self.lookup_str(&vd, alias)}) {
                                     Ok(valid) => {
                                         // If the evaluation was successful, ensure it's a Boolean and return it in
                                         // a successful dependency report with the dependencies found earlier
@@ -2161,108 +2184,6 @@ impl<'a> PartiallyResolvedStructure<'a> {
         }
     }
 
-
-
-    /// Attempts to evaluate the given expression as a position and return the result as a dependency 
-    /// report. target_ident will be used as the "child" in the report and any variables in the expression 
-    /// will be used as the "parents". Returns incomplete if there are any variables in the expression 
-    /// that aren't yet in the provided value dictionary. Returns an error if there are any errors 
-    /// evaluating the expression or resolving the variables in the expression or if the expression 
-    /// evaluates to anything other than a position.
-    fn try_evaluate_position_expression(&self, expr: &Expr, target_ident: AbstractIdent, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, FileSpecError> {
-
-        // Convert the expression's variables to AbstractIdents and keep track of them
-        // to return as dependencies upon success or failure
-        let parents = self.convert_expr_vars(expr.vars())?;
-
-        // Attempt to evaluate the expression using self's lookup_str routine
-        match expr.evaluate_expect_position(&|alias| {self.lookup_str(&vd, alias)}) {
-
-            Ok(pos) => {
-                // If the evaluation is successful, construct a successful dependency report 
-                // with the result, add the dependecies found previously, and return it.
-                let mut dr = DependencyReport::success(ExprValue::Position(pos));
-                dr.add_pc_pairs(parents, HashSet::from([target_ident]));
-                Ok(dr)
-            },
-            Err(ExprEvalError::LookupError{..}) => {
-                // If the evaluation failed due to a lookup error, then one of the dependencies
-                // must not be resolved yet. Return incomplete with the dependency list found
-                // previously
-                Ok(DependencyReport::incomplete(parents))
-            }
-            Err(err) => {
-                // Any other errors are actual problems with the expression. Return the error.
-                Err(FileSpecError::from(err))
-            }
-        }
-    }
-
-    fn try_get_def_search_start(&self, field_id: FieldIdent, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, FileSpecError> {
-        if self.original.def_fields.contains_key(&field_id.id) {
-            match &self.original.def_fields[&field_id.id] {
-                DefField::Search{start, ..} => {
-                    match start.evaluate_expect_position(self.fname.clone(), &|alias| {self.lookup_str(&vd, alias)}) {
-                        Ok(value) => {
-                            let mut dr = DependencyReport::success(ExprValue::Position(value));
-                            let search_start_id = field_id.clone().get_attr_ident(FieldAttrType::SearchStart);
-                            dr.add_pc_pairs(self.convert_expr_vars(start.vars())?, HashSet::from([search_start_id.to_abstract()]));
-                            Ok(dr)
-                        },
-                        Err(ExprEvalError::LookupError{..}) => Ok(DependencyReport::incomplete(self.convert_expr_vars(start.vars())?)),
-                        Err(err) => Err(FileSpecError::from(err))
-                    }
-                },
-                _ => Ok(DependencyReport::does_not_exist())
-            }
-        } else {
-            todo!()
-        }
-    }
-
-    fn try_get_def_search_n(&self, field_id: FieldIdent, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, FileSpecError> {
-        if self.original.def_fields.contains_key(&field_id.id) {
-            match &self.original.def_fields[&field_id.id] {
-                DefField::Search{n, ..} => {
-                    match n.evaluate_expect_integer(self.fname.clone(), &|alias| {self.lookup_str(&vd, alias)}) {
-                        Ok(value) => {
-                            let mut dr = DependencyReport::success(ExprValue::Integer(value));
-                            let search_n_id = field_id.clone().get_attr_ident(FieldAttrType::SearchN);
-                            dr.add_pc_pairs(self.convert_expr_vars(n.vars())?, HashSet::from([search_n_id.to_abstract()]));
-                            Ok(dr)
-                        },
-                        Err(ExprEvalError::LookupError{..}) => Ok(DependencyReport::incomplete(self.convert_expr_vars(n.vars())?)),
-                        Err(err) => Err(FileSpecError::from(err))
-                    }
-                },
-                _ => Ok(DependencyReport::does_not_exist())
-            }
-        } else {
-            todo!()
-        }
-    }
-
-    fn try_get_def_anchor_offset(&self, field_id: FieldIdent, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, FileSpecError> {
-        if self.original.def_fields.contains_key(&field_id.id) {
-            match &self.original.def_fields[&field_id.id] {
-                DefField::Anchor{offset} => {
-                    match offset.evaluate_expect_position(self.fname.clone(), &|alias| {self.lookup_str(&vd, alias)}) {
-                        Ok(value) => {
-                            let mut dr = DependencyReport::success(ExprValue::Position(value));
-                            let anchor_offset_id = field_id.clone().get_attr_ident(FieldAttrType::AnchorOffset);
-                            dr.add_pc_pairs(self.convert_expr_vars(offset.vars())?, HashSet::from([anchor_offset_id.to_abstract()]));
-                            Ok(dr)
-                        },
-                        Err(ExprEvalError::LookupError{..}) => Ok(DependencyReport::incomplete(self.convert_expr_vars(offset.vars())?)),
-                        Err(err) => Err(FileSpecError::from(err))
-                    }
-                },
-                _ => Ok(DependencyReport::does_not_exist())
-            }
-        } else {
-            todo!()
-        }
-    }
 
     fn try_lookup_in_children(&mut self, key: AbstractIdent, vd: &ValueDictionary, prs_map: &mut HashMap<StructureIdent, Rc<RefCell<PartiallyResolvedStructure<'a>>>>) -> Result<DependencyReport<ExprValue>, FileSpecError> {
 
@@ -2877,16 +2798,8 @@ impl<'a> PartiallyResolvedStructure<'a> {
     fn try_get_position(&self, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, FileSpecError> {
         match self.stype.as_ref() {
             PartiallyResolvedStructureType::Addressed{position, ..} => {
-                match position.evaluate_expect_position(self.fname.clone(), &|alias| {self.lookup_str(&vd, alias)}) {
-                    Ok(value) => {
-                        let mut dr = DependencyReport::success(ExprValue::Position(value));
-                        let position_id = self.id.get_attr_ident(StructureAttrType::Position);
-                        dr.add_pc_pairs(self.convert_expr_vars(position.vars())?, HashSet::from([position_id.to_abstract()]));
-                        Ok(dr)
-                    },
-                    Err(ExprEvalError::LookupError{..}) => Ok(DependencyReport::incomplete(self.convert_expr_vars(position.vars())?)),
-                    Err(err) => Err(FileSpecError::from(err))
-                }
+                let target_ident = self.id.get_attr_ident(StructureAttrType::Position).to_abstract();
+                self.try_evaluate_position_expression(&position, target_ident, vd)
             },
             _ => {
                 // Note: This is discounting the possibility that the start location could be determined by 
@@ -2897,29 +2810,13 @@ impl<'a> PartiallyResolvedStructure<'a> {
     }
 
     fn try_get_alignment(&self, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, FileSpecError> {
-        match self.alignment.evaluate_expect_position(self.fname.clone(), &|alias| {self.lookup_str(&vd, alias)}) {
-            Ok(value) => {
-                let mut dr = DependencyReport::success(ExprValue::Position(value));
-                let alignment_id = self.id.get_attr_ident(StructureAttrType::Align).to_abstract();
-                dr.add_pc_pairs(self.convert_expr_vars(self.alignment.vars())?, HashSet::from([alignment_id]));
-                Ok(dr)
-            },
-            Err(ExprEvalError::LookupError{..}) => Ok(DependencyReport::incomplete(self.convert_expr_vars(self.alignment.vars())?)),
-            Err(err) => Err(FileSpecError::from(err))
-        }
+        let target_ident = self.id.get_attr_ident(StructureAttrType::Align).to_abstract();
+        self.try_evaluate_position_expression(&self.alignment, target_ident, vd)
     }
 
     fn try_get_alignment_base(&self, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, FileSpecError> {
-        match self.alignment_base.evaluate_expect_position(self.fname.clone(), &|alias| {self.lookup_str(&vd, alias)}) {
-            Ok(value) => {
-                let mut dr = DependencyReport::success(ExprValue::Position(value));
-                let alignment_base_id = self.id.get_attr_ident(StructureAttrType::AlignBase).to_abstract();
-                dr.add_pc_pairs(self.convert_expr_vars(self.alignment_base.vars())?, HashSet::from([alignment_base_id]));
-                Ok(dr)
-            },
-            Err(ExprEvalError::LookupError{..}) => Ok(DependencyReport::incomplete(self.convert_expr_vars(self.alignment_base.vars())?)),
-            Err(err) => Err(FileSpecError::from(err))
-        }
+        let target_ident = self.id.get_attr_ident(StructureAttrType::AlignBase).to_abstract();
+        self.try_evaluate_position_expression(&self.alignment_base, target_ident, vd)
     }
 
     fn try_get_start_pad(&self, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, FileSpecError> {
@@ -2995,18 +2892,9 @@ impl<'a> PartiallyResolvedStructure<'a> {
                 Ok(dr)
             },
             LengthPolicy::Expr(expr) => {
-                let parents = self.convert_expr_vars(expr.vars())?;
-                
-                match expr.evaluate(self.fname.clone(), &|alias| {self.lookup_str(&vd, alias)}) {
-                    Ok(v) => {
-                        let mut dr = DependencyReport::success(v);
-                        let length_id = self.id.get_attr_ident(StructureAttrType::Length).to_abstract();
-                        dr.add_pc_pairs(parents, HashSet::from([length_id]));
-                        Ok(dr)
-                    },
-                    Err(ExprEvalError::LookupError{..}) => Ok(DependencyReport::incomplete(parents)),
-                    Err(err) => Err(FileSpecError::from(err))
-                }
+
+                let target_ident = self.id.get_attr_ident(StructureAttrType::Length).to_abstract();
+                self.try_evaluate_position_expression(&expr, target_ident, vd)
             },
             LengthPolicy::FitContents => {
                 let contents_length_id = self.id.get_attr_ident(StructureAttrType::ContentsLength);
@@ -3251,16 +3139,10 @@ impl<'a> PartiallyResolvedStructure<'a> {
                         return Ok(DependencyReport::does_not_exist())
                     },
                     LengthPolicy::Expr(expr) => {
-                        match expr.evaluate_expect_position(self.fname.clone(), &|alias| {self.lookup_str(&vd, alias)}) {
-                            Ok(value) => {
-                                let mut dr = DependencyReport::success(ExprValue::Position(value));
-                                let contents_length_id = self.id.get_attr_ident(StructureAttrType::ContentsLength).to_abstract();
-                                dr.add_pc_pairs(self.convert_expr_vars(expr.vars())?, HashSet::from([contents_length_id]));
-                                Ok(dr)
-                            },
-                            Err(ExprEvalError::LookupError{..}) => Ok(DependencyReport::incomplete(self.convert_expr_vars(expr.vars())?)),
-                            Err(err) => Err(FileSpecError::from(err))
-                        }
+
+                        let target_ident = self.id.get_attr_ident(StructureAttrType::ContentsLength).to_abstract();
+                        self.try_evaluate_position_expression(&expr, target_ident, vd)
+
                     },
                     LengthPolicy::FitContents => {
                         if section.fields.is_empty() {
@@ -3477,16 +3359,8 @@ impl<'a> PartiallyResolvedStructure<'a> {
     fn try_get_end(&self, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, FileSpecError> {
         match self.stype.as_ref() {
             PartiallyResolvedStructureType::RepeatUntil{end, ..} => {
-                match end.evaluate_expect_position(self.fname.clone(), &|alias| {self.lookup_str(&vd, alias)}) {
-                    Ok(value) => {
-                        let mut dr = DependencyReport::success(ExprValue::Position(value));
-                        let end_id = self.id.get_attr_ident(StructureAttrType::End).to_abstract();
-                        dr.add_pc_pairs(self.convert_expr_vars(end.vars())?, HashSet::from([end_id]));
-                        Ok(dr)
-                    },
-                    Err(ExprEvalError::LookupError{..}) => Ok(DependencyReport::incomplete(self.convert_expr_vars(end.vars())?)),
-                    Err(err) => Err(FileSpecError::from(err))
-                }
+                let target_ident = self.id.get_attr_ident(StructureAttrType::End).to_abstract();
+                self.try_evaluate_position_expression(&end, target_ident, vd)
             },
             _ => {
                 let mut parents = HashSet::new();
