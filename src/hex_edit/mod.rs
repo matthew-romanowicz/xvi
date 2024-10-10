@@ -1034,7 +1034,7 @@ impl<'a> HexEdit<'a> {
                 }
             };
             // s.set_fname(fname);
-            let mut fs = FileMap::new(Rc::new(s));
+            let mut fs = FileMap::new(Rc::new(s), &mut self.file_manager);
             match fs.initialize(&mut self.file_manager) {
                 Ok(()) => {},
                 Err(err) => {
@@ -1059,7 +1059,7 @@ impl<'a> HexEdit<'a> {
     }
 
     pub fn set_file_spec(&mut self, fs: Rc<Structure>) {
-        let mut fs = FileMap::new(fs);
+        let mut fs = FileMap::new(fs, &mut self.file_manager);
         fs.initialize(&mut self.file_manager).unwrap();
         self.file_spec = Some(fs)
     }

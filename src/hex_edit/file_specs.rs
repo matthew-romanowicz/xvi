@@ -738,6 +738,10 @@ impl StructureIdent {
     fn get_attr_ident(&self, attr: StructureAttrType) -> StructureAttrIdent {
         StructureAttrIdent::new(self.clone(), attr)
     }
+
+    fn is_root(&self) -> bool {
+        self.index.is_empty()
+    }
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
@@ -1194,7 +1198,8 @@ impl<'a> PartiallyResolvedStructure<'a> {
                         new.insert(self.id.get_field_ident(s).to_abstract());
                     } else {
                         error!("Couldn't convert {} in {}", s, self.id);
-                        new.insert(AbstractIdent::from_str(&s)?);
+                        // new.insert(AbstractIdent::from_str(&s)?);
+                        return Err(ParseAbstractIdentError::new(format!("Could not interpret '{}' in context of '{:?}'", s, self.id).to_string()))
                     }
                 }
             }
@@ -1247,6 +1252,11 @@ impl<'a> PartiallyResolvedStructure<'a> {
                         if let Some(prs) = prs_map.get(&fi.structure) {
                             info!("Looking for source field in inherited monikers");
                             return prs.borrow().get_source_field(field_name, prs_map)
+                        } else if fi.structure.is_root() {
+                            // If the source's structure is root, then the inherited moniker must have been injected and has no
+                            // "original" source. Return None
+                            info!("Field {} wsa injected into the initial inheritance monikers", field_name);
+                            return Ok(None)
                         } else {
                             todo!("inherited monikers contains PRS that wasn't in prs_map")
                         }
@@ -1682,20 +1692,21 @@ impl<'a> PartiallyResolvedStructure<'a> {
                             }
                         }
                     } else {
-                        match fai.attr {
-                            FieldAttrType::Start => self.try_get_field_start(fai.field.clone(), vd),
-                            FieldAttrType::StartPad => self.try_get_field_start_pad(fai.field.clone(), vd),
-                            FieldAttrType::Length => self.try_get_field_length(fai.field.clone(), vd),
-                            FieldAttrType::End => self.try_get_field_end(fai.field.clone(), vd),
-                            FieldAttrType::Offset => self.try_get_field_offset(fai.field.clone(), vd),
-                            FieldAttrType::Position => self.try_get_field_position(fai.field.clone(), vd),
-                            FieldAttrType::Align => self.try_get_field_alignment(fai.field.clone(), vd),
-                            FieldAttrType::AlignBase => self.try_get_field_alignment_base(fai.field.clone(), vd),
-                            FieldAttrType::Valid => self.try_get_field_valid(fai.field.clone(), vd),
-                            FieldAttrType::SearchStart => self.try_get_def_search_start(fai.field.clone(), vd),
-                            FieldAttrType::SearchN => self.try_get_def_search_n(fai.field.clone(), vd),
-                            FieldAttrType::AnchorOffset => self.try_get_def_anchor_offset(fai.field.clone(), vd),
-                        }
+                        self.try_get_field_attr(fai.clone(), vd)
+                        // match fai.attr {
+                        //     FieldAttrType::Start => self.try_get_field_start(fai.field.clone(), vd),
+                        //     FieldAttrType::StartPad => self.try_get_field_start_pad(fai.field.clone(), vd),
+                        //     FieldAttrType::Length => self.try_get_field_length(fai.field.clone(), vd),
+                        //     FieldAttrType::End => self.try_get_field_end(fai.field.clone(), vd),
+                        //     FieldAttrType::Offset => self.try_get_field_offset(fai.field.clone(), vd),
+                        //     FieldAttrType::Position => self.try_get_field_position(fai.field.clone(), vd),
+                        //     FieldAttrType::Align => self.try_get_field_alignment(fai.field.clone(), vd),
+                        //     FieldAttrType::AlignBase => self.try_get_field_alignment_base(fai.field.clone(), vd),
+                        //     FieldAttrType::Valid => self.try_get_field_valid(fai.field.clone(), vd),
+                        //     FieldAttrType::SearchStart => self.try_get_def_search_start(fai.field.clone(), vd),
+                        //     FieldAttrType::SearchN => self.try_get_def_search_n(fai.field.clone(), vd),
+                        //     FieldAttrType::AnchorOffset => self.try_get_def_anchor_offset(fai.field.clone(), vd),
+                        // }
                     }
                 } else {
                     info!("\t Searching in children");
@@ -1831,359 +1842,358 @@ impl<'a> PartiallyResolvedStructure<'a> {
         }       
     }
 
-    /// Attempts to determine the start position of a field and returns the result as
-    /// a dependency report. The start position is calculated by looking up and summing the 
-    /// field's start pad and position. Accordingly, the dependencies in the dependency report
-    /// will be the position and start pad attributes of the field. 
-    ///
-    /// Note that in this context, "start" is different from "position". "position" refers to
-    /// the location where the field is intended to start, and "start" is the actual location
-    /// where the field starts, accounting for alignment. "start pad" is the difference between
-    /// the two.
-    ///
-    /// If `self` is not a `UnresolvedSection`, then this returns a IdentNotValid error.
-    fn try_get_field_start(&self, field_id: FieldIdent, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, FileSpecError> {
+    // Attempts to determine the value of a field attribute without looking it up. This is used 
+    // for the initial determination of the value. The value dictionary is needed to look up 
+    // dependencies as needed. Returns the result as a DependencyReport with all dependencies
+    // needed to determine the value, regardless of whether the value was successfully determined.
+    //
+    // Returns an InvalidIdentError if the field attribute is related to a real field (not a derived
+    // field) and self is not an UnresovledSection. Returns Ok(DoesNotExist) of self does not contain the 
+    // field id. May return other errors if a problem is encountered in any expression evaluations.
+    fn try_get_field_attr(&self, target_ident: FieldAttrIdent, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, FileSpecError> {
 
-        #[cfg(test)] {
-            // Panic during tests if the field does not belong to self.
-            if self.id != field_id.structure {
-                panic!("try_get_field_start called with field that does not belong to self")
-            }
-        }
+        match target_ident.attr {
 
-        match self.stype.as_ref() {
-            PartiallyResolvedStructureType::UnresolvedSection{initial} => {
+            // These first three a defined or derived fields, they aren't associated with actual 
+            // field specs. They have their own methods to determine their values.
+            FieldAttrType::SearchStart => {
+                self.try_get_def_search_start(target_ident.field, vd)
+            },
+            FieldAttrType::SearchN => {
+                self.try_get_def_search_n(target_ident.field, vd)
+            },
+            FieldAttrType::AnchorOffset => {
+                self.try_get_def_anchor_offset(target_ident.field, vd)
+            },
+
+            // Fields that require accessing data from the FieldSpec in initial
+            FieldAttrType::Valid | FieldAttrType::Length | FieldAttrType::Offset | FieldAttrType::Align | FieldAttrType::AlignBase | FieldAttrType::Position => {
 
                 #[cfg(test)] {
-                    // Panic during tests if the field does not exist in the initial SectionSpec
-                    if !initial.id_map.contains_key(&field_id.id) {
-                        panic!("try_get_field_start called with field that belongs to self but is not in self's field list")
+                    // Panic during tests if the field does not belong to self.
+                    if self.id != target_ident.field.structure {
+                        panic!("try_get_field_attr called with field that does not belong to self")
                     }
                 }
 
-                // Get the start pad and position ids to add to the parents list and also 
-                // for the lookup
-                let start_pad_id = field_id.clone().get_attr_ident(FieldAttrType::StartPad);
-                let position_id = field_id.clone().get_attr_ident(FieldAttrType::Position);
-
-                let parents = HashSet::from([start_pad_id.clone().to_abstract(), position_id.clone().to_abstract()]);
-
-                // Attempt to lookup the field's start pad. If it fails, return an incomplete
-                // dependency report
-                let start_pad = match vd.lookup_field_attr(&start_pad_id) {
-                    Some(ev) => ev.expect_position()?,
-                    None => return Ok(DependencyReport::incomplete(parents))
-                };
+                if let PartiallyResolvedStructureType::UnresolvedSection{initial} = self.stype.as_ref() {
         
-                // Attempt to lookup the field's position. If it fails, return an incomplete
-                // dependency report
-                let position = match vd.lookup_field_attr(&position_id) {
-                    Some(ev) => ev.expect_position()?,
-                    None => return Ok(DependencyReport::incomplete(parents))
-                };
-        
-                // Create a successful dependency report with the sum of the position and start
-                // pad, and add those two attributes as parents.
-                let mut dr = DependencyReport::success(ExprValue::Position(position + start_pad));
-                let start_id = field_id.clone().get_attr_ident(FieldAttrType::Start).to_abstract();
-                dr.add_pc_pairs(parents, HashSet::from([start_id]));
-                Ok(dr)
-
-            },
-            _ => {
-                // If self isn't a UnresolvedSection, then it can't have fields. The field_id 
-                // must be invalid.
-                let target_id = field_id.clone().get_attr_ident(FieldAttrType::Start).to_abstract();
-                Err(FileSpecError::IdentNotValid(target_id))
-            }
-        }       
-    }
-
-    /// Attempts to determine the start pad of a field and returns the result as  a dependency 
-    /// report. The start pad is determined by first looking up the following attributes for the 
-    /// field: alignment, alignment-base, and position. Once those values have been acquired, the
-    /// alignment-base is subtracted from the position, and the compliment of the remainder of 
-    /// that difference divided (modulo) by the alignment is the start pad. Accordingly, the 
-    /// dependencies in the dependency report will be the alignment, alignment-base, and position 
-    /// of the field.
-    ///
-    /// Note that in this context, "start" is different from "position". "position" refers to
-    /// the location where the field is intended to start, and "start" is the actual location
-    /// where the field starts, accounting for alignment. "start pad" is the difference between
-    /// the two. The "start" location is the smallest location greater than "position" whose
-    /// difference from the "alignment-base" is divisible by the "alignment".
-    ///
-    /// If `self` is not a `UnresolvedSection`, then this returns a IdentNotValid error.
-    fn try_get_field_start_pad(&self, field_id: FieldIdent, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, FileSpecError> {
-
-        #[cfg(test)] {
-            // Panic during tests if the field does not belong to self.
-            if self.id != field_id.structure {
-                panic!("try_get_field_start called with field that does not belong to self")
-            }
-        }
-
-        match self.stype.as_ref() {
-            PartiallyResolvedStructureType::UnresolvedSection{initial} => {
-
-                #[cfg(test)] {
-                    // Panic during tests if the field does not exist in the initial SectionSpec
-                    if !initial.id_map.contains_key(&field_id.id) {
-                        panic!("try_get_field_start called with field that belongs to self but is not in self's field list")
+                    #[cfg(test)] {
+                        // Panic during tests if the field does not exist in the initial SectionSpec
+                        if !initial.id_map.contains_key(&target_ident.field.id) {
+                            panic!("try_get_field_attr called with field that belongs to self but is not in self's field list")
+                        }
                     }
-                }
 
-                // Get the alignment, alignment-base, and position ids to add to the parents list 
-                // and also for the lookup
-                let alignment_id = field_id.clone().get_attr_ident(FieldAttrType::Align);
-                let alignment_base_id = field_id.clone().get_attr_ident(FieldAttrType::AlignBase);
-                let position_id = field_id.clone().get_attr_ident(FieldAttrType::Position);
-
-                let parents = HashSet::from([
-                    alignment_id.clone().to_abstract(), 
-                    alignment_base_id.clone().to_abstract(),
-                    position_id.clone().to_abstract()
-                ]);
-
-                // Attempt to lookup the field's alignment. If it fails, return an incomplete
-                // dependency report
-                let alignment = match vd.lookup_field_attr(&alignment_id) {
-                    Some(ev) => ev.expect_position()?,
-                    None => return Ok(DependencyReport::incomplete(parents))
-                };
-        
-                // Attempt to lookup the field's alignment-base. If it fails, return an incomplete
-                // dependency report
-                let alignment_base = match vd.lookup_field_attr(&alignment_base_id) {
-                    Some(ev) => ev.expect_position()?,
-                    None => return Ok(DependencyReport::incomplete(parents))
-                };
-        
-                // Attempt to lookup the field's position. If it fails, return an incomplete
-                // dependency report
-                let position = match vd.lookup_field_attr(&position_id) {
-                    Some(ev) => ev.expect_position()?,
-                    None => return Ok(DependencyReport::incomplete(parents))
-                };
-        
-                // The `remainder` here is the offset from the position to the largest aligned location
-                // less than the position. But we want the offset to the smallest aligned location 
-                // that is greater than the position
-                let remainder = (&position - &alignment_base).rem_euclid(&alignment);
-        
-                // If the remainder is zero, then the position is already aligned and the start pad is 
-                // zero. Otherwise, it's the compliment of the remainder.
-                let start_pad = if remainder.is_zero() {
-                    BitIndex::zero()
-                } else {
-                    alignment - remainder
-                };
-        
-                // Create a successful dependency report with the start pad value that was determined, 
-                // and add those three attributes as parents.
-                let mut dr = DependencyReport::success(ExprValue::Position(start_pad));
-                let start_pad_id = field_id.clone().get_attr_ident(FieldAttrType::StartPad).to_abstract();
-                dr.add_pc_pairs(parents, HashSet::from([start_pad_id]));
-                Ok(dr)
-
-            },
-            _ => {
-                // If self isn't a UnresolvedSection, then it can't have fields. The field_id 
-                // must be invalid.
-                let target_id = field_id.clone().get_attr_ident(FieldAttrType::StartPad).to_abstract();
-                Err(FileSpecError::IdentNotValid(target_id))
-            }
-        } 
-    }
-
-    fn try_get_field_length(&self, field_id: FieldIdent, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, FileSpecError> {
-        match self.stype.as_ref() {
-            PartiallyResolvedStructureType::UnresolvedSection{initial} => {
-                let field_index = match initial.id_map.get(&field_id.id) {
-                    Some(i) => i,
-                    None => return Ok(DependencyReport::does_not_exist())
-                };
-                let field = &initial.fields[*field_index];
-                match field.length.evaluate_expect_position(&|alias| {self.lookup_str(&vd, alias)}) {
-                    Ok(length) => {
-                        info!("Length for {}: {:?}", field_id.id, length);
-                        let mut dr = DependencyReport::success(ExprValue::Position(length));
-                        let field_length_id = field_id.clone().get_attr_ident(FieldAttrType::Length).to_abstract();
-                        dr.add_pc_pairs(self.convert_expr_vars(field.length.vars())?, HashSet::from([field_length_id]));
-                        Ok(dr)
-                    },
-                    Err(ExprEvalError::LookupError{..}) => {
-                        Ok(DependencyReport::incomplete(self.convert_expr_vars(field.length.vars())?))
-                    }
-                    Err(err) => return Err(FileSpecError::from(err))
-                }
-            },
-            _ => {
-                let target_id = field_id.clone().get_attr_ident(FieldAttrType::Length).to_abstract();
-                Err(FileSpecError::IdentNotValid(target_id))
-            }
-        }
-    }
-
-    fn try_get_field_offset(&self, field_id: FieldIdent, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, FileSpecError> {
-        match self.stype.as_ref() {
-            PartiallyResolvedStructureType::UnresolvedSection{initial} => {
-                let field_index = match initial.id_map.get(&field_id.id) {
-                    Some(i) => i,
-                    None => return Ok(DependencyReport::does_not_exist())
-                };
-                let field = &initial.fields[*field_index];
-                match field.offset.evaluate_expect_position(&|alias| {self.lookup_str(&vd, alias)}) {
-                    Ok(offset) => {
-                        let mut dr = DependencyReport::success(ExprValue::Position(offset));
-                        let field_offset_id = field_id.clone().get_attr_ident(FieldAttrType::Offset).to_abstract();
-                        dr.add_pc_pairs(self.convert_expr_vars(field.offset.vars())?, HashSet::from([field_offset_id]));
-                        Ok(dr)
-                    },
-                    Err(ExprEvalError::LookupError{..}) => {
-                        Ok(DependencyReport::incomplete(self.convert_expr_vars(field.offset.vars())?))
-                    }
-                    Err(err) => return Err(FileSpecError::from(err))
-                }
-            },
-            _ => {
-                let target_id = field_id.clone().get_attr_ident(FieldAttrType::Offset).to_abstract();
-                Err(FileSpecError::IdentNotValid(target_id))
-            }
-        }
-    }
-
-    fn try_get_field_alignment(&self, field_id: FieldIdent, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, FileSpecError> {
-        match self.stype.as_ref() {
-            PartiallyResolvedStructureType::UnresolvedSection{initial} => {
-                let field_index = match initial.id_map.get(&field_id.id) {
-                    Some(i) => i,
-                    None => return Ok(DependencyReport::does_not_exist())
-                };
-                let field = &initial.fields[*field_index];
-                match field.alignment.evaluate_expect_position(&|alias| {self.lookup_str(&vd, alias)}) {
-                    Ok(alignment) => {
-                        let mut dr = DependencyReport::success(ExprValue::Position(alignment));
-                        let field_alignment_id = field_id.clone().get_attr_ident(FieldAttrType::Align).to_abstract();
-                        dr.add_pc_pairs(self.convert_expr_vars(field.alignment.vars())?, HashSet::from([field_alignment_id]));
-                        Ok(dr)
-                    },
-                    Err(ExprEvalError::LookupError{..}) => {
-                        Ok(DependencyReport::incomplete(self.convert_expr_vars(field.alignment.vars())?))
-                    }
-                    Err(err) => Err(FileSpecError::from(err))
-                }
-            },
-            _ => {
-                let target_id = field_id.clone().get_attr_ident(FieldAttrType::Align).to_abstract();
-                Err(FileSpecError::IdentNotValid(target_id))
-            }
-        }
-    }
-
-    fn try_get_field_alignment_base(&self, field_id: FieldIdent, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, FileSpecError> {
-        match self.stype.as_ref() {
-            PartiallyResolvedStructureType::UnresolvedSection{initial} => {
-                let field_index = match initial.id_map.get(&field_id.id) {
-                    Some(i) => i,
-                    None => return Ok(DependencyReport::does_not_exist())
-                };
-                let field = &initial.fields[*field_index];
-                match field.alignment_base.evaluate_expect_position(&|alias| {self.lookup_str(&vd, alias)}) {
-                    Ok(alignment_base) => {
-                        let mut dr = DependencyReport::success(ExprValue::Position(alignment_base));
-                        let field_alignment_base_id = field_id.clone().get_attr_ident(FieldAttrType::AlignBase).to_abstract();
-                        dr.add_pc_pairs(self.convert_expr_vars(field.alignment_base.vars())?, HashSet::from([field_alignment_base_id]));
-                        Ok(dr)
-                    },
-                    Err(ExprEvalError::LookupError{..}) => {
-                        Ok(DependencyReport::incomplete(self.convert_expr_vars(field.alignment_base.vars())?))
-                    }
-                    Err(err) => return Err(FileSpecError::from(err))
-                }
-            },
-            _ => {
-                let target_id = field_id.clone().get_attr_ident(FieldAttrType::AlignBase).to_abstract();
-                Err(FileSpecError::IdentNotValid(target_id))
-            }
-        }
-    }
-
-    fn try_get_field_end(&self, field_id: FieldIdent, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, FileSpecError> {
-        match self.stype.as_ref() {
-            PartiallyResolvedStructureType::UnresolvedSection{initial} => {
-
-                let start_id = field_id.clone().get_attr_ident(FieldAttrType::Start);
-                let length_id = field_id.clone().get_attr_ident(FieldAttrType::Length);
-                let parents = HashSet::from([start_id.clone().to_abstract(), length_id.clone().to_abstract()]);
-
-                let start = match vd.lookup_field_attr(&start_id) {
-                    Some(ev) => ev.expect_position()?,
-                    None => return Ok(DependencyReport::incomplete(parents))
-                };
-    
-                let length = match vd.lookup_field_attr(&length_id) {
-                    Some(ev) => ev.expect_position()?,
-                    None => return Ok(DependencyReport::incomplete(parents))
-                };
-        
-                let mut dr = DependencyReport::success(ExprValue::Position(start + length));
-                let end_id = field_id.clone().get_attr_ident(FieldAttrType::End).to_abstract();
-                dr.add_pc_pairs(parents, HashSet::from([end_id]));
-                Ok(dr)
-
-            },
-            _ => {
-                let target_id = field_id.clone().get_attr_ident(FieldAttrType::End).to_abstract();
-                Err(FileSpecError::IdentNotValid(target_id))
-            }
-        }       
-    }
-
-    fn try_get_field_valid(&self, field_id: FieldIdent, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, FileSpecError> {
-        match self.stype.as_ref() {
-            PartiallyResolvedStructureType::UnresolvedSection{initial} => {
-
-                
-
-                let field_index = match initial.id_map.get(&field_id.id) {
-                    Some(i) => i,
-                    None => return Ok(DependencyReport::does_not_exist())
-                };
-                let field = &initial.fields[*field_index];
-
-                if let Some(field_valid) = &field.valid {
-                    let mut parents = self.convert_expr_vars(field_valid.vars())?;
-                    parents.insert(field_id.clone().to_abstract());
-
-                    let field_value = match vd.lookup_field(&field_id) {
-                        Some(ev) => ev,
-                        None => return Ok(DependencyReport::incomplete(parents))
+                    // Get the index of the field by looking up its name in the initial SectionSpec's
+                    // id map. If it's not in the id map, then the field either does not exist or does
+                    // not belong to `self`. In that case, return DoesNotExist
+                    let field_index = match initial.id_map.get(&target_ident.field.id) {
+                        Some(i) => i,
+                        None => return Ok(DependencyReport::does_not_exist())
                     };
-    
-                    
-                    match field_valid.evaluate_with_args(&vec![field_value], &|alias| {self.lookup_str(&vd, alias)}) {
-                        Ok(valid) => {
-                            let mut dr = DependencyReport::success(ExprValue::Bool(valid.expect_bool()?));
-                            let field_valid_id = field_id.clone().get_attr_ident(FieldAttrType::Valid).to_abstract();
-                            dr.add_pc_pairs(parents, HashSet::from([field_valid_id]));
+
+                    // Get the field by its index
+                    let field = &initial.fields[*field_index];
+
+                    match target_ident.attr {
+                        FieldAttrType::Valid => {
+
+                            // Check to see if the field has a validity check
+                            if let Some(field_valid) = &field.valid {
+
+                                // If there is a validity check, then it's dependencies will be whatever
+                                // variables are in the validity check expression and also the field's value
+                                let mut parents = self.convert_expr_vars(field_valid.vars())?;
+                                parents.insert(target_ident.field.clone().to_abstract());
+            
+                                // Attempt to lookup the field's value to supply to the validity check. If it's
+                                // not available, return an incomplete dependency report.
+                                let field_value = match vd.lookup_field(&target_ident.field) {
+                                    Some(ev) => ev,
+                                    None => return Ok(DependencyReport::incomplete(parents))
+                                };
+                
+                                // Evaluate the field's validity check with the field's value as the only argument
+                                match field_valid.evaluate_with_args(&vec![field_value], &|alias| {self.lookup_str(&vd, alias)}) {
+                                    Ok(valid) => {
+                                        // If the evaluation was successful, ensure it's a Boolean and return it in
+                                        // a successful dependency report with the dependencies found earlier
+                                        let mut dr = DependencyReport::success(ExprValue::Bool(valid.expect_bool()?));
+                                        dr.add_pc_pairs(parents, HashSet::from([target_ident.to_abstract()]));
+                                        Ok(dr)
+                                    },
+                                    Err(ExprEvalError::LookupError{..}) => {
+                                        // If there was a lookup error, it means that one of the dependencies has not
+                                        // yet been resolved. Return an incomplete dependency report
+                                        Ok(DependencyReport::incomplete(parents))
+                                    }
+                                    Err(err) => {
+                                        // Any other error is a problem
+                                        Err(FileSpecError::from(err))
+                                    }
+                                }
+                            } else {
+                                // Field has no validity check, always return true with no dependencies
+                                Ok(DependencyReport::success(ExprValue::Bool(true)))
+                            }
+                        }, 
+                        FieldAttrType::Length => {
+                            // Attempt to evaluate the field's length expression
+                            self.try_evaluate_position_expression(&field.length, target_ident.to_abstract(), vd)
+                        },
+                        FieldAttrType::Offset => {
+                            // Attempt to evaluate the field's offset expression
+                            self.try_evaluate_position_expression(&field.offset, target_ident.to_abstract(), vd)
+                        },
+                        FieldAttrType::Align => {
+                            // Attempt to evaluate the field's alignment expression
+                            self.try_evaluate_position_expression(&field.alignment, target_ident.to_abstract(), vd)
+                        },
+                        FieldAttrType::AlignBase => {
+                            // Attempt to evaluate the field's alignment-base expression
+                            self.try_evaluate_position_expression(&field.alignment_base, target_ident.to_abstract(), vd)
+                        },
+                        FieldAttrType::Position => {
+                            // The position of the field is going to be the field's offset plus either the structure's
+                            // start location or the previous field's end location depending on whether this is the
+                            // first field in the structure.
+
+                            // Get the ID of the field's offset and add it as a dependency. Don't try to look it up
+                            // yet because not all of the dependencies have been documented.
+                            let offset_id = target_ident.field.clone().get_attr_ident(FieldAttrType::Offset);
+                            let mut parents = HashSet::from([offset_id.clone().to_abstract()]);
+            
+                            // Get the initial location from either the structure's start or the previous field's
+                            // end position
+                            let pre_offset = if *field_index == 0 {
+                                // First field in the structure, must be positioned starting from the structure start.
+                                // Get the structure's start ID, add it to dependencies, and attempt to look it up. If the
+                                // lookup fails, return an incomplete report
+                                let structure_start_id = self.id.get_attr_ident(StructureAttrType::Start);
+                                parents.insert(structure_start_id.clone().to_abstract());
+                                
+                                match vd.lookup_struct_attr(&structure_start_id) {
+                                    Some(ev) => ev.expect_position()?,
+                                    None => return Ok(DependencyReport::incomplete(parents))
+                                }
+
+                            } else {
+                                // Field is positioned starting from previous field's end. Get the previous field's end ID, 
+                                // add it to dependencies, and attempt to look it up. If the lookup fails, return an 
+                                // incomplete report
+                                let prev_field = self.id.clone().get_field_ident(initial.fields[*field_index - 1].id.clone());
+                                let previous_end_id = prev_field.clone().get_attr_ident(FieldAttrType::End);
+                                parents.insert(previous_end_id.clone().to_abstract());
+
+                                match vd.lookup_field_attr(&previous_end_id) {
+                                    Some(ev) => ev.expect_position()?,
+                                    None => return Ok(DependencyReport::incomplete(parents))
+                                }
+                            };
+            
+                            // Now that the parents list is complete, try to look up the offset. Return an incomplete report if
+                            // the lookup fails
+                            let offset = match vd.lookup_field_attr(&offset_id) {
+                                Some(ev) => ev.expect_position()?,
+                                None => return Ok(DependencyReport::incomplete(parents))
+                            };
+            
+                            // Calculate the field's position by adding the offset to the pre-offset position. Add the 
+                            // dependencies and return it as a successful dependency report
+                            let mut dr = DependencyReport::success(ExprValue::Position(pre_offset + offset));
+                            dr.add_pc_pairs(parents, HashSet::from([target_ident.to_abstract()]));
                             Ok(dr)
                         },
-                        Err(ExprEvalError::LookupError{..}) => {
-                            Ok(DependencyReport::incomplete(parents))
-                        }
-                        Err(err) => return Err(FileSpecError::from(err))
+                        _ => unreachable!()
                     }
+
                 } else {
-                    // Field has no validity check, always return true
-                    Ok(DependencyReport::success(ExprValue::Bool(true)))
+                    // If self isn't a UnresolvedSection, then it can't have fields. The field id 
+                    // must be invalid.
+                    Err(FileSpecError::IdentNotValid(target_ident.to_abstract()))
+                }
+            },
+
+            // Attributes that are associated with actual fields that must be contained in self, but
+            // that don't need any data about the FieldSpec itself.
+            FieldAttrType::Start | FieldAttrType::StartPad | FieldAttrType::End => {
+
+                #[cfg(test)] {
+                    // Panic during tests if the field does not belong to self.
+                    if self.id != target_ident.field.structure {
+                        panic!("try_get_field_attr called with field that does not belong to self")
+                    }
+
                 }
 
+                // Pre-check to ensure that self is an UnresolvedSection. self doesn't actually need to
+                // be an UnresolvedSection to do this processing, but this is here because finding the
+                // value of attributes that shouldn't exist can compromise other algorithms in use.
+                if let PartiallyResolvedStructureType::UnresolvedSection{initial} = self.stype.as_ref() {
+                    #[cfg(test)] {
+                        // Panic during tests if the field does not exist in the initial SectionSpec
+                        if !initial.id_map.contains_key(&target_ident.field.id) {
+                            panic!("try_get_field_attr called with field that belongs to self but is not in self's field list")
+                        }
+                    }
+                } else {
+                    // If self isn't a UnresolvedSection, then it can't have fields. The field id 
+                    // must be invalid.
+                    return Err(FileSpecError::IdentNotValid(target_ident.to_abstract()))
+                }
 
+                // Declare a hash set for the result's dependencies. This will be initialized in 
+                // the following logic depending on the attribute.
+                let parents: HashSet<AbstractIdent>;
+
+                // Calculation of the value depends on the attribute
+                let value = match target_ident.attr {
+                    FieldAttrType::Start => {
+                        // Get the start pad and position ids to add to the parents list and also 
+                        // for the lookup
+                        let start_pad_id = target_ident.field.clone().get_attr_ident(FieldAttrType::StartPad);
+                        let position_id = target_ident.field.clone().get_attr_ident(FieldAttrType::Position);
+        
+                        parents = HashSet::from([start_pad_id.clone().to_abstract(), position_id.clone().to_abstract()]);
+        
+                        // Attempt to lookup the field's start pad. If it fails, return an incomplete
+                        // dependency report
+                        let start_pad = match vd.lookup_field_attr(&start_pad_id) {
+                            Some(ev) => ev.expect_position()?,
+                            None => return Ok(DependencyReport::incomplete(parents))
+                        };
+                
+                        // Attempt to lookup the field's position. If it fails, return an incomplete
+                        // dependency report
+                        let position = match vd.lookup_field_attr(&position_id) {
+                            Some(ev) => ev.expect_position()?,
+                            None => return Ok(DependencyReport::incomplete(parents))
+                        };
+
+                        // Calculate the start by adding the start pad to the position
+                        ExprValue::Position(position + start_pad)
+
+                    },
+                    FieldAttrType::StartPad => {
+                        // Get the alignment, alignment-base, and position ids to add to the parents list 
+                        // and also for the lookup
+                        let alignment_id = target_ident.field.clone().get_attr_ident(FieldAttrType::Align);
+                        let alignment_base_id = target_ident.field.clone().get_attr_ident(FieldAttrType::AlignBase);
+                        let position_id = target_ident.field.clone().get_attr_ident(FieldAttrType::Position);
+
+                        parents = HashSet::from([
+                            alignment_id.clone().to_abstract(), 
+                            alignment_base_id.clone().to_abstract(),
+                            position_id.clone().to_abstract()
+                        ]);
+
+                        // Attempt to lookup the field's alignment. If it fails, return an incomplete
+                        // dependency report
+                        let alignment = match vd.lookup_field_attr(&alignment_id) {
+                            Some(ev) => ev.expect_position()?,
+                            None => return Ok(DependencyReport::incomplete(parents))
+                        };
+                
+                        // Attempt to lookup the field's alignment-base. If it fails, return an incomplete
+                        // dependency report
+                        let alignment_base = match vd.lookup_field_attr(&alignment_base_id) {
+                            Some(ev) => ev.expect_position()?,
+                            None => return Ok(DependencyReport::incomplete(parents))
+                        };
+                
+                        // Attempt to lookup the field's position. If it fails, return an incomplete
+                        // dependency report
+                        let position = match vd.lookup_field_attr(&position_id) {
+                            Some(ev) => ev.expect_position()?,
+                            None => return Ok(DependencyReport::incomplete(parents))
+                        };
+                
+                        // The `remainder` here is the offset from the position to the largest aligned location
+                        // less than the position. But we want the offset to the smallest aligned location 
+                        // that is greater than the position
+                        let remainder = (&position - &alignment_base).rem_euclid(&alignment);
+                
+                        // If the remainder is zero, then the position is already aligned and the start pad is 
+                        // zero. Otherwise, it's the compliment of the remainder.
+                        let start_pad = if remainder.is_zero() {
+                            BitIndex::zero()
+                        } else {
+                            alignment - remainder
+                        };
+
+                        // Convert the start pad position to an ExprValue
+                        ExprValue::Position(start_pad)
+                    },
+                    FieldAttrType::End => {
+                        // Get the start position and length ids to add to the parents list and also 
+                        // for the lookup
+                        let start_id = target_ident.field.clone().get_attr_ident(FieldAttrType::Start);
+                        let length_id = target_ident.field.clone().get_attr_ident(FieldAttrType::Length);
+                        parents = HashSet::from([start_id.clone().to_abstract(), length_id.clone().to_abstract()]);
+
+                        // Attempt to lookup the field's start position. If it fails, return an incomplete
+                        // dependency report
+                        let start = match vd.lookup_field_attr(&start_id) {
+                            Some(ev) => ev.expect_position()?,
+                            None => return Ok(DependencyReport::incomplete(parents))
+                        };
+            
+                        // Attempt to lookup the field's length. If it fails, return an incomplete
+                        // dependency report
+                        let length = match vd.lookup_field_attr(&length_id) {
+                            Some(ev) => ev.expect_position()?,
+                            None => return Ok(DependencyReport::incomplete(parents))
+                        };
+
+                        // Calculate the end position by adding the length to the start position
+                        ExprValue::Position(start + length)
+                    }
+                    _ => unreachable!()
+                };
+
+                // Create a successful dependency report with the result and dependencies determined above
+                let mut dr = DependencyReport::success(value);
+                dr.add_pc_pairs(parents, HashSet::from([target_ident.to_abstract()]));
+                Ok(dr)
+        
+            }
+        }
+    }
+
+
+
+    /// Attempts to evaluate the given expression as a position and return the result as a dependency 
+    /// report. target_ident will be used as the "child" in the report and any variables in the expression 
+    /// will be used as the "parents". Returns incomplete if there are any variables in the expression 
+    /// that aren't yet in the provided value dictionary. Returns an error if there are any errors 
+    /// evaluating the expression or resolving the variables in the expression or if the expression 
+    /// evaluates to anything other than a position.
+    fn try_evaluate_position_expression(&self, expr: &Expr, target_ident: AbstractIdent, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, FileSpecError> {
+
+        // Convert the expression's variables to AbstractIdents and keep track of them
+        // to return as dependencies upon success or failure
+        let parents = self.convert_expr_vars(expr.vars())?;
+
+        // Attempt to evaluate the expression using self's lookup_str routine
+        match expr.evaluate_expect_position(&|alias| {self.lookup_str(&vd, alias)}) {
+
+            Ok(pos) => {
+                // If the evaluation is successful, construct a successful dependency report 
+                // with the result, add the dependecies found previously, and return it.
+                let mut dr = DependencyReport::success(ExprValue::Position(pos));
+                dr.add_pc_pairs(parents, HashSet::from([target_ident]));
+                Ok(dr)
             },
-            _ => {
-                let target_id = field_id.clone().get_attr_ident(FieldAttrType::Offset).to_abstract();
-                Err(FileSpecError::IdentNotValid(target_id))
+            Err(ExprEvalError::LookupError{..}) => {
+                // If the evaluation failed due to a lookup error, then one of the dependencies
+                // must not be resolved yet. Return incomplete with the dependency list found
+                // previously
+                Ok(DependencyReport::incomplete(parents))
+            }
+            Err(err) => {
+                // Any other errors are actual problems with the expression. Return the error.
+                Err(FileSpecError::from(err))
             }
         }
     }
@@ -3718,7 +3728,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
                 }
 
             },
-            PartiallyResolvedStructureType::RepeatUntil{end, structure, seq, finalized} => {
+            PartiallyResolvedStructureType::RepeatUntil{seq, finalized, ..} => {
                 // Regardless of whether this structure is finalized, any members in seq are valid. add their
                 // unknowns to the set.
                 for member in seq {
@@ -3735,7 +3745,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
                 }
 
             },
-            PartiallyResolvedStructureType::Chain{next, structure, prs, seq, finalized} => {
+            PartiallyResolvedStructureType::Chain{prs, seq, finalized, ..} => {
                 let (new_unks, new_expand_deps) = prs.borrow().unknowns(vd)?;
                 unks.extend(new_unks);
                 expand_deps.extend(new_expand_deps);
@@ -4261,7 +4271,7 @@ impl Structure {
                                     err.push_annotation(sspan2.range(), Some("Element end is here".to_string()));
                                     return Err(err)
                                 },
-                                Some((mut obj, _)) => {
+                                Some((obj, _)) => {
                                     let n = node_stack.len();
                                     if n == 0 {
                                         //svg.members.push(elem);
@@ -4604,17 +4614,22 @@ pub struct FileMap<'a> {
 
 impl<'a> FileMap<'a> {
 
-    pub fn new(structure: Rc<Structure>) -> FileMap<'a> {
+    pub fn new(structure: Rc<Structure>, fm: &mut crate::FileManager) -> FileMap<'a> {
         let file_struct = StructureIdent::new("file".to_string());
         let mut prs_map = HashMap::new();
         let prs = PartiallyResolvedStructure::new(structure.clone(), file_struct.clone(), &mut prs_map);
 
-        let initial_monikers = HashMap::new();
+        let eof = ExprValue::Position(BitIndex::bytes(fm.len()));
+        let mut value_dict = ValueDictionary::new();
+        value_dict.insert_field(file_struct.clone().get_field_ident("EOF".to_string()), eof);
+
+        let mut initial_monikers = HashMap::new();
+        initial_monikers.insert("EOF".to_string(), file_struct.clone().get_field_ident("EOF".to_string()));
         prs.borrow_mut().initialize_inherited_monikers(&prs_map, initial_monikers);
 
         FileMap {
             dep_graph: DepGraph::new(),
-            value_dict: ValueDictionary::new(),
+            value_dict,
             prs,
             prs_map
         }
@@ -4800,7 +4815,7 @@ impl<'a> FileMap<'a> {
                     match ds {
                         DataSource::Field(f) => {
                             // self.value_dict.insert_field(fi.clone(), v);
-                            let v = f.parse(fm)?;
+                            // let v = f.parse(fm)?;
                             for pc in dr.parents_children.into_iter() {
                                 let deps: Vec<AbstractIdent> = pc.0.clone().into_iter().collect();
                                 for c in pc.1 {
@@ -5095,7 +5110,7 @@ impl<'a> FileMap<'a> {
     }
 
     pub fn initialize(&mut self, fm: &mut crate::FileManager) -> Result<(), FileSpecError> {
-        let mut vd = std::mem::take(&mut self.value_dict);
+        let vd = std::mem::take(&mut self.value_dict);
         let (unk0, unk1) = self.prs.borrow().unknowns(&vd).unwrap();
         self.value_dict = vd;
 
@@ -5147,7 +5162,7 @@ pub fn make_png() -> Structure {
     let fname = "png-spec.xml".to_string();
     let s = std::fs::read_to_string(&fname).unwrap();
     match Structure::from_xml(&s, Some(Rc::new(fname.clone()))) {
-        Ok(mut s) => {
+        Ok(s) => {
             // s.set_fname(fname);
             s
         },
@@ -5271,8 +5286,8 @@ mod png_tests {
     fn start_file<'a>(filename: &'a str) -> (FileMap<'a>, crate::FileManager<'a>) {
         // pretty_env_logger::init();
         let s = Rc::new(make_png());
-        let mut png = FileMap::new(s);
         let mut fm = crate::FileManager::new(filename.to_string(), crate::FileManagerType::ReadOnly, false).unwrap();
+        let mut png = FileMap::new(s, &mut fm);
         png.initialize(&mut fm).unwrap();
         (png, fm)
     }
