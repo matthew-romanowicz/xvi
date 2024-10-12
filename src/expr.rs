@@ -666,28 +666,28 @@ impl ExprValue {
     pub fn expect_integer(self) -> Result<i64, ExprEvalError> {
         match self {
             ExprValue::Integer(value) => Ok(value),
-            other => Err(ExprEvalError::DataTypeMismatch{found: other.datatype_as_string(), expected: "Integer".to_string()})
+            other => Err(ExprEvalError::data_type_mismatch(other.datatype_as_string(), "Integer".to_string()))
         }
     }
 
     pub fn expect_position(self) -> Result<BitIndex, ExprEvalError> {
         match self {
             ExprValue::Position(value) => Ok(value),
-            other => Err(ExprEvalError::DataTypeMismatch{found: other.datatype_as_string(), expected: "Position".to_string()})
+            other => Err(ExprEvalError::data_type_mismatch(other.datatype_as_string(), "Position".to_string()))
         }
     }
 
     pub fn expect_bool(self) -> Result<bool, ExprEvalError> {
         match self {
             ExprValue::Bool(value) => Ok(value),
-            other => Err(ExprEvalError::DataTypeMismatch{found: other.datatype_as_string(), expected: "Boolean".to_string()})
+            other => Err(ExprEvalError::data_type_mismatch(other.datatype_as_string(), "Boolean".to_string()))
         }
     }
 
     pub fn expect_string(self) -> Result<String, ExprEvalError> {
         match self {
             ExprValue::String(value) => Ok(value),
-            other => Err(ExprEvalError::DataTypeMismatch{found: other.datatype_as_string(), expected: "String".to_string()})
+            other => Err(ExprEvalError::data_type_mismatch(other.datatype_as_string(), "String".to_string()))
         }
     }
 }
@@ -1067,13 +1067,13 @@ impl ExprNode {
             ExprNode::Value(v) => Ok(v.clone()),
             ExprNode::Var(s) => match lookup(s) {
                 Some(result) => Ok(result),
-                None => Err(ExprEvalError::LookupError{key: s.clone()})
+                None => Err(ExprEvalError::lookup_error(s.clone()))
             },
             ExprNode::Arg(n) => {
                 if *n < arguments.len() {
                     Ok(arguments[*n].clone())
                 } else {
-                    Err(ExprEvalError::ArgumentCountError{accessed: *n, provided: arguments.len()})
+                    Err(ExprEvalError::argument_count_error(*n, arguments.len()))
                 }
             },
             ExprNode::Empty => todo!()
@@ -1124,7 +1124,7 @@ impl Expr {
     pub fn evaluate_expect_position(&self, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<BitIndex, ExprEvalError> {
         match self.evaluate(lookup)? {
             ExprValue::Position(bp) => Ok(bp),
-            other => Err(ExprEvalError::DataTypeMismatch{found: other.datatype_as_string(), expected: "Position".to_string()})
+            other => Err(ExprEvalError::data_type_mismatch(other.datatype_as_string(), "Position".to_string()))
         }
     }
 
@@ -1135,7 +1135,7 @@ impl Expr {
     pub fn evaluate_expect_bool(&self, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<bool, ExprEvalError> {
         match self.evaluate(lookup)? {
             ExprValue::Bool(b) => Ok(b),
-            other => Err(ExprEvalError::DataTypeMismatch{found: other.datatype_as_string(), expected: "Bool".to_string()})
+            other => Err(ExprEvalError::data_type_mismatch(other.datatype_as_string(), "Boolean".to_string()))
         }
     }
 
@@ -1706,7 +1706,7 @@ mod expr_parse_tests {
 }
 
 #[derive(Debug)]
-pub enum ExprEvalError {
+pub enum ExprEvalErrorKind {
     LookupError{key: String},
     ArgumentCountError{accessed: usize, provided: usize},
     DataTypeMismatch{found: String, expected: String},
@@ -1714,61 +1714,184 @@ pub enum ExprEvalError {
     OperationError(ExprOperationError)
 }
 
+#[derive(Debug)]
+pub struct ExprEvalError {
+    pub kind: ExprEvalErrorKind,
+    pub help: Option<String>,
+    fname: Option<String>,
+    message: Option<String>,
+    remap: IndexRemap
+}
+
 impl ExprEvalError {
-    pub fn set_fname(&mut self, fname: String) {
-        if let ExprEvalError::OperationError(ref mut err) = self {
-            err.fname = Some(fname);
+
+    fn new(kind: ExprEvalErrorKind) -> ExprEvalError {
+        ExprEvalError {
+            kind,
+            help: None,
+            fname: None,
+            message: None,
+            remap: IndexRemap::new()
         }
+    }
+
+    pub fn lookup_error(key: String) -> ExprEvalError {
+        let kind = ExprEvalErrorKind::LookupError{key};
+        ExprEvalError::new(kind)
+    }
+
+    pub fn argument_count_error(accessed: usize, provided: usize) -> ExprEvalError {
+        let kind = ExprEvalErrorKind::ArgumentCountError{accessed, provided};
+        ExprEvalError::new(kind)
+    }
+
+    pub fn data_type_mismatch(found: String, expected: String) -> ExprEvalError {
+        let kind = ExprEvalErrorKind::DataTypeMismatch{found, expected};
+        ExprEvalError::new(kind)
+    }
+
+    pub fn parse_error(details: String) -> ExprEvalError {
+        let kind = ExprEvalErrorKind::ParseError{details};
+        ExprEvalError::new(kind)
+    }
+
+    pub fn is_lookup_error(&self) -> bool {
+        matches!(self.kind, ExprEvalErrorKind::LookupError{..})
+    }
+
+    pub fn set_fname(&mut self, fname: String) {
+        if let ExprEvalErrorKind::OperationError(ref mut err) = self.kind {
+            err.fname = Some(fname.clone());
+        }
+        self.fname = Some(fname);
         
     }
 
     pub fn remap(&mut self, remap: &IndexRemap) {
-        if let ExprEvalError::OperationError(ref mut err) = self {
+        if let ExprEvalErrorKind::OperationError(ref mut err) = self.kind {
             err.remap(remap);
         }
+        self.remap.extend(remap.clone());
     }
 
-    pub fn try_get_message(&self) -> Option<String> {
-        if let ExprEvalError::OperationError(err) = self {
-            err.message.clone()
-        } else {
-            None
+    fn details(&self) -> String {
+        match &self.kind {
+            ExprEvalErrorKind::LookupError{key} => format!("Lookup of '{}' failed", key),
+            ExprEvalErrorKind::ArgumentCountError{accessed, provided} => format!("Expression attempted to use argument #{} but only {} were provided.", accessed, provided),
+            ExprEvalErrorKind::DataTypeMismatch{found, expected} => format!("Data type mismatch: '{}' found, '{}' expeced", found, expected),
+            ExprEvalErrorKind::ParseError{details} => format!("Parse error: {}", details),
+            ExprEvalErrorKind::OperationError(err) => err.details()
         }
     }
 
-    pub fn get_message(&mut self, context: &str) -> String {
-        if let ExprEvalError::OperationError(ref mut err) = self {
-            if err.message.is_none() {
-                err.set_context(context);
-            }
-            err.message.as_ref().unwrap().clone()
-        } else {
-            format!("{}", self).to_string()
+    fn annotations(&self) -> Vec<(Option<String>, std::ops::Range<usize>)> {
+        match &self.kind {
+            ExprEvalErrorKind::LookupError{key} => {
+                todo!()
+            },
+            ExprEvalErrorKind::ArgumentCountError{accessed, provided} => {
+                todo!()
+            },
+            ExprEvalErrorKind::DataTypeMismatch{found, expected} => {
+                todo!()
+            },
+            ExprEvalErrorKind::ParseError{details} => {
+                todo!()
+            },
+            ExprEvalErrorKind::OperationError(err) => err.annotations()
         }
     }
 
     pub fn set_context(&mut self, context: &str) {
-        if let ExprEvalError::OperationError(ref mut err) = self {
-            err.set_context(context);
+        if self.message.is_some() {
+            return;
         }
+        let mut msg = format!("\x1b[0;31mERROR:\x1b[0m {}", self.details()).to_string();
+        if let Some(fname) = &self.fname {
+            let s = format!("\n\x1b[0;96m -->\x1b[0m {}", fname).to_string();
+            msg.push_str(&s)
+        }
+        let mut max_line_num = 0;
+        for (_, r) in &self.annotations() {
+            let (line, _) = get_line_char(context, r.start);
+            if line > max_line_num {
+                max_line_num = line;
+            }
+            let (line, _) = get_line_char(context, r.end);
+            if line > max_line_num {
+                max_line_num = line;
+            }
+        }
+        let line_num_length = format!("{}", max_line_num).len();
+        for (info, r) in &self.annotations() {
+            let (line1, col1) = get_line_char(context, r.start);
+            let (line2, col2) = get_line_char(context, r.end);
+            let line_text = context.lines().nth(line1).unwrap();
+            if let Some(info_string) = info {
+                msg.push_str("\n");
+                msg.push_str(&info_string);
+            }
+            let (line_text, col1, col2) = sample_line(line_text, col1, col2);
+            let s = format!("\n\x1b[0;96m{:2$} | \x1b[0m{}", line1 + 1, line_text, line_num_length).to_string();
+            msg.push_str(&s);
+            let s = format!("\n{}\x1b[0;31m{}\x1b[0m", " ".repeat(col1 + line_num_length + 3), "~".repeat(col2 - col1)).to_string();
+            msg.push_str(&s);
+        }
+        if let Some(help) = &self.help {
+            msg.push_str(format!("\n\x1b[0;32mHELP:\x1b[0m {}", help).as_str());
+        }
+        self.message = Some(msg)
     }
+
+    pub fn try_get_message(&self) -> Option<String> {
+        self.message.clone()
+        // if let ExprEvalError::OperationError(err) = self {
+        //     err.message.clone()
+        // } else {
+        //     None
+        // }
+    }
+
+    pub fn get_message(&mut self, context: &str) -> String {
+        if self.message.is_none() {
+            self.set_context(context);
+        }
+        self.message.as_ref().unwrap().clone()
+
+        // if let ExprEvalError::OperationError(ref mut err) = self {
+        //     if err.message.is_none() {
+        //         err.set_context(context);
+        //     }
+        //     err.message.as_ref().unwrap().clone()
+        // } else {
+        //     format!("{}", self).to_string()
+        // }
+    }
+
+    // pub fn set_context(&mut self, context: &str) {
+    //     if let ExprEvalError::OperationError(ref mut err) = self {
+    //         err.set_context(context);
+    //     }
+    // }
 }
 
 impl std::fmt::Display for ExprEvalError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ExprEvalError::LookupError{key} => write!(f, "Lookup of '{}' failed", key),
-            ExprEvalError::ArgumentCountError{accessed, provided} => write!(f, "Expression attempted to use argument #{} but only {} were provided.", accessed, provided),
-            ExprEvalError::DataTypeMismatch{found, expected} => write!(f, "Data type mismatch: '{}' found, '{}' expeced", found, expected),
-            ExprEvalError::ParseError{details} => write!(f, "Parse error: {}", details),
-            ExprEvalError::OperationError(err) => err.fmt(f)
-        }
+        write!(f, "{}", self.details())
+        // match self {
+        //     ExprEvalError::LookupError{key} => write!(f, "Lookup of '{}' failed", key),
+        //     ExprEvalError::ArgumentCountError{accessed, provided} => write!(f, "Expression attempted to use argument #{} but only {} were provided.", accessed, provided),
+        //     ExprEvalError::DataTypeMismatch{found, expected} => write!(f, "Data type mismatch: '{}' found, '{}' expeced", found, expected),
+        //     ExprEvalError::ParseError{details} => write!(f, "Parse error: {}", details),
+        //     ExprEvalError::OperationError(err) => err.fmt(f)
+        // }
         
     }    
 }
 
 impl From<ExprOperationError> for ExprEvalError {
     fn from(err: ExprOperationError) -> Self {
-        ExprEvalError::OperationError(err)
+        let kind = ExprEvalErrorKind::OperationError(err);
+        ExprEvalError::new(kind)
     }
 }
