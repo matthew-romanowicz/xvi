@@ -2796,57 +2796,99 @@ impl<'a> PartiallyResolvedStructure<'a> {
     /// Attempts to determine the number of repetitions of a Repeat, RepeatUntil, or Chain and
     /// returns the result as a dependency report. This method will create children to represent
     /// a repetition once it's confirmed that that repetition exists, regardless of whether the
-    /// actual number of repetitions has been determined. 
+    /// actual number of repetitions has been determined. Only documents dependencies on 'break'
+    /// attributes if the structure actually has break conditions.
+    ///
+    /// NOTE: In the case of Chain, some dependencies will only be returned in a single call to
+    /// this function, and will not be repeated in subsequent calls.
+    ///
+    /// Returns IdentNotValid if self is not a repeating structure.
     fn try_get_repetitions(&mut self, vd: &ValueDictionary, prs_map: &mut PrsMap<'a>) -> Result<DependencyReport<ExprValue>, FileSpecError> {
 
+        // Document the target ident to be included in dependency reports as needed
         let target_ident = self.id.get_attr_ident(StructureAttrType::Repetitions);
 
-        let end_id = self.id.get_attr_ident(StructureAttrType::End);
-        let start_id = self.id.get_attr_ident(StructureAttrType::Start);
-
+        // Compute the child monikers for creating new repetitions here since it requires borrowing self
+        // so cannot be done within a mutable borrow later.
         let child_monikers = self.monikers_for_child();
 
-        let mut parents = HashSet::new();
-
-        let n_value = match self.stype.as_ref() { // Need this for the borrow checker
-            PartiallyResolvedStructureType::Repeat{n, ..} => {
-                parents.extend(self.convert_expr_vars(n.vars())?);
-                Some(n.evaluate_expect_integer(self.fname.clone(), &|alias| {self.lookup_str(&vd, alias)}))
-            },
-            _ => {
-                None
-            }
-        };
-
+        // Determine whether self has a break condition now since it requires a mutable borrow of self
         let is_breakable = self.is_breakable();
 
-        let fname = self.fname.clone(); // Need this for the borrow checker
+        // Declare the dependnecies list here so that variables needed to evaluate 'n' (see comment in following
+        // logic) can be documented.
+        let mut parents = HashSet::new();
+
+        // Pre-compute the evaluated value of n for Repeat structures. This needs to be done ahead of time
+        // because it requires a borrow of self so cannot be done within the mutable borrow in the later logic.
+        let n_value: Option<Result<Option<i64>, ExprEvalError>>;
+        if let PartiallyResolvedStructureType::Repeat{n, ..} = self.stype.as_ref() {
+            // If self is a Repeat structure, make sure to add n's variables to the dependencies.
+            parents.extend(self.convert_expr_vars(n.vars())?);
+            n_value = Some(n.evaluate_expect_integer(self.fname.clone(), &|alias| {self.lookup_str(&vd, alias)}))
+        } else {
+            // Otherwise, just store None since it does not exist and will not be needed.
+            n_value = None
+        }
 
         match self.stype.as_mut() {
-            PartiallyResolvedStructureType::Repeat{n, structure, ref mut seq, ref mut finalized} => {
-                // let n = n.clone(); // Need this for the borrow checker
-                // let mut parents = self.convert_expr_vars(n.vars())?;
+            PartiallyResolvedStructureType::Repeat{structure, ref mut seq, ref mut finalized, ..} => {
 
-                match n_value.unwrap() { // Unwrap always works since n_value is set when stype is Repeat
+                // Get the result of evaluating the 'n' expression. Unwrap always works since n_value 
+                // is set when stype is Repeat
+                match n_value.unwrap() { 
                     Ok(Some(v)) => {
+                        // If the evaluation of n returned a value try to add new PRSs into seq until
+                        // that number is hit. It's possible that seq already has some members in it,
+                        // so we need to account for that.
 
+                        if v < 0 {
+                            todo!("n evaluated to negative number for {:?}", self.id);
+                        }
+
+                        // Make a new variable n_repetations that will store the true number of repetitions.
+                        // Initialize it to the value of the n expression, but this could change if a break
+                        // condition is encountered.
                         let mut n_repetitions = v;
 
+                        // Get the current number of members in the sequence for the start of the iterator 
+                        // coming up
                         let current_len = seq.len();
 
+                        #[cfg(test)] {
+                            // Panic during tests if the sequence is somehow larger than n, which should be 
+                            // the max size.
+                            if current_len as i64 > n_repetitions {
+                                panic!("seq in {:?} somehow got to be larger than n", self.id);
+                            }  
+                        }
+
+                        // Iterate from the current length until the value of the n expression to add members to
+                        // seq.
                         for i in current_len..v as usize {
+                            // If this isn't the first member (in which case seq would be empty) and the structure
+                            // contains break conditions, we need to check the break condition of the previous repetition
+                            // before adding a new one.
                             if i != 0 && is_breakable {
+                                // Grab the ident for the break condition of the previous repetition, add it to the
+                                // dependencies list, and attempt to look it up. Return incomplete if the lookup fails.
                                 let break_id = self.id.clone().get_attr_ident(StructureAttrType::Break(i - 1));
                                 parents.insert(break_id.clone().to_abstract());
                                 let is_break = match vd.lookup_struct_attr(&break_id) {
                                     Some(ev) => ev.expect_bool()?,
                                     None => return Ok(DependencyReport::incomplete(parents))
                                 };
+                                // If the break condition is met, overwrite n_repetitions with i (the number of repetitions
+                                // when the break condition was met) and exit the loop without adding another repetiton.
                                 if is_break {
                                     n_repetitions = i as i64;
                                     break;
                                 }
                             }
+
+                            // Assuming that the previous logic did not end up breaking the loop, it's safe to add a new repetition.
+                            // Calculate the index of the new repetition by adding i (the index of the repetition) to self's index.
+                            // Create the PRS, initialize it's monikers, and add it to seq.
                             let mut child_index = self.index_path.clone();
                             child_index.push(i);
                             let mut prs = PartiallyResolvedStructure::new_indexed(structure.clone(), self.id.clone(), child_index, prs_map);
@@ -2854,43 +2896,52 @@ impl<'a> PartiallyResolvedStructure<'a> {
                             seq.push(prs);
                         }
 
-                        // let mut struct_seq = Vec::new();
-                        // for i in 0..n_repetitions {
-                        //     let mut child_index = self.index_path.clone();
-                        //     child_index.push(i as usize);
-                        //     let mut prs = PartiallyResolvedStructure::new_indexed(structure.clone(), self.id.clone(), child_index, prs_map);
-                        //     prs.borrow_mut().initialize_inherited_monikers(prs_map, child_monikers.clone());
-                        //     struct_seq.push(prs);
-                        // }
-                        // *seq = struct_seq;
+                        // The above loop will exit either because a break condition was hit or because seq is populated up until the 
+                        // value of n. Either way, seq is now complete and n_repetitions hold the number of repetitions. Set the finalized
+                        // flag and construct and return a dependency report with the number of repetitions with the dependencies needed.
                         *finalized = true;
                         let mut dr = DependencyReport::success(ExprValue::Integer(n_repetitions));
                         dr.add_pc_pairs(parents, HashSet::from([target_ident.to_abstract()]));
                         Ok(dr)
                     },
                     Ok(None) => {
+                        // If the evaluation of n failed due to a lookup error, return an incomplete report
                         Ok(DependencyReport::incomplete(parents))
                     },
-                    Err(err) => Err(FileSpecError::from(err))
+                    Err(err) => {
+                        // Any other errors are a problem
+                        Err(FileSpecError::from(err))
+                    }
                 }
             },
-            PartiallyResolvedStructureType::RepeatUntil{end, structure, ref mut seq, ref mut finalized} => {
+            PartiallyResolvedStructureType::RepeatUntil{structure, ref mut seq, ref mut finalized, ..} => {
+                // For RepeatUntil structures, check if the current most recent repetition has a break condition and 
+                // check if it's end location is equal to self's end location. Otherwise, add another member to the
+                // sequence and return incomplete.
 
                 // If the structure is already finalized, just return the length of the existing sequence
                 if *finalized {
+                    #[cfg(test)] {
+                        // Panic during tests if this was called on a already finalized structure
+                        panic!("try_get_repetitions called on {:?} after it was finalized", self.id);
+                    }
                     return Ok(DependencyReport::success(ExprValue::Integer(seq.len() as i64)));
                 }
 
-                // If there is at least one member of the sequence, check if it has met a break condition
+                // If there are break conditions and there is at least one member of the sequence, check if it has met 
+                // a break condition
                 if !seq.is_empty() && is_breakable {
+                    // Get the ident for the break condition of the most recent repetition, add it to the dependencies
+                    // list, and attempt to look it up. If the lookup fails, return an incomplete report.
                     let break_id = self.id.clone().get_attr_ident(StructureAttrType::Break(seq.len() - 1));
                     parents.insert(break_id.clone().to_abstract());
-
                     let is_break = match vd.lookup_struct_attr(&break_id) {
                         Some(ev) => ev.expect_bool()?,
                         None => return Ok(DependencyReport::incomplete(parents))
                     };
-                    info!("Checking for break: {}", is_break);
+
+                    // If the break condition is met, set the finalized flag and return the current sequence length. Make
+                    // sure to add the dependencies to the dependency report.
                     if is_break {
                         *finalized = true;
                         let mut dr = DependencyReport::success(ExprValue::Integer(seq.len() as i64));
@@ -2899,18 +2950,25 @@ impl<'a> PartiallyResolvedStructure<'a> {
                     }
                 }
 
+                // If a break condition hasn't been met, check if the end of the most recent repetition exceeds or 
+                // is equal to self's end position. 
                 // The end of the current repetition is either the start of the structure (if no repetitions have
-                // been estabilished yet) or the end of the last established repetition
+                // been estabilished yet) or the end of the last established repetition. Get the ident of whichever
+                // is applicable and add it to the dependencies list.
                 let current_end_id = if seq.is_empty() {
-                    start_id
+                    self.id.get_attr_ident(StructureAttrType::Start)
                 } else {
                     let last_index = seq.len() - 1;
                     seq[last_index].borrow().id.get_attr_ident(StructureAttrType::End)
                 };
                 
                 parents.insert(current_end_id.clone().to_abstract());
+
+                // Also add self's end id to the dependencies list
+                let end_id = self.id.get_attr_ident(StructureAttrType::End);
                 parents.insert(end_id.clone().to_abstract());
 
+                // Try to look up the two end positions. Return incomplete if either fails
                 let current_end = match vd.lookup_struct_attr(&current_end_id) {
                     Some(ev) => ev.expect_position()?,
                     None => return Ok(DependencyReport::incomplete(parents))
@@ -2921,92 +2979,169 @@ impl<'a> PartiallyResolvedStructure<'a> {
                     None => return Ok(DependencyReport::incomplete(parents))
                 };
 
+                
                 if current_end < end {
+                    // If the end of the most recent repetition has not met or exceeded self's end, then add another repetition.
+                    // Calculate the child's index by pushing the index of the repetition (the sequence length) to self's index.
+                    // Initialize the new PRS's monikers
                     let mut child_index = self.index_path.clone();
                     child_index.push(seq.len());
                     let prs = PartiallyResolvedStructure::new_indexed(structure.clone(), self.id.clone(), child_index, prs_map);
                     prs.borrow_mut().initialize_inherited_monikers(prs_map, child_monikers.clone());
+
+                    // Add the new child's end attribute and (if there are any break conditions) the child's break ID to the 
+                    // dependencies so they will be found by the next time this is called.
                     parents.insert(prs.borrow().id.get_attr_ident(StructureAttrType::End).to_abstract());
                     if is_breakable {
                         let break_id = self.id.clone().get_attr_ident(StructureAttrType::Break(seq.len()));
                         parents.insert(break_id.clone().to_abstract());
                     }
+                    
+                    // Add the new PRS to the sequence and return incomplete.
                     seq.push(prs);
                     Ok(DependencyReport::incomplete(parents))
-                } else {
-                    *finalized = true;
+                
+                } else if current_end > end {
 
+                    todo!("Last repetition exceeded end in {:?}", self.id)
+
+                } else {
+                    // Otherwise, the most recent repetition must be the last. Set the finalized flag and return the current 
+                    // sequence length. Add the dependencies list to the report.
+
+                    *finalized = true;
                     let mut dr = DependencyReport::success(ExprValue::Integer(seq.len() as i64));
                     dr.add_pc_pairs(parents, HashSet::from([target_ident.to_abstract()]));
                     Ok(dr)
                 }
             },
             PartiallyResolvedStructureType::Chain{next, structure, prs, ref mut seq, ref mut finalized} => {
+                // Chain structures will always repeat until a break is encountered. A chain without any break
+                // conditions is an error.
+
+                if !is_breakable {
+                    todo!("Unbreakable chain encountered: {:?}", self.id);
+                }
+                
                 let next = next.clone(); // Need this for the borrow checker
 
                 // If the structure is already finalized, just return the length of the existing sequence
                 if *finalized {
+                    #[cfg(test)] {
+                        // Panic during tests if this was called on a already finalized structure
+                        panic!("try_get_repetitions called on {:?} after it was finalized", self.id);
+                    }
                     return Ok(DependencyReport::success(ExprValue::Integer(seq.len() as i64 + 1)));
                 }
 
-                // Keep in mind prs is the "zeroth" sequence member, so this works even if the sequence is empty
+                // Get the ident for the break of the most recent repetition. Keep in mind that Chain structures
+                // always have at least one repetition so this is always valid, even is the sequence is empty 
+                // (the first repetition is stored in prs)
                 let break_id = self.id.clone().get_attr_ident(StructureAttrType::Break(seq.len()));
+
+                // Add the ident to the dependencies list and attempt to look it up. If the lookup fails, then
+                // return incomplete.
                 parents.insert(break_id.clone().to_abstract());
                 let is_break = match vd.lookup_struct_attr(&break_id) {
                     Some(ev) => ev.expect_bool()?,
                     None => return Ok(DependencyReport::incomplete(parents))
                 };
-                info!("Checking for break: {}", is_break);
+                
+                // If a break condition is met, set the finalized flag and return the current sequence length
+                // plus one (to account for prs). Make sure to add the dependencies list.
                 if is_break {
                     *finalized = true;
-                    let mut dr = DependencyReport::success(ExprValue::Integer(seq.len() as i64));
+                    let mut dr = DependencyReport::success(ExprValue::Integer(seq.len() as i64 + 1));
                     dr.add_pc_pairs(parents, HashSet::from([target_ident.to_abstract()]));
                     return Ok(dr)
                 }
 
+                // If a break condition hasn't been encountered, we'll need to add another repetition. Start by
+                // grabbing a reference to the most recent repetition since that's the context in which we'll have
+                // to evaluate the 'next' expression. 
                 let last_member = if seq.is_empty() {
+                    // If the sequence is empty, then the most recent repetition is the first one, stored in prs.
+                    // Return that, but not before adding the next expression's variables in it's context to the 
+                    // dependencies list. This is needed in order to guarantee that the dependencies are documented
+                    // for the first sequence entry. Subsequent depenedencies will be documented each time a new 
+                    // repetition is added to the sequence. This is critical because these dependencies will
+                    // not be documented again in subsequent calls.
+                    parents.extend(prs.borrow().convert_expr_vars(next.vars())?);
                     prs.clone()
+                    
                 } else {
+                    // If the sequence isn't empty, then the most recent repetition is the last member of the sequence.
+                    // Since each repetition is wrapped in an (fake) Addressed structure, we actually need to grab the content
+                    // from that addressed structure. 
                     let n = seq.len() - 1;
                     if let PartiallyResolvedStructureType::Addressed{pss, ..} = seq[n].borrow().stype.as_ref() {
                         pss.clone()
                     } else {
+                        // This is unreachable since every child added to seq is wrapped in an Addressed structure.
                         unreachable!()
                     }
                 };
-                info!("Last member is {:?}", last_member.borrow().id);
-                info!("Last member's import monikers: {:?}", last_member.borrow().import_monikers);
-                parents.extend(last_member.borrow().convert_expr_vars(next.vars())?);
+                
+                // Add the variables needed to evaluate 'next' in the last repetition's context to the dependencies list
+                // TODO: this may not be needed since the dependencies should have been added in the previous call, when
+                // the child was first created.
+                // parents.extend(last_member.borrow().convert_expr_vars(next.vars())?);
 
-                // let lookup = last_member.borrow().get_lookup_fn(vd);
-
-                match next.evaluate_expect_position(fname, &|alias| {last_member.borrow().lookup_str(&vd, alias)}) {
+                // Try to evaluate 'next' in the context of the last repetition. Keep in mind that self's fname is still
+                // used here since the actual expression is defined in whatever file contains self's definition.
+                match next.evaluate_expect_position(self.fname.clone(), &|alias| {last_member.borrow().lookup_str(&vd, alias)}) {
                     Ok(Some(v)) => {
-                        // panic!("Next position: {:?} from {:?}", v, last_member.borrow().id);
-                        if !seq.is_empty() {
-                            panic!("Next position: {:?} from {:?}", v, last_member.borrow().id);
+
+                        if v.is_negative() {
+                            todo!("'next' evaluated to a negative position for {:?}", self.id);
                         }
+
+                        // If the evaluation was successful, add another repetition at the resulting address. Compute the 
+                        // index by adding the repetition index (the sequence length plus one to account for prs) to self's
+                        // index and crate the PRS.
                         let mut child_index = self.index_path.clone();
                         child_index.push(seq.len() + 1); // + 1 to account for prs
                         let mut child = PartiallyResolvedStructure::new_indexed(structure.clone(), self.id.clone(), child_index, prs_map);
-                        // panic!("PRS: {:?}", prs_map.get(&child.borrow().id).unwrap().borrow().id);
+                        
+                        // child must be an Addressed structure since "structure" was wrapped in an Addressed structure during
+                        // self's initialization. Overwrite the position with the result of evaluating 'next'.
                         if let PartiallyResolvedStructureType::Addressed{ref mut position, ..} = child.borrow_mut().stype.as_mut() {
                             *position = Rc::new(ExprWrapper::from_default(Expr::value(ExprValue::Position(v))));
                         } else {
                             unreachable!()
                         }
+                        
+                        // Initialize the new repetition's monikers
                         child.borrow_mut().initialize_inherited_monikers(prs_map, child_monikers.clone());
+
+                        // Add the dependencies needed to evaluate 'next' in the new child's context to the dependencies list
+                        // so that they'll be available for the next iteration. This is critical because these dependencies will
+                        // not be documented again in subsequent calls.
+                        if let PartiallyResolvedStructureType::Addressed{pss, ..} = child.borrow().stype.as_ref() {
+                            parents.extend(pss.borrow().convert_expr_vars(next.vars())?);
+                        } else {
+                            unreachable!()
+                        }
+                        
+                        // Add the new repetition to the sequence, and return an incomplete report
                         seq.push(child);
 
                         return Ok(DependencyReport::incomplete(parents));
                     },
                     Ok(None)=> {
+                        // If the evaluation failed due to a lookup error, return incomplete with the dependencies list already found
                         Ok(DependencyReport::incomplete(parents))
                     },
-                    Err(err) => Err(FileSpecError::from(err))
+                    Err(err) => {
+                        // Any other errors are an actual problem.
+                        Err(FileSpecError::from(err))
+                    }
                 }
             },
-            _ => Ok(DependencyReport::does_not_exist())
+            _ => {
+                // If self is not a repeating structure, then it is not a valid ident
+                return Err(FileSpecError::IdentNotValid(target_ident.to_abstract()))
+            }
         }
     }
 
@@ -4638,6 +4773,19 @@ impl DepGraph {
         result
     }
 
+    // Inserts an unknown ident into the graph assuming that it has no dependencies. If the ident
+    // is already in the graph, does nothing and returns false. Otherwise, returns true.
+    fn insert(&mut self, id: AbstractIdent) -> bool {
+        if self.dep_map.contains_key(&id) {
+            false
+        } else {
+            let c = Rc::new(RefCell::new(DepNode::new(id.clone())));
+            self.dep_map.insert(id.clone(), c.clone());
+            self.dep_roots.insert(id);
+            true
+        }
+    }
+
     fn add_dependancies(&mut self, id: AbstractIdent, dependencies: Vec<AbstractIdent>) {
         let child = match self.dep_map.get(&id) {
             Some(c) => {
@@ -4995,6 +5143,13 @@ impl<'a> FileMap<'a> {
         let mut struct_attr_count = 0;
 
 
+        for target in targets.into_iter() {
+            dg.insert(target);
+        }
+
+        targets = dg.get_resolvable_unknowns(&vd);
+
+        // println!("Targets: {:?}", targets);
         loop {
 
             for target in targets {
