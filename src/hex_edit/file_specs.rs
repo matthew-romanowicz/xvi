@@ -106,11 +106,20 @@ impl ExprWrapper {
         }
     }
 
-    pub fn evaluate<'a>(&self, fname: Option<Rc<String>>, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<Option<ExprValue>, ExprEvalError> {
+    pub fn span(&self) -> Option<std::ops::Range<usize>> {
+        if let Some(span) = &self.inner.span {
+            Some(self.remap.apply_range(span.clone()))
+        } else {
+            None
+        }
+        
+    }
+
+    pub fn evaluate<'a>(&self, fname: &Option<Rc<String>>, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<Option<ExprValue>, ExprEvalError> {
         self.evaluate_with_args(fname, &vec![], lookup)
     }
 
-    pub fn evaluate_with_args<'a>(&self, fname: Option<Rc<String>>, arguments: &Vec<ExprValue>, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<Option<ExprValue>, ExprEvalError> {
+    pub fn evaluate_with_args<'a>(&self, fname: &Option<Rc<String>>, arguments: &Vec<ExprValue>, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<Option<ExprValue>, ExprEvalError> {
         match self.inner.evaluate_with_args(arguments, lookup) {
             Ok(ev) => Ok(Some(ev)),
             Err(err) if err.is_lookup_error() => Ok(None),
@@ -127,27 +136,60 @@ impl ExprWrapper {
         }
     }
 
-    pub fn evaluate_expect_position<'a>(&self, fname: Option<Rc<String>>, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<Option<BitIndex>, ExprEvalError> {
+    pub fn evaluate_expect_position<'a>(&self, fname: &Option<Rc<String>>, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<Option<BitIndex>, ExprEvalError> {
         match self.evaluate(fname, lookup)? {
-            Some(ExprValue::Position(bp)) => Ok(Some(bp)),
-            None => Ok(None),
-            Some(other) => Err(ExprEvalError::data_type_mismatch(other.datatype_as_string(), "Position".to_string()))
+            Some(ev) => match ev {
+                ExprValue::Position(bp) => Ok(Some(bp)),
+                other => {
+                    let mut err = ExprEvalError::data_type_mismatch(other.datatype_as_string(), "Position".to_string(), self.inner.span.clone());
+                    if let Some(fname) = fname {
+                        let text = std::fs::read_to_string(fname.to_string()).unwrap();
+                        err.remap(&self.remap);
+                        err.set_fname(fname.to_string());
+                        err.set_context(&text);
+                    }
+                    Err(err)
+                }
+            },
+            None => Ok(None)
         }
     }
 
-    pub fn evaluate_expect_integer<'a>(&self, fname: Option<Rc<String>>, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<Option<i64>, ExprEvalError> {
+    pub fn evaluate_expect_integer<'a>(&self, fname: &Option<Rc<String>>, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<Option<i64>, ExprEvalError> {
         match self.evaluate(fname, lookup)? {
-            Some(ExprValue::Integer(i)) => Ok(Some(i)),
-            None => Ok(None),
-            Some(other) => Err(ExprEvalError::data_type_mismatch(other.datatype_as_string(), "Integer".to_string()))
+            Some(ev) => match ev {
+                ExprValue::Integer(i) => Ok(Some(i)),
+                other => {
+                    let mut err = ExprEvalError::data_type_mismatch(other.datatype_as_string(), "Integer".to_string(), self.inner.span.clone());
+                    if let Some(fname) = fname {
+                        let text = std::fs::read_to_string(fname.to_string()).unwrap();
+                        err.remap(&self.remap);
+                        err.set_fname(fname.to_string());
+                        err.set_context(&text);
+                    }
+                    Err(err)
+                }
+            },
+            None => Ok(None)
         }
     }
 
-    pub fn evaluate_expect_bool<'a>(&self, fname: Option<Rc<String>>, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<Option<bool>, ExprEvalError> {
+    pub fn evaluate_expect_bool<'a>(&self, fname: &Option<Rc<String>>, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<Option<bool>, ExprEvalError> {
         match self.evaluate(fname, lookup)? {
-            Some(ExprValue::Bool(b)) => Ok(Some(b)),
-            None => Ok(None),
-            Some(other) => Err(ExprEvalError::data_type_mismatch(other.datatype_as_string(), "Boolean".to_string()))
+            Some(ev) => match ev {
+                ExprValue::Bool(b) => Ok(Some(b)),
+                other => {
+                    let mut err = ExprEvalError::data_type_mismatch(other.datatype_as_string(), "Boolean".to_string(), self.inner.span.clone());
+                    if let Some(fname) = fname {
+                        let text = std::fs::read_to_string(fname.to_string()).unwrap();
+                        err.remap(&self.remap);
+                        err.set_fname(fname.to_string());
+                        err.set_context(&text);
+                    }
+                    Err(err)
+                }
+            },
+            None => Ok(None)
         }
     }
 
@@ -165,51 +207,180 @@ impl ExprWrapper {
 // }
 
 #[derive(Debug)]
-pub enum FileSpecError {
+pub enum FileSpecErrorKind {
     IOError(std::io::Error),
     ExprEvalError(ExprEvalError),
     IdentNotFound(AbstractIdent),
     IdentNotValid(AbstractIdent),
-    IdentParseError(ParseAbstractIdentError)
+    IdentParseError(ParseAbstractIdentError),
+    ValueError(String, Option<std::ops::Range<usize>>)
+}
+
+#[derive(Debug)]
+pub struct FileSpecError {
+    kind: FileSpecErrorKind,
+    fname: Option<String>,
+    message: Option<String>,
+    help: Option<String>
 }
 
 impl FileSpecError {
+    pub fn new(kind: FileSpecErrorKind) -> FileSpecError {
+        FileSpecError {
+            kind,
+            fname: None,
+            message: None,
+            help: None
+        }
+    }
+
+    pub fn ident_not_found(ident: AbstractIdent) -> FileSpecError {
+        FileSpecError::new(FileSpecErrorKind::IdentNotFound(ident))
+    }
+
+    pub fn ident_not_valid(ident: AbstractIdent) -> FileSpecError {
+        FileSpecError::new(FileSpecErrorKind::IdentNotValid(ident))
+    }
+
+    pub fn expr_eval_error(err: ExprEvalError) -> FileSpecError {
+        FileSpecError::new(FileSpecErrorKind::ExprEvalError(err))
+    }
+
+    pub fn value_error(message: String, rng: Option<std::ops::Range<usize>>) -> FileSpecError {
+        FileSpecError::new(FileSpecErrorKind::ValueError(message, rng))
+    }
+
+    pub fn set_fname(&mut self, fname: String) {
+        // if let FileSpecErrorKind::ExprEvalError(ref mut err) = self.kind {
+        //     err.fname = Some(fname.clone());
+        // }
+        self.fname = Some(fname);
+        
+    }
+
+    pub fn load_context(&mut self, fname: String) -> Result<(), std::io::Error> {
+        let text = std::fs::read_to_string(&fname.as_str())?;
+        self.set_fname(fname);
+        self.set_context(&text);
+        Ok(())
+    }
+    
+                                
+
+    fn details(&self) -> String {
+        match &self.kind {
+            FileSpecErrorKind::IOError(err) => format!("I/O Error: {}", err),
+            FileSpecErrorKind::IdentNotFound(err) => format!("Identifier not found: {}", err),
+            FileSpecErrorKind::IdentNotValid(err) => format!("Identifier not valid: {}", err),
+            FileSpecErrorKind::IdentParseError(err) => format!("Identifier parse error: {}", err),
+            FileSpecErrorKind::ValueError(message, rng) => format!("Value Error: {}", message),
+            FileSpecErrorKind::ExprEvalError(err) => err.details()
+        }
+    }
+
+    fn annotations(&self) -> Vec<(Option<String>, std::ops::Range<usize>)> {
+        match &self.kind {
+            FileSpecErrorKind::ExprEvalError(err) => err.annotations(),
+            FileSpecErrorKind::ValueError(_, Some(rng)) => {
+                vec![
+                    (None, rng.clone())
+                ]
+            }
+            _ => todo!()
+        }
+    }
+
+    pub fn set_context(&mut self, context: &str) {
+        if self.message.is_some() {
+            return;
+        }
+        let mut msg = format!("\x1b[0;31mERROR:\x1b[0m {}", self.details()).to_string();
+        if let Some(fname) = &self.fname {
+            let s = format!("\n\x1b[0;96m -->\x1b[0m {}", fname).to_string();
+            msg.push_str(&s)
+        }
+        let mut max_line_num = 0;
+        for (_, r) in &self.annotations() {
+            let (line, _) = get_line_char(context, r.start);
+            if line > max_line_num {
+                max_line_num = line;
+            }
+            let (line, _) = get_line_char(context, r.end);
+            if line > max_line_num {
+                max_line_num = line;
+            }
+        }
+        let line_num_length = format!("{}", max_line_num).len();
+        for (info, r) in &self.annotations() {
+            let (line1, col1) = get_line_char(context, r.start);
+            let (line2, col2) = get_line_char(context, r.end);
+            let line_text = context.lines().nth(line1).unwrap();
+            if let Some(info_string) = info {
+                msg.push_str("\n");
+                msg.push_str(&info_string);
+            }
+            let (line_text, col1, col2) = sample_line(line_text, col1, col2);
+            let s = format!("\n\x1b[0;96m{:2$} | \x1b[0m{}", line1 + 1, line_text, line_num_length).to_string();
+            msg.push_str(&s);
+            let s = format!("\n{}\x1b[0;31m{}\x1b[0m", " ".repeat(col1 + line_num_length + 3), "~".repeat(col2 - col1)).to_string();
+            msg.push_str(&s);
+        }
+        if let Some(help) = &self.help {
+            msg.push_str(format!("\n\x1b[0;32mHELP:\x1b[0m {}", help).as_str());
+        }
+        self.message = Some(msg)
+    }
+
+    // pub fn try_get_message(&self) -> Option<String> {
+    //     self.message.clone()
+    // }
+
+    pub fn get_message(&mut self, context: &str) -> String {
+        if self.message.is_none() {
+            self.set_context(context);
+        }
+        self.message.as_ref().unwrap().clone()
+    }
+
     pub fn try_get_message(&self) -> Option<String> {
-        match self {
-            FileSpecError::ExprEvalError(err) => {
+        match &self.kind {
+            FileSpecErrorKind::ExprEvalError(err) => {
                 err.try_get_message()
             },
-            _ => None
+            _ => {
+                self.message.clone()
+            }
         }
     }
 }
 
 impl From<std::io::Error> for FileSpecError {
     fn from(err: std::io::Error) -> Self {
-        FileSpecError::IOError(err)
+        FileSpecError::new(FileSpecErrorKind::IOError(err))
     }
 }
 
 impl From<ExprEvalError> for FileSpecError {
     fn from(err: ExprEvalError) -> Self {
-        FileSpecError::ExprEvalError(err)
+        FileSpecError::new(FileSpecErrorKind::ExprEvalError(err))
     }
 }
 
 impl From<ParseAbstractIdentError> for FileSpecError {
     fn from(err: ParseAbstractIdentError) -> Self {
-        FileSpecError::IdentParseError(err)
+        FileSpecError::new(FileSpecErrorKind::IdentParseError(err))
     }
 }
 
 impl std::fmt::Display for FileSpecError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            FileSpecError::IOError(err) => write!(f, "I/O Error: {}", err),
-            FileSpecError::ExprEvalError(err) => write!(f, "Expression Eval Error: {}", err),
-            FileSpecError::IdentNotFound(err) => write!(f, "Identifier not found: {}", err),
-            FileSpecError::IdentNotValid(err) => write!(f, "Identifier not valid: {}", err),
-            FileSpecError::IdentParseError(err) => write!(f, "Identifier parse error: {}", err),
+        match &self.kind {
+            FileSpecErrorKind::IOError(err) => write!(f, "I/O Error: {}", err),
+            FileSpecErrorKind::ExprEvalError(err) => write!(f, "Expression Eval Error: {}", err),
+            FileSpecErrorKind::IdentNotFound(err) => write!(f, "Identifier not found: {}", err),
+            FileSpecErrorKind::IdentNotValid(err) => write!(f, "Identifier not valid: {}", err),
+            FileSpecErrorKind::IdentParseError(err) => write!(f, "Identifier parse error: {}", err),
+            FileSpecErrorKind::ValueError(message, _) => write!(f, "Value Error: {}", message)
         }
     }    
 }
@@ -1249,7 +1420,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
                     return Ok(Some(self.id.get_field_ident(field_name)))
                 } else {
                     error!("initial did not conain key");
-                    return Err(FileSpecError::IdentNotValid(self.id.get_field_ident(field_name).to_abstract()))
+                    return Err(FileSpecError::ident_not_valid(self.id.get_field_ident(field_name).to_abstract()))
                 }
             },
             _ => {
@@ -1279,13 +1450,13 @@ impl<'a> PartiallyResolvedStructure<'a> {
                             },
                             Some(None) => {
                                 error!("Couldn't find {} in {}", field_name, self.id);
-                                return Err(FileSpecError::IdentNotFound(self.id.get_field_ident(field_name).to_abstract()))
+                                return Err(FileSpecError::ident_not_found(self.id.get_field_ident(field_name).to_abstract()))
                             },
                             None => {
                                 if self.original.def_fields.contains_key(&field_name) {
                                     return Ok(None)
                                 } else {
-                                    return Err(FileSpecError::IdentNotValid(self.id.get_field_ident(field_name).to_abstract()))
+                                    return Err(FileSpecError::ident_not_valid(self.id.get_field_ident(field_name).to_abstract()))
                                 }
                                 
                             }
@@ -1499,7 +1670,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
                             if let Some(default) = self.original.exports.get(&field_id.id).expect("PRS has export that isn't in original structure?") {
                                 // panic!("DEFAULT!!!");
                                 // let lookup = self.get_lookup_fn(vd);
-                                match default.evaluate(self.fname.clone(), &|alias| {self.lookup_str(&vd, alias)}) {
+                                match default.evaluate(&self.fname, &|alias| {self.lookup_str(&vd, alias)}) {
                                     Ok(Some(value)) => {
                                         let mut dr = DependencyReport::success(DataSource::Given(value));
                                         dr.add_pc_pairs(self.convert_expr_vars(default.vars())?, HashSet::from([field_id.to_abstract()]));
@@ -1584,7 +1755,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
                             },
                             Err(()) => {
                                 error!("Structure did not contain the field!!!");
-                                return Err(FileSpecError::IdentNotValid(field_id.to_abstract()))
+                                return Err(FileSpecError::ident_not_valid(field_id.to_abstract()))
                             }
                         }
                         
@@ -1592,13 +1763,13 @@ impl<'a> PartiallyResolvedStructure<'a> {
                     },
                     _ => {
                         error!("Cannot get a field for a non-section structure!");
-                        return Err(FileSpecError::IdentNotValid(field_id.to_abstract()))
+                        return Err(FileSpecError::ident_not_valid(field_id.to_abstract()))
                     }
                 }
             }
         } else {
             error!("Field {} does not exist!", field_id);
-            return Err(FileSpecError::IdentNotFound(field_id.to_abstract()))
+            return Err(FileSpecError::ident_not_found(field_id.to_abstract()))
 
         }
     }
@@ -1786,7 +1957,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
         let parents = self.convert_expr_vars(expr.vars())?;
 
         // Attempt to evaluate the expression using self's lookup_str routine
-        match expr.evaluate(self.fname.clone(), &|alias| {self.lookup_str(&vd, alias)}) {
+        match expr.evaluate(&self.fname, &|alias| {self.lookup_str(&vd, alias)}) {
 
             Ok(Some(value)) => {
                 // If the evaluation is successful, construct a successful dependency report 
@@ -1821,7 +1992,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
         let parents = self.convert_expr_vars(expr.vars())?;
 
         // Attempt to evaluate the expression using self's lookup_str routine
-        match expr.evaluate_expect_position(self.fname.clone(), &|alias| {self.lookup_str(&vd, alias)}) {
+        match expr.evaluate_expect_position(&self.fname, &|alias| {self.lookup_str(&vd, alias)}) {
 
             Ok(Some(pos)) => {
                 // If the evaluation is successful, construct a successful dependency report 
@@ -1856,7 +2027,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
         let parents = self.convert_expr_vars(expr.vars())?;
 
         // Attempt to evaluate the expression using self's lookup_str routine
-        match expr.evaluate_expect_integer(self.fname.clone(), &|alias| {self.lookup_str(&vd, alias)}) {
+        match expr.evaluate_expect_integer(&self.fname, &|alias| {self.lookup_str(&vd, alias)}) {
 
             Ok(Some(i)) => {
                 // If the evaluation is successful, construct a successful dependency report 
@@ -1926,7 +2097,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
 
                 // If the field isn't in the def_field's list, or the def_field it's associated 
                 // with isn't related to the attribute, then it must be invalid.
-                Err(FileSpecError::IdentNotValid(target_ident.to_abstract()))
+                Err(FileSpecError::ident_not_valid(target_ident.to_abstract()))
             },
 
             // Fields that require accessing data from the FieldSpec in initial
@@ -1953,7 +2124,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
                     // not belong to `self`. In that case, return an error
                     let field_index = match initial.id_map.get(&target_ident.field.id) {
                         Some(i) => i,
-                        None => return Err(FileSpecError::IdentNotValid(target_ident.to_abstract()))
+                        None => return Err(FileSpecError::ident_not_valid(target_ident.to_abstract()))
                     };
 
                     // Get the field by its index
@@ -1978,7 +2149,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
                                 };
                 
                                 // Evaluate the field's validity check with the field's value as the only argument
-                                match field_valid.evaluate_with_args(self.fname.clone(), &vec![field_value], &|alias| {self.lookup_str(&vd, alias)}) {
+                                match field_valid.evaluate_with_args(&self.fname, &vec![field_value], &|alias| {self.lookup_str(&vd, alias)}) {
                                     Ok(Some(valid)) => {
                                         // If the evaluation was successful, ensure it's a Boolean and return it in
                                         // a successful dependency report with the dependencies found earlier
@@ -2077,7 +2248,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
                 } else {
                     // If self isn't a UnresolvedSection, then it can't have fields. The field id 
                     // must be invalid.
-                    Err(FileSpecError::IdentNotValid(target_ident.to_abstract()))
+                    Err(FileSpecError::ident_not_valid(target_ident.to_abstract()))
                 }
             },
 
@@ -2106,7 +2277,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
                 } else {
                     // If self isn't a UnresolvedSection, then it can't have fields. The field id 
                     // must be invalid.
-                    return Err(FileSpecError::IdentNotValid(target_ident.to_abstract()))
+                    return Err(FileSpecError::ident_not_valid(target_ident.to_abstract()))
                 }
 
                 // Declare a hash set for the result's dependencies. This will be initialized in 
@@ -2288,7 +2459,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
                                 }
                             }
                         },
-                        Err(FileSpecError::IdentNotFound(_)) => {todo!("Not sure if this is right...")},
+                        // Err(FileSpecError::ident_not_found(_)) => {todo!("Not sure if this is right...")},
                         Err(err) => return Err(err)
                     }
                     if structure.borrow().is_inline() {
@@ -2353,7 +2524,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
                                 }
                             }
                         },
-                        Err(FileSpecError::IdentNotFound(_)) => {todo!("Not sure if this is right...")},
+                        // Err(FileSpecError::ident_not_found(_)) => {todo!("Not sure if this is right...")},
                         Err(err) => return Err(err)
                     }
                     if structure.borrow().is_inline() {
@@ -2394,7 +2565,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
                             }
                         }
                     },
-                    Err(FileSpecError::IdentNotFound(_)) => {todo!("Not sure if this is right...")},
+                    // Err(FileSpecError::ident_not_found(_)) => {todo!("Not sure if this is right...")},
                     Err(err) => return Err(err)
                 }
                 current_position_key = structure.borrow().id.get_attr_ident(StructureAttrType::End);
@@ -2426,7 +2597,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
                                 }
                             }
                         },
-                        Err(FileSpecError::IdentNotFound(_)) => {todo!("Not sure if this is right...")},
+                        // Err(FileSpecError::ident_not_found(_)) => {todo!("Not sure if this is right...")},
                         Err(err) => return Err(err)
                     }
                     current_position_key = structure.borrow().id.get_attr_ident(StructureAttrType::End);
@@ -2471,7 +2642,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
             self.try_evaluate_any_expression(&value, target_ident.to_abstract(), vd)
 
         } else {
-            Err(FileSpecError::IdentNotValid(target_ident.to_abstract()))
+            Err(FileSpecError::ident_not_valid(target_ident.to_abstract()))
         }
     }
 
@@ -2507,7 +2678,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
                 };
 
                 // Attempt to evaluate the expression using self's lookup_str routine
-                match expr.evaluate_with_args(self.fname.clone(), &vec![arg], &|alias| {self.lookup_str(&vd, alias)}) {
+                match expr.evaluate_with_args(&self.fname, &vec![arg], &|alias| {self.lookup_str(&vd, alias)}) {
                     Ok(Some(v)) => {
                         // If the evaluation is successful, construct a successful dependency report 
                         // with the result, add the dependecies found previously, and return it.
@@ -2529,12 +2700,12 @@ impl<'a> PartiallyResolvedStructure<'a> {
             } else {
                 // If the case index exceeds the number of cases in the switch, then it is not a valid ident
                 error!("Switch case out of bounds: {}", i);
-                Err(FileSpecError::IdentNotValid(target_ident.to_abstract()))
+                Err(FileSpecError::ident_not_valid(target_ident.to_abstract()))
             }
 
         } else {
             // If self is not a Switch, then it is not a valid ident
-            Err(FileSpecError::IdentNotValid(target_ident.to_abstract()))
+            Err(FileSpecError::ident_not_valid(target_ident.to_abstract()))
         }
     }
 
@@ -2620,7 +2791,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
 
         } else {
             // If self is not a Switch, then it is not a valid ident
-            return Err(FileSpecError::IdentNotValid(target_ident.to_abstract()))
+            return Err(FileSpecError::ident_not_valid(target_ident.to_abstract()))
         }
 
         // Now that the case ID has been found along with it's corresponding structure, we need to actually
@@ -2693,7 +2864,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
                     }
 
                     // Return an error if the index is out of bounds
-                    return Err(FileSpecError::IdentNotFound(target_ident.to_abstract()))
+                    return Err(FileSpecError::ident_not_found(target_ident.to_abstract()))
                 }
 
                 seq[i].clone()
@@ -2716,7 +2887,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
                     }
 
                     // Return an error if the index is out of bounds
-                    return Err(FileSpecError::IdentNotFound(target_ident.to_abstract()))
+                    return Err(FileSpecError::ident_not_found(target_ident.to_abstract()))
                 }
 
                 if let PartiallyResolvedStructureType::Addressed{pss, ..} = seq[i - 1].borrow().stype.as_ref() {
@@ -2727,7 +2898,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
             }
             _ => {
                 // If self is not a repeating structure, then it is not a valid ident
-                return Err(FileSpecError::IdentNotValid(target_ident.to_abstract()))
+                return Err(FileSpecError::ident_not_valid(target_ident.to_abstract()))
             }
         };
 
@@ -2744,12 +2915,12 @@ impl<'a> PartiallyResolvedStructure<'a> {
             // The break condition is evaluated using the context of the child as opposed to self, which is
             // why last_prs's lookup function is being used. Note that since the expression is defined in
             // whatever file self's structure was defined, self.fname is used.
-            match expr.evaluate(self.fname.clone(), &|alias| {last_prs.borrow().lookup_str(&vd, alias)}) {
-                Ok(Some(v)) => {
+            match expr.evaluate_expect_bool(&self.fname, &|alias| {last_prs.borrow().lookup_str(&vd, alias)})? {
+                Some(is_break) => {
                     // If the evaluation was successful and evaluates to 'true', then everything we need is
                     // right in that expression (nothing from any of the other expressions matters). Create 
                     // a dependency list from the condition's variables and return success.
-                    if v.expect_bool()? {
+                    if is_break {
                         let mut dr = DependencyReport::success(ExprValue::Bool(true));
                         let dependencies = last_prs.borrow().convert_expr_vars(b.condition.vars())?;
                         dr.add_pc_pairs(dependencies, HashSet::from([target_ident.to_abstract()]));
@@ -2757,15 +2928,11 @@ impl<'a> PartiallyResolvedStructure<'a> {
                     }
                     
                 },
-                Ok(None) => {
+                None => {
                     // If there was a lookup error, set the incomplete flag so that if there aren't any
                     // other expressions that evaluate to true (thus returning), an incomplete report will
                     // be returned instead of a success.
                     incomplete = true;
-                },
-                Err(err) => {
-                    // Any other errors indicate there was an actual problem.
-                    return Err(FileSpecError::from(err))
                 }
             }
         }
@@ -2825,14 +2992,14 @@ impl<'a> PartiallyResolvedStructure<'a> {
         if let PartiallyResolvedStructureType::Repeat{n, ..} = self.stype.as_ref() {
             // If self is a Repeat structure, make sure to add n's variables to the dependencies.
             parents.extend(self.convert_expr_vars(n.vars())?);
-            n_value = Some(n.evaluate_expect_integer(self.fname.clone(), &|alias| {self.lookup_str(&vd, alias)}))
+            n_value = Some(n.evaluate_expect_integer(&self.fname, &|alias| {self.lookup_str(&vd, alias)}))
         } else {
             // Otherwise, just store None since it does not exist and will not be needed.
             n_value = None
         }
 
         match self.stype.as_mut() {
-            PartiallyResolvedStructureType::Repeat{structure, ref mut seq, ref mut finalized, ..} => {
+            PartiallyResolvedStructureType::Repeat{n, structure, ref mut seq, ref mut finalized, ..} => {
 
                 // Get the result of evaluating the 'n' expression. Unwrap always works since n_value 
                 // is set when stype is Repeat
@@ -2843,7 +3010,14 @@ impl<'a> PartiallyResolvedStructure<'a> {
                         // so we need to account for that.
 
                         if v < 0 {
-                            todo!("n evaluated to negative number for {:?}", self.id);
+                            // Return an error if n evaluated to a negative value
+                            if v.is_negative() {
+                                let mut err = FileSpecError::value_error("'n' evaluated to a negative integer".to_string(), n.span());
+                                if let Some(fname) = &self.fname {
+                                    err.load_context(fname.to_string())?;
+                                }
+                                return Err(err)
+                            }
                         }
 
                         // Make a new variable n_repetations that will store the true number of repetitions.
@@ -3089,11 +3263,16 @@ impl<'a> PartiallyResolvedStructure<'a> {
 
                 // Try to evaluate 'next' in the context of the last repetition. Keep in mind that self's fname is still
                 // used here since the actual expression is defined in whatever file contains self's definition.
-                match next.evaluate_expect_position(self.fname.clone(), &|alias| {last_member.borrow().lookup_str(&vd, alias)}) {
+                match next.evaluate_expect_position(&self.fname, &|alias| {last_member.borrow().lookup_str(&vd, alias)}) {
                     Ok(Some(v)) => {
 
+                        // Return an error if next evaluated to a negative position
                         if v.is_negative() {
-                            todo!("'next' evaluated to a negative position for {:?}", self.id);
+                            let mut err = FileSpecError::value_error("'next' evaluated to a negative position".to_string(), next.span());
+                            if let Some(fname) = &self.fname {
+                                err.load_context(fname.to_string())?;
+                            }
+                            return Err(err)
                         }
 
                         // If the evaluation was successful, add another repetition at the resulting address. Compute the 
@@ -3140,7 +3319,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
             },
             _ => {
                 // If self is not a repeating structure, then it is not a valid ident
-                return Err(FileSpecError::IdentNotValid(target_ident.to_abstract()))
+                return Err(FileSpecError::ident_not_valid(target_ident.to_abstract()))
             }
         }
     }
@@ -3362,7 +3541,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
                                     
                                 }
                             },
-                            Err(FileSpecError::IdentNotFound(_)) => {todo!("Not sure if this is right...")},
+                            // Err(FileSpecError::IdentNotFound(_)) => {todo!("Not sure if this is right...")},
                             Err(err) => return Err(err)
                         }
                     }
@@ -3696,7 +3875,7 @@ impl<'a> PartiallyResolvedStructure<'a> {
             PartiallyResolvedStructureType::Assembly{..} | PartiallyResolvedStructureType::Segment => {
                 error!("Trying to get contents length of {:?}", self.id);
                 let contents_length_id = self.id.get_attr_ident(StructureAttrType::Position).to_abstract();
-                Err(FileSpecError::IdentNotValid(contents_length_id))
+                Err(FileSpecError::ident_not_valid(contents_length_id))
             }
         }        
     }
@@ -5045,7 +5224,7 @@ impl<'a> FileMap<'a> {
             return Ok(ev.expect_bool()?)
         } else {
             error!("Field attribute didn't get populated by get_data call: {}", fai);
-            return Err(FileSpecError::IdentNotFound(fai.to_abstract()))
+            return Err(FileSpecError::ident_not_found(fai.to_abstract()))
         }
     }
 
@@ -5072,7 +5251,7 @@ impl<'a> FileMap<'a> {
                         },
                         _ => {
                             error!("{:?} is not a field", field);
-                            return Err(FileSpecError::IdentNotValid(field.to_abstract())) // TODO: This isn't really representative of the issue...
+                            return Err(FileSpecError::ident_not_valid(field.to_abstract())) // TODO: This isn't really representative of the issue...
                         }
                     }
                 },
@@ -5083,7 +5262,7 @@ impl<'a> FileMap<'a> {
                 },
                 DepResult::DoesNotExist => {
                     error!("Field does not exist: {:?}", field);
-                    return Err(FileSpecError::IdentNotFound(field.to_abstract()))
+                    return Err(FileSpecError::ident_not_found(field.to_abstract()))
                 }
             }
         }
@@ -5100,7 +5279,7 @@ impl<'a> FileMap<'a> {
             },
             _ => {
                 error!("Cannot get a field for a non-section structure!");
-                return Err(FileSpecError::IdentNotValid(field.to_abstract()))
+                return Err(FileSpecError::ident_not_valid(field.to_abstract()))
             }
         }
     }
@@ -5232,7 +5411,7 @@ impl<'a> FileMap<'a> {
                             },
                             DepResult::DoesNotExist => {
                                 error!("Field does not exist: {:?}", target);
-                                return Err(FileSpecError::IdentNotFound(target))
+                                return Err(FileSpecError::ident_not_found(target))
                             }
                         }
 
@@ -5272,7 +5451,7 @@ impl<'a> FileMap<'a> {
                             },
                             DepResult::DoesNotExist => {
                                 error!("Field Attribute does not exist: {:?}", target);
-                                return Err(FileSpecError::IdentNotFound(target))
+                                return Err(FileSpecError::ident_not_found(target))
                                 
                             }
                         }
@@ -5301,7 +5480,7 @@ impl<'a> FileMap<'a> {
                                 },
                                 _ => {
                                     error!("Invalid file property: {}", sai.attr);
-                                    return Err(FileSpecError::IdentNotValid(target))
+                                    return Err(FileSpecError::ident_not_valid(target))
                                 }
                             }
                             
@@ -5355,11 +5534,11 @@ impl<'a> FileMap<'a> {
                                                     
                                                 } else {
                                                     error!("Invalid file property: {}", target);
-                                                    return Err(FileSpecError::IdentNotValid(target))
+                                                    return Err(FileSpecError::ident_not_valid(target))
                                                 }
                                             } else {
                                                 error!("Invalid file property: {}", target);
-                                                return Err(FileSpecError::IdentNotValid(target))
+                                                return Err(FileSpecError::ident_not_valid(target))
                                             }
                                             break;
                                         } else {

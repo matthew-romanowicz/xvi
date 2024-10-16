@@ -666,28 +666,28 @@ impl ExprValue {
     pub fn expect_integer(self) -> Result<i64, ExprEvalError> {
         match self {
             ExprValue::Integer(value) => Ok(value),
-            other => Err(ExprEvalError::data_type_mismatch(other.datatype_as_string(), "Integer".to_string()))
+            other => Err(ExprEvalError::data_type_mismatch(other.datatype_as_string(), "Integer".to_string(), None))
         }
     }
 
     pub fn expect_position(self) -> Result<BitIndex, ExprEvalError> {
         match self {
             ExprValue::Position(value) => Ok(value),
-            other => Err(ExprEvalError::data_type_mismatch(other.datatype_as_string(), "Position".to_string()))
+            other => Err(ExprEvalError::data_type_mismatch(other.datatype_as_string(), "Position".to_string(), None))
         }
     }
 
     pub fn expect_bool(self) -> Result<bool, ExprEvalError> {
         match self {
             ExprValue::Bool(value) => Ok(value),
-            other => Err(ExprEvalError::data_type_mismatch(other.datatype_as_string(), "Boolean".to_string()))
+            other => Err(ExprEvalError::data_type_mismatch(other.datatype_as_string(), "Boolean".to_string(), None))
         }
     }
 
     pub fn expect_string(self) -> Result<String, ExprEvalError> {
         match self {
             ExprValue::String(value) => Ok(value),
-            other => Err(ExprEvalError::data_type_mismatch(other.datatype_as_string(), "String".to_string()))
+            other => Err(ExprEvalError::data_type_mismatch(other.datatype_as_string(), "String".to_string(), None))
         }
     }
 }
@@ -1109,7 +1109,7 @@ impl ExprNode {
 #[derive(Clone, Debug, Eq)]
 pub struct Expr {
     inner: ExprNode,
-    span: Option<std::ops::Range<usize>>
+    pub span: Option<std::ops::Range<usize>>
 }
 
 impl Expr {
@@ -1124,7 +1124,7 @@ impl Expr {
     pub fn evaluate_expect_position(&self, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<BitIndex, ExprEvalError> {
         match self.evaluate(lookup)? {
             ExprValue::Position(bp) => Ok(bp),
-            other => Err(ExprEvalError::data_type_mismatch(other.datatype_as_string(), "Position".to_string()))
+            other => Err(ExprEvalError::data_type_mismatch(other.datatype_as_string(), "Position".to_string(), self.span.clone()))
         }
     }
 
@@ -1135,7 +1135,7 @@ impl Expr {
     pub fn evaluate_expect_bool(&self, lookup: &dyn Fn(&str) -> Option<ExprValue>) -> Result<bool, ExprEvalError> {
         match self.evaluate(lookup)? {
             ExprValue::Bool(b) => Ok(b),
-            other => Err(ExprEvalError::data_type_mismatch(other.datatype_as_string(), "Boolean".to_string()))
+            other => Err(ExprEvalError::data_type_mismatch(other.datatype_as_string(), "Boolean".to_string(), self.span.clone()))
         }
     }
 
@@ -1709,7 +1709,7 @@ mod expr_parse_tests {
 pub enum ExprEvalErrorKind {
     LookupError{key: String},
     ArgumentCountError{accessed: usize, provided: usize},
-    DataTypeMismatch{found: String, expected: String},
+    DataTypeMismatch{found: String, expected: String, span: Option<std::ops::Range<usize>>},
     ParseError{details: String},
     OperationError(ExprOperationError)
 }
@@ -1745,8 +1745,8 @@ impl ExprEvalError {
         ExprEvalError::new(kind)
     }
 
-    pub fn data_type_mismatch(found: String, expected: String) -> ExprEvalError {
-        let kind = ExprEvalErrorKind::DataTypeMismatch{found, expected};
+    pub fn data_type_mismatch(found: String, expected: String, span: Option<std::ops::Range<usize>>) -> ExprEvalError {
+        let kind = ExprEvalErrorKind::DataTypeMismatch{found, expected, span};
         ExprEvalError::new(kind)
     }
 
@@ -1774,17 +1774,17 @@ impl ExprEvalError {
         self.remap.extend(remap.clone());
     }
 
-    fn details(&self) -> String {
+    pub fn details(&self) -> String {
         match &self.kind {
             ExprEvalErrorKind::LookupError{key} => format!("Lookup of '{}' failed", key),
             ExprEvalErrorKind::ArgumentCountError{accessed, provided} => format!("Expression attempted to use argument #{} but only {} were provided.", accessed, provided),
-            ExprEvalErrorKind::DataTypeMismatch{found, expected} => format!("Data type mismatch: '{}' found, '{}' expeced", found, expected),
+            ExprEvalErrorKind::DataTypeMismatch{found, expected, ..} => format!("Data type mismatch: '{}' found, '{}' expeced", found, expected),
             ExprEvalErrorKind::ParseError{details} => format!("Parse error: {}", details),
             ExprEvalErrorKind::OperationError(err) => err.details()
         }
     }
 
-    fn annotations(&self) -> Vec<(Option<String>, std::ops::Range<usize>)> {
+    pub fn annotations(&self) -> Vec<(Option<String>, std::ops::Range<usize>)> {
         match &self.kind {
             ExprEvalErrorKind::LookupError{key} => {
                 todo!()
@@ -1792,8 +1792,14 @@ impl ExprEvalError {
             ExprEvalErrorKind::ArgumentCountError{accessed, provided} => {
                 todo!()
             },
-            ExprEvalErrorKind::DataTypeMismatch{found, expected} => {
-                todo!()
+            ExprEvalErrorKind::DataTypeMismatch{found, expected, span} => {
+                if let Some(span) = span {
+                    vec![
+                        (Some(format!("This expression evaluated to a {}, but {} was expected.", found, expected).to_string()), self.remap.apply_range(span.clone()))
+                    ]
+                } else {
+                    vec![]
+                }
             },
             ExprEvalErrorKind::ParseError{details} => {
                 todo!()
@@ -1845,11 +1851,6 @@ impl ExprEvalError {
 
     pub fn try_get_message(&self) -> Option<String> {
         self.message.clone()
-        // if let ExprEvalError::OperationError(err) = self {
-        //     err.message.clone()
-        // } else {
-        //     None
-        // }
     }
 
     pub fn get_message(&mut self, context: &str) -> String {
@@ -1857,15 +1858,6 @@ impl ExprEvalError {
             self.set_context(context);
         }
         self.message.as_ref().unwrap().clone()
-
-        // if let ExprEvalError::OperationError(ref mut err) = self {
-        //     if err.message.is_none() {
-        //         err.set_context(context);
-        //     }
-        //     err.message.as_ref().unwrap().clone()
-        // } else {
-        //     format!("{}", self).to_string()
-        // }
     }
 
     // pub fn set_context(&mut self, context: &str) {
