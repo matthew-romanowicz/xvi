@@ -792,157 +792,450 @@ impl MacroManager {
     }
 }
 
-fn execute_keystroke(editor_stack: &mut EditorStack, macro_manager: &mut MacroManager, keystroke: Vec<char>) -> ActionResult {
-
-    let tokens = parse_keystroke(&keystroke);
-    match tokens.len() {
-
-        1 => {
-            let hm = &mut editor_stack.editors[editor_stack.current];
-            match tokens[0] {
-                KeystrokeToken::Character('g') => {
-                    hm.hex_edit.seek(SeekFrom::Start(0))
-                },
-                KeystrokeToken::Character('G') => {
-                    hm.hex_edit.seek(SeekFrom::End(0))
-                },
-                KeystrokeToken::Character('n') => {
-                    hm.hex_edit.seek_next()
-                },
-                KeystrokeToken::Character('N') => {
-                    hm.hex_edit.seek_prev()
-                },
-                KeystrokeToken::Character('u') => {
-                    hm.action_stack.undo(&mut hm.hex_edit)
-                },
-                KeystrokeToken::Character('U') => {
-                    hm.action_stack.redo(&mut hm.hex_edit)
-                },
-                KeystrokeToken::Character('p') => {
-                    hm.hex_edit.insert(DataSource::Register(0))
-                },
-                KeystrokeToken::Character('P') => {
-                    hm.hex_edit.overwrite(DataSource::Register(0))
-                },
-                KeystrokeToken::Character('M') => {
-                    macro_manager.finish(&hm.action_stack)
-                },
-                _ => {
-                    let s: String = keystroke.iter().collect();
-                    ActionResult::error(format!("Command not recognized: '{}'", s))
-                }
-            }
-        },
-
-        2 => {
-            match (tokens[0], tokens[1]) {
-                (KeystrokeToken::Integer(n), KeystrokeToken::Character('g')) => {
-                    editor_stack.editors[editor_stack.current].hex_edit.seek(SeekFrom::Start(n as u64))
-                },
-                (KeystrokeToken::Integer(n), KeystrokeToken::Character('G')) => {
-                    editor_stack.editors[editor_stack.current].hex_edit.seek(SeekFrom::End(n as i64))
-                },
-                (KeystrokeToken::Integer(n), KeystrokeToken::Character('f')) => {
-                    editor_stack.editors[editor_stack.current].hex_edit.insert(DataSource::Fill(n))
-                },
-                (KeystrokeToken::Integer(n), KeystrokeToken::Character('F')) => {
-                    editor_stack.editors[editor_stack.current].hex_edit.overwrite(DataSource::Fill(n))
-                },
-                (KeystrokeToken::Integer(n), KeystrokeToken::Character('d')) => {
-                    editor_stack.editors[editor_stack.current].hex_edit.delete_bytes(n)
-                },
-                (KeystrokeToken::Integer(n), KeystrokeToken::Character('s')) => {
-                    editor_stack.editors[editor_stack.current].hex_edit.swap_bytes(n)
-                },
-                (KeystrokeToken::Integer(n), KeystrokeToken::Character('y')) => {
-                    editor_stack.editors[editor_stack.current].hex_edit.yank(0, n)
-                },
-                (KeystrokeToken::Integer(n), KeystrokeToken::Character('p')) => {
-                    if n < 32 {
-                        editor_stack.editors[editor_stack.current].hex_edit.insert(DataSource::Register(n as u8))
-                    } else if n < 64 {
-                        let v = editor_stack.clipboard_registers[n - 32].to_vec();
-                        editor_stack.editors[editor_stack.current].hex_edit.insert(DataSource::Bytes(v))
-                    } else {
-                        ActionResult::error("Register indices must be less than 64".to_string())
-                    }
-                },
-                (KeystrokeToken::Integer(n), KeystrokeToken::Character('P')) => {
-                    if n < 32 {
-                        editor_stack.editors[editor_stack.current].hex_edit.overwrite(DataSource::Register(n as u8))
-                    } else if n < 64 {
-                        let v = editor_stack.clipboard_registers[n - 32].to_vec();
-                        editor_stack.editors[editor_stack.current].hex_edit.overwrite(DataSource::Bytes(v))
-                    } else {
-                        ActionResult::error("Register indices must be less than 64".to_string())
-                    }
-                },
-                (KeystrokeToken::Integer(n), KeystrokeToken::Character('m')) => {
-                    macro_manager.run(n as u8, &mut editor_stack.editors[editor_stack.current].hex_edit)
-                },
-                (KeystrokeToken::Integer(n), KeystrokeToken::Character('M')) => {
-                    macro_manager.start(n as u8, &editor_stack.editors[editor_stack.current].action_stack)
-                },
-                _ => {
-                    let s: String = keystroke.iter().collect();
-                    ActionResult::error(format!("Command not recognized: '{}'", s))
-                }
-            }
-        },
-
-        3 => {
-            let hm = &mut editor_stack.editors[editor_stack.current].hex_edit;
-            match (tokens[0], tokens[1], tokens[2]) {
-                (KeystrokeToken::Character('+'), KeystrokeToken::Integer(n), KeystrokeToken::Character('g')) => {
-                    hm.seek(SeekFrom::Current(n as i64))
-                },
-                (KeystrokeToken::Character('-'), KeystrokeToken::Integer(n), KeystrokeToken::Character('g')) => {
-                    hm.seek(SeekFrom::Current(-(n as i64)))
-                },
-                _ => {
-                    let s: String = keystroke.iter().collect();
-                    ActionResult::error(format!("Command not recognized: '{}'", s))
-                }
-            }
-        }
-
-        4 => {
-            match (tokens[0], tokens[1], tokens[2], tokens[3]) {
-                (KeystrokeToken::Integer(n1), KeystrokeToken::Character('r'), KeystrokeToken::Integer(n2), KeystrokeToken::Character('y')) => {
-                    if n1 < 32 {
-                        editor_stack.editors[editor_stack.current].hex_edit.yank(n1 as u8, n2)
-                    } else if n1 < 64 {
-                        let pos = editor_stack.editors[editor_stack.current].hex_edit.get_cursor_pos();
-                        let mut v: Vec<u8> = vec![0;n2];
-                        let res = editor_stack.editors[editor_stack.current].hex_edit.get_bytes(pos, &mut v);
-                        match res {
-                            Ok(_) => { // TODO: Check if this is less han n2
-                                editor_stack.clipboard_registers[n1 - 32] = v.to_vec();
-                                ActionResult::empty()
-                            },
-                            Err(msg) => ActionResult::error(msg.to_string())
-                        } 
-                    } else {
-                        ActionResult::error("Register indices must be less than 64".to_string())
-                    }
-                },
-                _ => {
-                    let s: String = keystroke.iter().collect();
-                    ActionResult::error(format!("Command not recognized: '{}'", s))
-                }
-            }
-        }
-        _ => {
-            let s: String = keystroke.iter().collect();
-            ActionResult::error(format!("Command not recognized: '{}'", s))
-        }
-    }
+struct App<'a> {
+    width: usize,
+    height: usize,
+    edit_state: EditState,
+    editors: EditorStack<'a>,
+    macro_manager: MacroManager,
+    current_keystroke: Vec<char>,
+    cursor_index_len: usize,
+    command_history: Vec<Vec<char>>,
+    command_history_index: usize,
+    line_entry: LineEntry,
+    manual_view: LargeTextView
 }
 
-fn alert(text: String, alert_type: AlertType, window: &mut Window, line_entry: &mut LineEntry, hex_edit: &mut HexEdit) {
-    line_entry.alert(text.chars().collect(), alert_type);
-    line_entry.draw(window);
-    hex_edit.refresh_cursor(window);
+impl<'a> App<'a> {
+
+    fn new(width: usize, height: usize) -> App<'a> {
+        let editors = EditorStack::new(0, 0, width, height);
+
+        let cursor_index_len = 0;
+
+        let line_entry = LineEntry::new(0, height);
+
+        let manual_view = LargeTextView::new(0, 0,  width, height, MANUAL_TEXT.to_string());
+
+        App {
+            width,
+            height,
+            edit_state: EditState::Escaped,
+            editors,
+            macro_manager: MacroManager::new(),
+            current_keystroke: Vec::<char>::new(),
+            cursor_index_len,
+            command_history: Vec::<Vec<char>>::new(),
+            command_history_index: 0,
+            line_entry,
+            manual_view
+        }
+    }
+
+    fn init(&mut self, window: &mut Window, filename: String, file_manager_type: FileManagerType, extract: bool) -> std::io::Result<()> {
+
+        self.editors.push(filename, file_manager_type, extract, None)?;
+
+        {
+            let hm = &mut self.editors.editors[self.editors.current];
+
+            self.cursor_index_len = format!("{:x}", hm.hex_edit.len()).len();
+            hm.hex_edit.set_viewport_row(0)?;
+            hm.hex_edit.draw(window);
+        }
+
+        self.line_entry.init(self.width - 1 - self.cursor_index_len);
+        
+        Ok(())
+    }
+
+    fn alert(&mut self, text: String, alert_type: AlertType, window: &mut Window) {
+        self.line_entry.alert(text.chars().collect(), alert_type);
+        self.line_entry.draw(window);
+        self.refresh_current_cursor(window);
+    }
+
+    fn refresh_current_cursor(&self, window: &mut Window) {
+        self.editors.editors[self.editors.current].hex_edit.refresh_cursor(window);
+    }
+
+    fn handle_action_result(&mut self, window: &mut Window, result: ActionResult) {
+        if let Some(err) = result.alert {
+            self.alert(err, result.alert_type.clone(), window);
+        }
+        if let Some(action) = result.action {
+            self.editors.editors[self.editors.current].action_stack.add(action);
+        }
+        let result = self.editors.editors[self.editors.current].hex_edit.update(window, result.update);
+        if let Err(err) = result {
+            self.alert(err.to_string(), AlertType::Error, window);
+        }
+    }
+
+    fn transition_to_edit(&mut self, window: &mut Window, mode: EditMode) {
+        self.edit_state = EditState::Edit;
+        self.editors.set_edit_mode(mode);
+        self.refresh_current_cursor(window);
+    }
+
+    fn current_editor(&self) -> &'a HexEdit {
+        &self.editors.editors[self.editors.current].hex_edit
+    }
+
+    fn current_editor_mut(&mut self) -> &'a mut HexEdit {
+        &mut self.editors.editors[self.editors.current].hex_edit
+    }
+
+    fn execute_keystroke(&mut self, keystroke: Vec<char>) -> ActionResult {
+
+        let tokens = parse_keystroke(&keystroke);
+        match tokens.len() {
+    
+            1 => {
+                let hm = &mut self.editors.editors[self.editors.current];
+                match tokens[0] {
+                    KeystrokeToken::Character('g') => {
+                        hm.hex_edit.seek(SeekFrom::Start(0))
+                    },
+                    KeystrokeToken::Character('G') => {
+                        hm.hex_edit.seek(SeekFrom::End(0))
+                    },
+                    KeystrokeToken::Character('n') => {
+                        hm.hex_edit.seek_next()
+                    },
+                    KeystrokeToken::Character('N') => {
+                        hm.hex_edit.seek_prev()
+                    },
+                    KeystrokeToken::Character('u') => {
+                        hm.action_stack.undo(&mut hm.hex_edit)
+                    },
+                    KeystrokeToken::Character('U') => {
+                        hm.action_stack.redo(&mut hm.hex_edit)
+                    },
+                    KeystrokeToken::Character('p') => {
+                        hm.hex_edit.insert(DataSource::Register(0))
+                    },
+                    KeystrokeToken::Character('P') => {
+                        hm.hex_edit.overwrite(DataSource::Register(0))
+                    },
+                    KeystrokeToken::Character('M') => {
+                        self.macro_manager.finish(&hm.action_stack)
+                    },
+                    _ => {
+                        let s: String = keystroke.iter().collect();
+                        ActionResult::error(format!("Command not recognized: '{}'", s))
+                    }
+                }
+            },
+    
+            2 => {
+                match (tokens[0], tokens[1]) {
+                    (KeystrokeToken::Integer(n), KeystrokeToken::Character('g')) => {
+                        self.editors.editors[self.editors.current].hex_edit.seek(SeekFrom::Start(n as u64))
+                    },
+                    (KeystrokeToken::Integer(n), KeystrokeToken::Character('G')) => {
+                        self.editors.editors[self.editors.current].hex_edit.seek(SeekFrom::End(n as i64))
+                    },
+                    (KeystrokeToken::Integer(n), KeystrokeToken::Character('f')) => {
+                        self.editors.editors[self.editors.current].hex_edit.insert(DataSource::Fill(n))
+                    },
+                    (KeystrokeToken::Integer(n), KeystrokeToken::Character('F')) => {
+                        self.editors.editors[self.editors.current].hex_edit.overwrite(DataSource::Fill(n))
+                    },
+                    (KeystrokeToken::Integer(n), KeystrokeToken::Character('d')) => {
+                        self.editors.editors[self.editors.current].hex_edit.delete_bytes(n)
+                    },
+                    (KeystrokeToken::Integer(n), KeystrokeToken::Character('s')) => {
+                        self.editors.editors[self.editors.current].hex_edit.swap_bytes(n)
+                    },
+                    (KeystrokeToken::Integer(n), KeystrokeToken::Character('y')) => {
+                        self.editors.editors[self.editors.current].hex_edit.yank(0, n)
+                    },
+                    (KeystrokeToken::Integer(n), KeystrokeToken::Character('p')) => {
+                        if n < 32 {
+                            self.editors.editors[self.editors.current].hex_edit.insert(DataSource::Register(n as u8))
+                        } else if n < 64 {
+                            let v = self.editors.clipboard_registers[n - 32].to_vec();
+                            self.editors.editors[self.editors.current].hex_edit.insert(DataSource::Bytes(v))
+                        } else {
+                            ActionResult::error("Register indices must be less than 64".to_string())
+                        }
+                    },
+                    (KeystrokeToken::Integer(n), KeystrokeToken::Character('P')) => {
+                        if n < 32 {
+                            self.editors.editors[self.editors.current].hex_edit.overwrite(DataSource::Register(n as u8))
+                        } else if n < 64 {
+                            let v = self.editors.clipboard_registers[n - 32].to_vec();
+                            self.editors.editors[self.editors.current].hex_edit.overwrite(DataSource::Bytes(v))
+                        } else {
+                            ActionResult::error("Register indices must be less than 64".to_string())
+                        }
+                    },
+                    (KeystrokeToken::Integer(n), KeystrokeToken::Character('m')) => {
+                        self.macro_manager.run(n as u8, &mut self.editors.editors[self.editors.current].hex_edit)
+                    },
+                    (KeystrokeToken::Integer(n), KeystrokeToken::Character('M')) => {
+                        self.macro_manager.start(n as u8, &self.editors.editors[self.editors.current].action_stack)
+                    },
+                    _ => {
+                        let s: String = keystroke.iter().collect();
+                        ActionResult::error(format!("Command not recognized: '{}'", s))
+                    }
+                }
+            },
+    
+            3 => {
+                let hm = &mut self.editors.editors[self.editors.current].hex_edit;
+                match (tokens[0], tokens[1], tokens[2]) {
+                    (KeystrokeToken::Character('+'), KeystrokeToken::Integer(n), KeystrokeToken::Character('g')) => {
+                        hm.seek(SeekFrom::Current(n as i64))
+                    },
+                    (KeystrokeToken::Character('-'), KeystrokeToken::Integer(n), KeystrokeToken::Character('g')) => {
+                        hm.seek(SeekFrom::Current(-(n as i64)))
+                    },
+                    _ => {
+                        let s: String = keystroke.iter().collect();
+                        ActionResult::error(format!("Command not recognized: '{}'", s))
+                    }
+                }
+            }
+    
+            4 => {
+                match (tokens[0], tokens[1], tokens[2], tokens[3]) {
+                    (KeystrokeToken::Integer(n1), KeystrokeToken::Character('r'), KeystrokeToken::Integer(n2), KeystrokeToken::Character('y')) => {
+                        if n1 < 32 {
+                            self.editors.editors[self.editors.current].hex_edit.yank(n1 as u8, n2)
+                        } else if n1 < 64 {
+                            let pos = self.editors.editors[self.editors.current].hex_edit.get_cursor_pos();
+                            let mut v: Vec<u8> = vec![0;n2];
+                            let res = self.editors.editors[self.editors.current].hex_edit.get_bytes(pos, &mut v);
+                            match res {
+                                Ok(_) => { // TODO: Check if this is less han n2
+                                    self.editors.clipboard_registers[n1 - 32] = v.to_vec();
+                                    ActionResult::empty()
+                                },
+                                Err(msg) => ActionResult::error(msg.to_string())
+                            } 
+                        } else {
+                            ActionResult::error("Register indices must be less than 64".to_string())
+                        }
+                    },
+                    _ => {
+                        let s: String = keystroke.iter().collect();
+                        ActionResult::error(format!("Command not recognized: '{}'", s))
+                    }
+                }
+            }
+            _ => {
+                let s: String = keystroke.iter().collect();
+                ActionResult::error(format!("Command not recognized: '{}'", s))
+            }
+        }
+    }
+
+    fn addch(&mut self, mut window: Window, ch_input: Option<Input>) -> std::io::Result<Window> {
+        match self.edit_state {
+            EditState::Escaped => {
+                match ch_input {
+                    Some(Input::KeyResize) => {
+                        resize_term(0, 0);
+                        self.editors.resize(window.get_max_x() as usize - 1, window.get_max_y()as usize - 1);
+                        self.line_entry.reset_geometry(window.get_max_x() as usize - 2 - self.cursor_index_len, 0, window.get_max_y() as usize - 1);
+                        self.line_entry.draw(&mut window);
+                        self.editors.editors[self.editors.current].hex_edit.update(&mut window, UpdateDescription::All); // TODO: Handle this result
+                    },
+                    Some(Input::Character('\u{1b}')) => {
+                        self.current_keystroke = Vec::<char>::new();
+                    },
+                    Some(Input::Character('o')) => {
+                        self.transition_to_edit(&mut window, EditMode::HexOverwrite);
+                    },
+                    Some(Input::Character('O')) => {
+                        self.transition_to_edit(&mut window, EditMode::AsciiOverwrite);
+                    },
+                    Some(Input::Character('i')) => {
+                        self.transition_to_edit(&mut window, EditMode::HexInsert);
+                    },
+                    Some(Input::Character('I')) => {
+                        self.transition_to_edit(&mut window, EditMode::AsciiInsert);
+                    },
+                    Some(Input::Character(':')) | Some(Input::Character('/')) | Some(Input::Character('\\')) => {
+                        self.edit_state = EditState::Command;
+                        self.line_entry.addch(ch_input.unwrap()); 
+                        self.line_entry.draw(&mut window);
+                    }, 
+                    Some(Input::Character('t')) => {
+                        self.editors.tab();
+                        self.editors.editors[self.editors.current].hex_edit.update(&mut window, UpdateDescription::All); // TODO: Handle this result
+                        let fname = self.editors.editors[self.editors.current].hex_edit.filename();
+                        self.alert(fname, AlertType::Info, &mut window);
+                    }
+                    Some(Input::Character(c)) => {
+                        self.current_keystroke.push(c);
+                        if matches!(c, 'g' | 'G' | 'f' | 'F' | 'd' | 'y' | 'p' | 'P' | 'u' | 'U' | 'n' | 'N' | 's' | 'm' | 'M') {
+                            let result = self.execute_keystroke(self.current_keystroke.clone());
+                            self.handle_action_result(&mut window, result);
+                            self.current_keystroke = Vec::<char>::new();
+                        }
+                    },
+                    Some(ch) if matches!(ch, Input::KeyRight | Input::KeyLeft | Input::KeyUp | Input::KeyDown | Input::KeyNPage | Input::KeyPPage | Input::KeyHome | Input::KeyEnd) => {
+                        let result = self.editors.editors[self.editors.current].hex_edit.addch(ch);
+                        self.handle_action_result(&mut window, result);
+                    },
+                    _ => {
+                        self.alert("Invalid Keystroke".to_string(), AlertType::Error, &mut window)
+                    }
+                }
+            },
+            EditState::Command => {
+
+                match ch_input {
+                    Some(Input::KeyResize) => {
+                        resize_term(0, 0);
+                    },
+                    Some(Input::KeyUp) => {
+                        if self.command_history_index > 0 {
+                            self.command_history_index -= 1;
+                            self.line_entry.set_text(self.command_history[self.command_history_index].to_vec());
+                            self.line_entry.draw(&mut window);
+                        }
+                    },
+                    Some(Input::KeyDown) => {
+                        if self.command_history_index + 1 < self.command_history.len() {
+                            self.command_history_index += 1;
+                            self.line_entry.set_text(self.command_history[self.command_history_index].to_vec());
+                            self.line_entry.draw(&mut window);
+                        }
+                    },
+                    Some(Input::Character('\u{1b}')) => {
+                        self.edit_state = EditState::Escaped;
+                    },
+                    Some(Input::Character('\n')) => {
+                        //println!("Newline: {}", String::from_iter(line_entry.get_text()));
+                        self.command_history.push(self.line_entry.get_text());
+                        self.command_history_index = self.command_history.len();
+
+                        let (instr, result) = execute_command(&mut self.editors, self.line_entry.get_text());
+
+                        self.handle_action_result(&mut window, result);
+
+                        self.line_entry.clear();
+                        self.line_entry.draw(&mut window);
+
+                        match instr {
+                            CommandInstruction::NoOp => {
+                                self.edit_state = EditState::Escaped;
+
+                                self.refresh_current_cursor(&mut window)
+                                // hm.hex_edit.refresh_cursor(&mut window);
+                            },
+                            CommandInstruction::Exit => {
+                                endwin();
+                                std::process::exit(0);
+                            },
+                            CommandInstruction::ChangeState(EditState::Manual) => {
+                                self.edit_state = EditState::Manual;
+                                self.manual_view.resize(window.get_max_x() as usize - 1, window.get_max_y() as usize - 1);
+                                self.manual_view.draw(&mut window);
+                            },
+                            CommandInstruction::Open(filename) => {
+                                if let Ok(i) = self.editors.push(filename, FileManagerType::ReadOnly, false, None) {
+                                    self.editors.current = i;
+                                    self.editors.editors[self.editors.current].hex_edit.set_viewport_row(0);
+                                    self.editors.editors[self.editors.current].hex_edit.draw(&mut window);//.update(&mut window, UpdateDescription::All);
+                                    self.edit_state = EditState::Escaped;
+                                }
+                            },
+                            CommandInstruction::Refresh => {
+                                //resize_term(0, 0);
+                                endwin();
+                                window = initscr();
+                                window.refresh();
+                                window.keypad(true);
+                                noecho();
+                                init_colors();
+                                //window.refresh();
+                                self.editors.resize(window.get_max_x() as usize - 1, window.get_max_y()as usize - 1);
+                                //panic!("{} {}", window.get_max_x(), window.get_max_y());
+                                self.line_entry.reset_geometry(window.get_max_x() as usize - 2 - self.cursor_index_len, 0, window.get_max_y() as usize - 1);
+                                self.line_entry.draw(&mut window);
+                                self.editors.editors[self.editors.current].hex_edit.update(&mut window, UpdateDescription::All); // TODO: Handle this result
+                            }
+                            _ => () // This should never be hit
+                        }
+                    },
+                    Some(ch) => { 
+                        self.line_entry.addch(ch); 
+                        self.line_entry.draw(&mut window);
+                    },
+                    None => ()
+                }
+            },
+            EditState::Edit => {
+                // let hm = &mut self.editors.editors[self.editors.current];
+                match ch_input {
+                    Some(Input::KeyResize) => {
+                        resize_term(0, 0);
+                    }
+                    Some(Input::Character('\u{1b}')) => {
+                        self.edit_state = EditState::Escaped;
+                    },
+                    Some(ch) => { 
+                        let result = self.editors.editors[self.editors.current].hex_edit.addch(ch);
+                        self.handle_action_result(&mut window, result);
+                    },
+                    None => ()
+                }
+            },
+            EditState::Manual => {
+                // let hm = &mut self.editors.editors[self.editors.current];
+                match ch_input {
+                    Some(Input::KeyResize) => {
+                        resize_term(0, 0);
+                        self.manual_view.resize(window.get_max_x() as usize - 1, window.get_max_y() as usize - 1);
+                        self.manual_view.draw(&mut window);
+                    },
+                    Some(Input::Character('\u{1b}')) => { // escape
+                        self.edit_state = EditState::Escaped;
+                        self.editors.editors[self.editors.current].hex_edit.draw(&mut window);
+                        self.line_entry.draw(&mut window);
+                    },
+                    Some(ch) if matches!(ch, Input::KeyUp | Input::KeyDown | Input::KeyHome | Input::KeyEnd | Input::KeyPPage | Input::KeyNPage) => {
+                        self.manual_view.addch(ch);
+                        self.manual_view.draw(&mut window);
+                    },
+                    _ => self.alert("Invalid Keystroke".to_string(), AlertType::Error, &mut window)
+                }
+            }
+        }
+
+        let (y, x) = window.get_cur_yx();
+
+        // Draw cursor index
+        let pos = self.editors.editors[self.editors.current].hex_edit.get_cursor_pos();
+        let length = self.editors.editors[self.editors.current].hex_edit.len();
+        let caps_hex = self.editors.editors[self.editors.current].hex_edit.get_capitalize_hex();
+        let cursor_label_len = match self.editors.cnum {
+            ShowType::Off => 0,
+            ShowType::Dec => format!("{}", length).len(),
+            ShowType::Hex => format!("{:x}", length).len()
+        };
+        let cursor_index_string = match self.editors.cnum {
+            ShowType::Off => "".to_string(),
+            ShowType::Dec => format!("{:0width$}", pos, width=cursor_label_len),
+            ShowType::Hex => match caps_hex {
+                true => format!("{:0width$x}", pos, width=cursor_label_len).to_ascii_uppercase(),
+                false => format!("{:0width$x}", pos, width=cursor_label_len)
+            }
+        };
+        window.mvaddstr((window.get_max_y() as usize - 1) as i32,
+        (window.get_max_x() as usize - 1 - cursor_label_len) as i32, 
+        cursor_index_string);
+
+        window.mv(y, x);
+
+        Ok(window)
+    }
 }
 
 pub fn init_colors() {
@@ -964,7 +1257,6 @@ pub fn init_colors() {
 
 pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) -> std::io::Result<()> {
 
-    let mut edit_state = EditState::Escaped;
     let mut window = initscr();
     window.refresh();
     window.keypad(true);
@@ -972,288 +1264,18 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
 
     init_colors();
 
-    // let png = Rc::new(make_png());
-
-    let mut current_keystroke = Vec::<char>::new();
-
-    let mut editors = EditorStack::new(0, 0, window.get_max_x() as usize - 1, window.get_max_y()as usize - 1);
-    if let Err(msg) = editors.push(filename, file_manager_type, extract, None) {
-        eprintln!("{}", msg);
-        std::process::exit(1);
-    };
-
-    let mut macro_manager = MacroManager::new();
-
-    let cursor_index_len: usize;
-
-    {
-        let hm = &mut editors.editors[editors.current];
-
-        cursor_index_len = format!("{:x}", hm.hex_edit.len()).len();
-        hm.hex_edit.set_viewport_row(0)?;
-        hm.hex_edit.draw(&mut window);
-    }
-
-    let mut command_history = Vec::<Vec<char>>::new();
-    let mut command_history_index = 0;
-
-    let mut line_entry = LineEntry::new(window.get_max_x() as usize - 2 - cursor_index_len, 0, window.get_max_y() as usize - 1);
-
-    let mut manual_view = LargeTextView::new(0, 0, window.get_max_x() as usize - 1, window.get_max_y() as usize - 1, MANUAL_TEXT.to_string());
+    let mut app = App::new(window.get_max_x() as usize - 1, window.get_max_y() as usize - 1);
+    
+    app.init(&mut window, filename, file_manager_type, extract)?;
 
     loop {
         let ch_input = window.getch();
-        if line_entry.alerting() {
-            line_entry.unalert();
-            line_entry.draw(&mut window);
+        if app.line_entry.alerting() {
+            app.line_entry.unalert();
+            app.line_entry.draw(&mut window);
         }
 
-
-        match edit_state {
-            EditState::Escaped => {
-                match ch_input {
-                    Some(Input::KeyResize) => {
-                        resize_term(0, 0);
-                        editors.resize(window.get_max_x() as usize - 1, window.get_max_y()as usize - 1);
-                        line_entry.reset_geometry(window.get_max_x() as usize - 2 - cursor_index_len, 0, window.get_max_y() as usize - 1);
-                        line_entry.draw(&mut window);
-                        editors.editors[editors.current].hex_edit.update(&mut window, UpdateDescription::All); // TODO: Handle this result
-                    },
-                    Some(Input::Character('\u{1b}')) => {
-                        current_keystroke = Vec::<char>::new();
-                    },
-                    Some(Input::Character('o')) => {
-                        edit_state = EditState::Edit;
-                        editors.set_edit_mode(EditMode::HexOverwrite);
-                        editors.editors[editors.current].hex_edit.refresh_cursor(&mut window)
-                    },
-                    Some(Input::Character('O')) => {
-                        edit_state = EditState::Edit;
-                        editors.set_edit_mode(EditMode::AsciiOverwrite);
-                        editors.editors[editors.current].hex_edit.refresh_cursor(&mut window)
-                    },
-                    Some(Input::Character('i')) => {
-                        edit_state = EditState::Edit;
-                        editors.set_edit_mode(EditMode::HexInsert);
-                        editors.editors[editors.current].hex_edit.refresh_cursor(&mut window)
-                    },
-                    Some(Input::Character('I')) => {
-                        edit_state = EditState::Edit;
-                        editors.set_edit_mode(EditMode::AsciiInsert);
-                        editors.editors[editors.current].hex_edit.refresh_cursor(&mut window)
-                    },
-                    Some(Input::Character(':')) | Some(Input::Character('/')) | Some(Input::Character('\\')) => {
-                        edit_state = EditState::Command;
-                        line_entry.addch(ch_input.unwrap()); 
-                        line_entry.draw(&mut window);
-                    }, 
-                    Some(Input::Character('t')) => {
-                        editors.tab();
-                        editors.editors[editors.current].hex_edit.update(&mut window, UpdateDescription::All); // TODO: Handle this result
-                        let fname = editors.editors[editors.current].hex_edit.filename();
-                        alert(fname, AlertType::Info, &mut window, &mut line_entry, &mut editors.editors[editors.current].hex_edit);
-                    }
-                    Some(Input::Character(c)) => {
-                        current_keystroke.push(c);
-                        if matches!(c, 'g' | 'G' | 'f' | 'F' | 'd' | 'y' | 'p' | 'P' | 'u' | 'U' | 'n' | 'N' | 's' | 'm' | 'M') {
-                            let result = execute_keystroke(&mut editors, &mut macro_manager, current_keystroke);
-                            let hm = &mut editors.editors[editors.current];
-                            if let Some(err) = result.alert {
-                                alert(err, result.alert_type.clone(), &mut window, &mut line_entry, &mut hm.hex_edit);
-                            }
-                            if let Some(action) = result.action {
-                                hm.action_stack.add(action);
-                            }
-                            let result = hm.hex_edit.update(&mut window, result.update);
-                            if let Err(err) = result {
-                                alert(err.to_string(), AlertType::Error, &mut window, &mut line_entry, &mut hm.hex_edit);
-                            }
-                            current_keystroke = Vec::<char>::new();
-                        }
-                    },
-                    Some(ch) if matches!(ch, Input::KeyRight | Input::KeyLeft | Input::KeyUp | Input::KeyDown | Input::KeyNPage | Input::KeyPPage | Input::KeyHome | Input::KeyEnd) => {
-                        let hm = &mut editors.editors[editors.current];
-                        let result = hm.hex_edit.addch(ch);
-                        if let Some(err) = result.alert {
-                            alert(err, result.alert_type.clone(), &mut window, &mut line_entry, &mut hm.hex_edit);
-                        }
-                        if let Some(action) = result.action {
-                            hm.action_stack.add(action);
-                        }
-                        let result = hm.hex_edit.update(&mut window, result.update);
-                        if let Err(err) = result {
-                            alert(err.to_string(), AlertType::Error, &mut window, &mut line_entry, &mut hm.hex_edit);
-                        }
-                    },
-                    _ => {
-                        alert("Invalid Keystroke".to_string(), AlertType::Error, &mut window, &mut line_entry, &mut editors.editors[editors.current].hex_edit)
-                    }
-                }
-            },
-            EditState::Command => {
-
-                match ch_input {
-                    Some(Input::KeyResize) => {
-                        resize_term(0, 0);
-                    },
-                    Some(Input::KeyUp) => {
-                        if command_history_index > 0 {
-                            command_history_index -= 1;
-                            line_entry.set_text(command_history[command_history_index].to_vec());
-                            line_entry.draw(&mut window);
-                        }
-                    },
-                    Some(Input::KeyDown) => {
-                        if command_history_index + 1 < command_history.len() {
-                            command_history_index += 1;
-                            line_entry.set_text(command_history[command_history_index].to_vec());
-                            line_entry.draw(&mut window);
-                        }
-                    },
-                    Some(Input::Character('\u{1b}')) => {
-                        edit_state = EditState::Escaped;
-                    },
-                    Some(Input::Character('\n')) => {
-                        //println!("Newline: {}", String::from_iter(line_entry.get_text()));
-                        command_history.push(line_entry.get_text());
-                        command_history_index = command_history.len();
-
-                        let (instr, result) = execute_command(&mut editors, line_entry.get_text());
-
-                        let hm = &mut editors.editors[editors.current];
-
-                        if let Some(err) = result.alert {
-                            alert(err, result.alert_type.clone(), &mut window, &mut line_entry, &mut hm.hex_edit);
-                        }
-                        if let Some(action) = result.action {
-                            hm.action_stack.add(action);
-                        }
-                        let result = hm.hex_edit.update(&mut window, result.update);
-                        if let Err(err) = result {
-                            alert(err.to_string(), AlertType::Error, &mut window, &mut line_entry, &mut hm.hex_edit);
-                        }
-
-                        line_entry.clear();
-                        line_entry.draw(&mut window);
-
-                        match instr {
-                            CommandInstruction::NoOp => {
-                                edit_state = EditState::Escaped;
-                                hm.hex_edit.refresh_cursor(&mut window);
-                            },
-                            CommandInstruction::Exit => {
-                                endwin();
-                                std::process::exit(0);
-                            },
-                            CommandInstruction::ChangeState(EditState::Manual) => {
-                                edit_state = EditState::Manual;
-                                manual_view.resize(window.get_max_x() as usize - 1, window.get_max_y() as usize - 1);
-                                manual_view.draw(&mut window);
-                            },
-                            CommandInstruction::Open(filename) => {
-                                if let Ok(i) = editors.push(filename, FileManagerType::ReadOnly, extract, None) {
-                                    editors.current = i;
-                                    editors.editors[editors.current].hex_edit.set_viewport_row(0);
-                                    editors.editors[editors.current].hex_edit.draw(&mut window);//.update(&mut window, UpdateDescription::All);
-                                    edit_state = EditState::Escaped;
-                                }
-                            },
-                            CommandInstruction::Refresh => {
-                                //resize_term(0, 0);
-                                endwin();
-                                window = initscr();
-                                window.refresh();
-                                window.keypad(true);
-                                noecho();
-                                init_colors();
-                                //window.refresh();
-                                editors.resize(window.get_max_x() as usize - 1, window.get_max_y()as usize - 1);
-                                //panic!("{} {}", window.get_max_x(), window.get_max_y());
-                                line_entry.reset_geometry(window.get_max_x() as usize - 2 - cursor_index_len, 0, window.get_max_y() as usize - 1);
-                                line_entry.draw(&mut window);
-                                editors.editors[editors.current].hex_edit.update(&mut window, UpdateDescription::All); // TODO: Handle this result
-                            }
-                            _ => () // This should never be hit
-                        }
-                    },
-                    Some(ch) => { 
-                        line_entry.addch(ch); 
-                        line_entry.draw(&mut window);
-                    },
-                    None => ()
-                }
-            },
-            EditState::Edit => {
-                let hm = &mut editors.editors[editors.current];
-                match ch_input {
-                    Some(Input::KeyResize) => {
-                        resize_term(0, 0);
-                    }
-                    Some(Input::Character('\u{1b}')) => {
-                        edit_state = EditState::Escaped;
-                    },
-                    Some(ch) => { 
-                        let result = hm.hex_edit.addch(ch);
-                        if let Some(err) = result.alert {
-                            alert(err, result.alert_type.clone(), &mut window, &mut line_entry, &mut hm.hex_edit);
-                        }
-                        if let Some(action) = result.action {
-                            hm.action_stack.add(action);
-                        }
-                        let result = hm.hex_edit.update(&mut window, result.update);
-                        if let Err(err) = result {
-                            alert(err.to_string(), AlertType::Error, &mut window, &mut line_entry, &mut hm.hex_edit);
-                        }
-                    },
-                    None => ()
-                }
-            },
-            EditState::Manual => {
-                let hm = &mut editors.editors[editors.current];
-                match ch_input {
-                    Some(Input::KeyResize) => {
-                        resize_term(0, 0);
-                        manual_view.resize(window.get_max_x() as usize - 1, window.get_max_y() as usize - 1);
-                        manual_view.draw(&mut window);
-                    },
-                    Some(Input::Character('\u{1b}')) => { // escape
-                        edit_state = EditState::Escaped;
-                        hm.hex_edit.draw(&mut window);
-                        line_entry.draw(&mut window);
-                    },
-                    Some(ch) if matches!(ch, Input::KeyUp | Input::KeyDown | Input::KeyHome | Input::KeyEnd | Input::KeyPPage | Input::KeyNPage) => {
-                        manual_view.addch(ch);
-                        manual_view.draw(&mut window);
-                    },
-                    _ => alert("Invalid Keystroke".to_string(), AlertType::Error, &mut window, &mut line_entry, &mut editors.editors[editors.current].hex_edit)
-                }
-            }
-        }
-
-        let (y, x) = window.get_cur_yx();
-
-        // Draw cursor index
-        let pos = editors.editors[editors.current].hex_edit.get_cursor_pos();
-        let length = editors.editors[editors.current].hex_edit.len();
-        let caps_hex = editors.editors[editors.current].hex_edit.get_capitalize_hex();
-        let cursor_label_len = match editors.cnum {
-            ShowType::Off => 0,
-            ShowType::Dec => format!("{}", length).len(),
-            ShowType::Hex => format!("{:x}", length).len()
-        };
-        let cursor_index_string = match editors.cnum {
-            ShowType::Off => "".to_string(),
-            ShowType::Dec => format!("{:0width$}", pos, width=cursor_label_len),
-            ShowType::Hex => match caps_hex {
-                true => format!("{:0width$x}", pos, width=cursor_label_len).to_ascii_uppercase(),
-                false => format!("{:0width$x}", pos, width=cursor_label_len)
-            }
-        };
-        window.mvaddstr((window.get_max_y() as usize - 1) as i32,
-        (window.get_max_x() as usize - 1 - cursor_label_len) as i32, 
-        cursor_index_string);
-
-        window.mv(y, x);
+        window = app.addch(window, ch_input)?;
 
     }
 
