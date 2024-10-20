@@ -168,6 +168,16 @@ struct HexEditManager<'a> {
     action_stack: ActionStack
 }
 
+impl<'a> HexEditManager<'a> {
+    fn undo(&mut self) -> ActionResult {
+        self.action_stack.undo(&mut self.hex_edit)
+    }
+
+    fn redo(&mut self) -> ActionResult {
+        self.action_stack.redo(&mut self.hex_edit)
+    }
+}
+
 struct EditorStack<'a> {
     editors: Vec<HexEditManager<'a>>,
     current: usize,
@@ -255,9 +265,13 @@ impl<'a> EditorStack<'a> {
     }
 
 
-    // fn current(&mut self) -> &mut HexEditManager {
-    //     &mut self.editors[self.current]
-    // }
+    fn current<'b>(&'b self) -> &'b HexEditManager<'a> {
+        &self.editors[self.current]
+    }
+
+    fn current_mut<'b>(&'b mut self) -> &'b mut HexEditManager<'a> {
+        &mut self.editors[self.current]
+    }
 }
 
 enum CommandInstruction {
@@ -268,477 +282,7 @@ enum CommandInstruction {
     Refresh
 }
 
-fn execute_command(editor_stack: &mut EditorStack, command: Vec<char>) -> (CommandInstruction, ActionResult) {
 
-    match command[0] {
-        ':' => {
-            let tokens = parse_command(&command[1..].to_vec());
-            match tokens.len() {
-                1 => {
-                    let hm = &mut editor_stack.editors[editor_stack.current];
-                    match &tokens[0] {
-                        CommandToken::Keyword(CommandKeyword::Save) => {
-                            let result = hm.hex_edit.save();
-                            if let Some(err) = result.alert {
-                                (CommandInstruction::NoOp, ActionResult::error(err.to_string()))
-                            } else {
-                                (CommandInstruction::NoOp, ActionResult::empty())
-                            }
-                        },
-                        CommandToken::Keyword(CommandKeyword::SaveAndQuit) => {
-                            let result = hm.hex_edit.save();
-                            if let Some(err) = result.alert {
-                                (CommandInstruction::NoOp, ActionResult::error(err.to_string()))
-                            } else {
-                                (CommandInstruction::Exit, ActionResult::empty())
-                            }
-                        },
-                        CommandToken::Keyword(CommandKeyword::ForceQuit) => {
-                            (CommandInstruction::Exit, ActionResult::empty())
-                        },
-                        CommandToken::Keyword(CommandKeyword::Quit) => {
-                            if hm.hex_edit.is_modified() {
-                                (CommandInstruction::NoOp, ActionResult::error("File has unsaved changes".to_string()))
-                            } else {
-                                (CommandInstruction::Exit, ActionResult::empty())
-                            }
-                        },
-                        CommandToken::Keyword(CommandKeyword::Manual) => {
-                            (CommandInstruction::ChangeState(EditState::Manual), ActionResult::empty())
-                        },
-                        CommandToken::Keyword(CommandKeyword::Refresh) => {
-                            (CommandInstruction::Refresh, ActionResult::empty())
-                        }
-                        _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
-                    }
-                }
-                2 => {
-                    match (&tokens[0], &tokens[1]) {
-                        (CommandToken::Keyword(CommandKeyword::Swap), CommandToken::Register(n)) => {
-                            if *n < 32 {
-                                (CommandInstruction::NoOp, editor_stack.editors[editor_stack.current].hex_edit.swap_register(*n as u8))
-                            } else if *n < 64 {
-                                editor_stack.clipboard_registers[*n - 32].reverse();
-                                (CommandInstruction::NoOp, ActionResult::empty())
-                            } else {
-                                (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
-                            }
-                            
-                        },
-                        (CommandToken::Keyword(CommandKeyword::Not), CommandToken::Register(n)) => {
-                            if *n < 32 {
-                                (CommandInstruction::NoOp, editor_stack.editors[editor_stack.current].hex_edit.invert_register(*n as u8))
-                            } else if *n < 64 {
-                                let new = editor_stack.clipboard_registers[*n - 32].iter().map(|x| !x).collect();
-                                editor_stack.clipboard_registers[*n - 32] = new;
-                                (CommandInstruction::NoOp, ActionResult::empty())
-                            } else {
-                                (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
-                            }
-                            
-                        },
-                        (CommandToken::Keyword(CommandKeyword::Deflate), CommandToken::Register(n)) => {
-                            if *n < 32 {
-                                (CommandInstruction::NoOp, editor_stack.editors[editor_stack.current].hex_edit.deflate_register(*n as u8, editor_stack.clevel))
-                            } else if *n < 64 {
-                                let mut e = DeflateEncoder::new(Vec::new(), Compression::new(editor_stack.clevel as u32));
-                                if let Err(msg) = e.write_all(&editor_stack.clipboard_registers[*n - 32]) {
-                                    (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
-                                } else {
-                                    match e.finish() {
-                                        Ok(w) => {
-                                            editor_stack.clipboard_registers[*n - 32] = w;
-                                            (CommandInstruction::NoOp, ActionResult::empty())
-                                        },
-                                        Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
-                                    }
-                                }
-                            } else {
-                                (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
-                            }
-                        },
-                        (CommandToken::Keyword(CommandKeyword::Inflate), CommandToken::Register(n)) => {
-                            if *n < 32 {
-                                (CommandInstruction::NoOp, editor_stack.editors[editor_stack.current].hex_edit.inflate_register(*n as u8)) // TODO: Make level variable
-                            } else if *n < 64 {
-                                let mut e = DeflateDecoder::new(Vec::new());
-                                if let Err(msg) = e.write_all(&editor_stack.clipboard_registers[*n - 32]) {
-                                    (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
-                                } else {
-                                    match e.finish() {
-                                        Ok(w) => {
-                                            editor_stack.clipboard_registers[*n - 32] = w;
-                                            (CommandInstruction::NoOp, ActionResult::empty())
-                                        },
-                                        Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
-                                    }
-                                }
-                            } else {
-                                (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
-                            }
-                        }
-                        (CommandToken::Keyword(CommandKeyword::Clear), CommandToken::Register(n)) => {
-                            if *n < 32 {
-                                (CommandInstruction::NoOp, editor_stack.editors[editor_stack.current].hex_edit.set_register(*n as u8, &Vec::<u8>::new()))
-                            } else if *n < 64 {
-                                editor_stack.clipboard_registers[*n - 32] = Vec::<u8>::new();
-                                (CommandInstruction::NoOp, ActionResult::empty())
-                            } else {
-                                (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
-                            }
-                        },
-                        (CommandToken::Keyword(CommandKeyword::Clear), CommandToken::Keyword(CommandKeyword::Undo)) => {
-                            editor_stack.editors[editor_stack.current].action_stack.clear();
-                            (CommandInstruction::NoOp, ActionResult::empty())
-                        },
-                        (CommandToken::Keyword(CommandKeyword::Open), CommandToken::Word(word)) => {
-                            (CommandInstruction::Open(word.iter().collect()), ActionResult::empty())
-                        },
-                        (CommandToken::Keyword(kwrd), _) if matches!(kwrd, CommandKeyword::Print | CommandKeyword::PrintSeek) => { // :p []
-                            let hm = &mut editor_stack.editors[editor_stack.current];
-
-                            let fmt = match &tokens[1] {
-                                CommandToken::Keyword(fmt_kwrd) => {
-                                    match command_kwrd_to_fmt(fmt_kwrd) {
-                                        Ok(f) => f,
-                                        _ => return (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
-                                    }
-                                },
-                                _ => return (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
-                            };
-
-                            let n_bytes = fmt_length(&fmt);
-
-                            let mut buffer = vec![0; n_bytes];
-
-                            match hm.hex_edit.get_bytes(hm.hex_edit.get_cursor_pos(), &mut buffer) {
-                                Ok(n) if n == n_bytes => {
-                                    match from_bytes(&buffer, DataType {fmt, end: editor_stack.endianness}) {
-                                        Ok(s) => {
-                                            let mut res = match kwrd {
-                                                CommandKeyword::Print => ActionResult::empty(),
-                                                CommandKeyword::PrintSeek => hm.hex_edit.seek(SeekFrom::Current(n_bytes as i64)),
-                                                _ => return (CommandInstruction::NoOp, ActionResult::error("Impossible state".to_string()))
-                                            };
-                                            res.set_info(s);
-                                            (CommandInstruction::NoOp, res)
-                                        },
-                                        Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg))
-                                    }
-                                },
-                                Ok(_) => (CommandInstruction::NoOp, ActionResult::error("Not enough bytes for datatype".to_string())),
-                                Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
-                            }
-                        },
-                        _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
-                    }
-                },
-                3 => {
-                    match &tokens[0] {
-                        CommandToken::Keyword(CommandKeyword::Set) => { // :set [] []
-                            match (&tokens[1], &tokens[2]) {
-                                (CommandToken::Keyword(CommandKeyword::Caps), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::On | CommandKeyword::Off) => {
-                                    editor_stack.caps = matches!(kwrd, CommandKeyword::On);
-                                    (CommandInstruction::NoOp, editor_stack.apply(|h| h.set_capitalize_hex(matches!(kwrd, CommandKeyword::On))))
-                                },
-                                (CommandToken::Keyword(CommandKeyword::Hex), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::On | CommandKeyword::Off) => {
-                                    editor_stack.show_hex = matches!(kwrd, CommandKeyword::On);
-                                    (CommandInstruction::NoOp, editor_stack.apply(|h| h.set_show_hex(matches!(kwrd, CommandKeyword::On))))
-                                },
-                                (CommandToken::Keyword(CommandKeyword::Ascii), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::On | CommandKeyword::Off) => {
-                                    editor_stack.show_ascii = matches!(kwrd, CommandKeyword::On);
-                                    (CommandInstruction::NoOp, editor_stack.apply(|h| h.set_show_ascii(matches!(kwrd, CommandKeyword::On))))
-                                },
-                                (CommandToken::Keyword(CommandKeyword::Filename), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::On | CommandKeyword::Off) => {
-                                    editor_stack.show_filename = matches!(kwrd, CommandKeyword::On);
-                                    (CommandInstruction::NoOp, editor_stack.apply(|h| h.set_show_filename(matches!(kwrd, CommandKeyword::On))))
-                                },
-                                (CommandToken::Keyword(CommandKeyword::Icase), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::On | CommandKeyword::Off) => {
-                                    (CommandInstruction::NoOp, editor_stack.apply(|h| h.set_ignore_case(matches!(kwrd, CommandKeyword::On))))
-                                },
-                                (CommandToken::Keyword(CommandKeyword::Regex), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::On | CommandKeyword::Off) => {
-                                    (CommandInstruction::NoOp, editor_stack.apply(|h| h.set_use_regex(matches!(kwrd, CommandKeyword::On))))
-                                },
-                                (CommandToken::Keyword(CommandKeyword::LNum), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::Off | CommandKeyword::Hex | CommandKeyword::Dec) => {
-                                    (CommandInstruction::NoOp, editor_stack.apply(|h| h.set_show_lnum(match kwrd {
-                                        CommandKeyword::Off => ShowType::Off,
-                                        CommandKeyword::Dec => ShowType::Dec,
-                                        _ => ShowType::Hex,
-                                    })))
-                                },
-                                (CommandToken::Keyword(CommandKeyword::CNum), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::Off | CommandKeyword::Hex | CommandKeyword::Dec) => {
-                                    editor_stack.cnum = match kwrd {
-                                        CommandKeyword::Off => ShowType::Off,
-                                        CommandKeyword::Dec => ShowType::Dec,
-                                        _ => ShowType::Hex,
-                                    };
-                                    (CommandInstruction::NoOp, ActionResult::empty())
-                                },
-                                (CommandToken::Keyword(CommandKeyword::Endian), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::BigEndian | CommandKeyword::LittleEndian | CommandKeyword::NetworkEndian) => {
-                                    editor_stack.endianness = match kwrd {
-                                        CommandKeyword::BigEndian => Endianness::Big,
-                                        CommandKeyword::LittleEndian => Endianness::Little,
-                                        CommandKeyword::NetworkEndian => Endianness::Network,
-                                        _ => return (CommandInstruction::NoOp, ActionResult::error("Impossible state".to_string()))
-                                    };
-                                    (CommandInstruction::NoOp, ActionResult::empty())
-                                },
-                                (CommandToken::Keyword(CommandKeyword::Line), CommandToken::Integer(_, n)) => {
-                                    (CommandInstruction::NoOp, editor_stack.apply(|h| h.set_line_length(*n as u8)))
-                                },
-                                (CommandToken::Keyword(CommandKeyword::Chunk), CommandToken::Integer(_, n)) => {
-                                    (CommandInstruction::NoOp, editor_stack.apply(|h| h.set_block_size(*n)))
-                                },
-                                (CommandToken::Keyword(CommandKeyword::CLevel), CommandToken::Integer(_, n)) => { // TODO: Need this to work for saving gz files as well
-                                    if *n >= 10 {
-                                        (CommandInstruction::NoOp, ActionResult::error("Compression level must be 0-9".to_string()))
-                                    } else {
-                                        editor_stack.clevel = *n as u8;
-                                        (CommandInstruction::NoOp, ActionResult::empty())
-                                    }
-                                },
-                                (CommandToken::Keyword(CommandKeyword::Undo), CommandToken::Integer(_, n)) => {
-                                    for hm in editor_stack.editors.iter_mut() {
-                                        hm.action_stack.set_length(*n);
-                                    }
-                                    (CommandInstruction::NoOp, ActionResult::empty())
-                                },
-                                (CommandToken::Keyword(CommandKeyword::Syntax), CommandToken::Word(word)) => {
-                                    let syntax: String = word.into_iter().collect();
-                                    (CommandInstruction::NoOp, editor_stack.editors[editor_stack.current].hex_edit.set_syntax(Some(syntax)))
-                                },
-                                (CommandToken::Keyword(CommandKeyword::Syntax), CommandToken::Keyword(CommandKeyword::Off)) => {
-                                    (CommandInstruction::NoOp, editor_stack.editors[editor_stack.current].hex_edit.set_syntax(None))
-                                },
-                                (CommandToken::Keyword(CommandKeyword::Fill), CommandToken::Register(n)) => {
-                                    (CommandInstruction::NoOp, editor_stack.editors[editor_stack.current].hex_edit.set_fill(FillType::Register(*n as u8)))
-                                },
-                                (CommandToken::Keyword(CommandKeyword::Fill), CommandToken::Word(word)) => {
-                                    match parse_bytes(word) {
-                                        Ok(v) => (CommandInstruction::NoOp, editor_stack.editors[editor_stack.current].hex_edit.set_fill(FillType::Bytes(v))),
-                                        Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg))
-                                    }
-                                },
-                                _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
-                            }
-                        },
-                        CommandToken::Keyword(CommandKeyword::Cat) => { // :cat [] []
-                            match (&tokens[1], &tokens[2]) {
-                                (CommandToken::Register(n1), CommandToken::Register(n2)) => {
-                                    if *n1 < 32 {
-                                        if *n2 < 32 {
-                                            (CommandInstruction::NoOp, editor_stack.editors[editor_stack.current].hex_edit.concatenate_register(*n1 as u8, FillType::Register(*n2 as u8)))
-                                        } else if *n2 < 64 { 
-                                            let fill = FillType::Bytes(editor_stack.clipboard_registers[*n2 - 32].to_vec());
-                                            (CommandInstruction::NoOp, editor_stack.editors[editor_stack.current].hex_edit.concatenate_register(*n1 as u8, fill))
-                                        } else {
-                                            (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
-                                        }
-                                    } else if *n1 < 64 {
-                                        if *n2 < 32 {
-                                            let fill = editor_stack.editors[editor_stack.current].hex_edit.get_register(*n2 as u8).unwrap().to_vec();
-                                            editor_stack.clipboard_registers[*n1 - 32].extend(fill);
-                                            (CommandInstruction::NoOp, ActionResult::empty())
-                                        } else if *n2 < 64 { 
-                                            let fill = editor_stack.clipboard_registers[*n1 - 32].to_vec();
-                                            editor_stack.clipboard_registers[*n1 - 32].extend(fill);
-                                            (CommandInstruction::NoOp, ActionResult::empty())
-                                        } else {
-                                            (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
-                                        }
-                                    } else {
-                                        (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
-                                    }
-                                    
-                                },
-                                (CommandToken::Register(n), CommandToken::Word(word)) => {
-                                    match parse_bytes(word) {
-                                        Ok(v) => {
-                                            if *n < 32 {
-                                                (CommandInstruction::NoOp, editor_stack.editors[editor_stack.current].hex_edit.concatenate_register(*n as u8, FillType::Bytes(v)))
-                                            } else if *n < 64 {
-                                                editor_stack.clipboard_registers[*n - 32].extend(v);
-                                                (CommandInstruction::NoOp, ActionResult::empty())
-                                            } else {
-                                                (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
-                                            }
-                                        },
-                                        Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg))
-                                    }
-                                },
-                                _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
-                            }
-                        },
-                        CommandToken::Keyword(kwrd) if matches!(kwrd, CommandKeyword::And | CommandKeyword::Or | CommandKeyword::Nand | CommandKeyword::Nor | CommandKeyword::Xor | CommandKeyword::Xnor) => { // :and [] []
-                            let op = match kwrd {
-                                CommandKeyword::And => ByteOperation::And,
-                                CommandKeyword::Or => ByteOperation::Or,
-                                CommandKeyword::Nand => ByteOperation::Nand,
-                                CommandKeyword::Nor => ByteOperation::Nor,
-                                CommandKeyword::Xor => ByteOperation::Xor,
-                                CommandKeyword::Xnor => ByteOperation::Xnor,
-                                _ => return (CommandInstruction::NoOp, ActionResult::error("Impossible state".to_string()))
-                            };
-                            match (&tokens[1], &tokens[2]) {
-                                (CommandToken::Register(n1), CommandToken::Register(n2)) => {
-                                    if *n1 < 32 {
-                                        if *n2 < 32 {
-                                            (CommandInstruction::NoOp, editor_stack.editors[editor_stack.current].hex_edit.manipulate_register(*n1 as u8, FillType::Register(*n2 as u8), op))
-                                        } else if *n2 < 64 { 
-                                            let fill = FillType::Bytes(editor_stack.clipboard_registers[*n2 - 32].to_vec());
-                                            (CommandInstruction::NoOp, editor_stack.editors[editor_stack.current].hex_edit.manipulate_register(*n1 as u8, fill, op))
-                                        } else {
-                                            (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
-                                        }
-                                    } else if *n1 < 64 {
-                                        if *n2 < 32 {
-                                            let fill = editor_stack.editors[editor_stack.current].hex_edit.get_register(*n2 as u8).unwrap().to_vec();
-                                            vector_op(&mut editor_stack.clipboard_registers[*n1 - 32], &fill, |a, b| a & b);
-                                            (CommandInstruction::NoOp, ActionResult::empty())
-                                        } else if *n2 < 64 { 
-                                            let fill = editor_stack.clipboard_registers[*n1 - 32].to_vec();
-                                            vector_op(&mut editor_stack.clipboard_registers[*n1 - 32], &fill, |a, b| a & b);
-                                            (CommandInstruction::NoOp, ActionResult::empty())
-                                        } else {
-                                            (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
-                                        }
-                                    } else {
-                                        (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
-                                    }
-                                    
-                                },
-                                (CommandToken::Register(n), CommandToken::Word(word)) => {
-                                    match parse_bytes(word) {
-                                        Ok(v) => {
-                                            if *n < 32 {
-                                                (CommandInstruction::NoOp, editor_stack.editors[editor_stack.current].hex_edit.manipulate_register(*n as u8, FillType::Bytes(v), op))
-                                            } else if *n < 64 {
-                                                vector_op(&mut editor_stack.clipboard_registers[*n - 32], &v, |a, b| a & b);
-                                                (CommandInstruction::NoOp, ActionResult::empty())
-                                            } else {
-                                                (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
-                                            }
-                                        },
-                                        Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg))
-                                    }
-                                },
-                                _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
-                            }
-                        },
-                        CommandToken::Keyword(kwrd) if matches!(kwrd, CommandKeyword::Ins | CommandKeyword::Ovr) => { // :ins | ovr [] []
-                            let hm = &mut editor_stack.editors[editor_stack.current];
-                            let input = match &tokens[2] {
-                                CommandToken::Integer(word, _) => word,
-                                CommandToken::Word(word) => word,
-                                _ => return (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
-                            };
-
-                            let fmt = match &tokens[1] {
-                                CommandToken::Keyword(fmt_kwrd) => {
-                                    match command_kwrd_to_fmt(fmt_kwrd) {
-                                        Ok(f) => f,
-                                        _ => return (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
-                                    }
-                                },
-                                _ => return (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
-                            };
-
-
-                            match to_bytes(input, DataType {fmt, end: editor_stack.endianness}){
-                                Ok(bytes) => {
-                                    match kwrd {
-                                        CommandKeyword::Ins => (CommandInstruction::NoOp, hm.hex_edit.insert(DataSource::Bytes(bytes.to_vec()))),
-                                        CommandKeyword::Ovr => (CommandInstruction::NoOp, hm.hex_edit.overwrite(DataSource::Bytes(bytes.to_vec()))),
-                                        _ => (CommandInstruction::NoOp, ActionResult::error("Impossible state".to_string()))
-                                    }
-                                },
-                                Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg))
-                            }
-                        
-                        },
-                        CommandToken::Keyword(CommandKeyword::RShift | CommandKeyword::LShift) => { // :rshft | lshft [] []
-                            match (&tokens[1], &tokens[2]) {
-                                (CommandToken::Register(register), CommandToken::Integer(_, n)) => {
-                                    let shift = match &tokens[0] {
-                                        CommandToken::Keyword(CommandKeyword::RShift) => *n as i8,
-                                        CommandToken::Keyword(CommandKeyword::LShift) => -(*n as i8),
-                                        _ => return (CommandInstruction::NoOp, ActionResult::error("Impossible state".to_string()))
-                                    };
-
-                                    if *register < 32 {
-                                        (CommandInstruction::NoOp, editor_stack.editors[editor_stack.current].hex_edit.shift_register(*register as u8, shift))
-                                    } else if *register < 64 {
-                                        match shift_vector(&mut editor_stack.clipboard_registers[*register - 32], shift) {
-                                            Ok(()) => (CommandInstruction::NoOp, ActionResult::empty()),
-                                            Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
-                                        }
-                                        
-                                    } else {
-                                        (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
-                                    }
-                                },
-                                _ => return (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
-                            }
-                        },
-                        _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
-                    }
-                },
-                4 => {
-                    match (&tokens[0], &tokens[1], &tokens[2], &tokens[3]) {
-                        (CommandToken::Keyword(CommandKeyword::Slice), CommandToken::Register(register), CommandToken::Integer(_, n1), CommandToken::Integer(_, n2)) => {
-                            if *register < 32 {
-                                (CommandInstruction::NoOp, editor_stack.editors[editor_stack.current].hex_edit.slice_register(*register as u8, *n1, *n2))
-                            } else if *register < 64 {
-                                if *n2 >= editor_stack.clipboard_registers[*register - 32].len() {
-                                    (CommandInstruction::NoOp, ActionResult::error("Slice index outside of register contents bounds".to_string()))
-                                } else if *n1 > *n2 {
-                                    (CommandInstruction::NoOp, ActionResult::error("Slice start index greater than slice end index".to_string()))
-                                } else {
-                                    let temp = &editor_stack.clipboard_registers[*register - 32][*n1..*n2];
-                                    editor_stack.clipboard_registers[*register - 32] = temp.to_vec();
-                                    (CommandInstruction::NoOp, ActionResult::empty())
-                                }
-                            } else {
-                                (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
-                            }
-                        },
-                        _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
-                    }
-                }
-                _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
-            }
-        },
-        // FIND IN FILE
-        '/' => {
-            let hm = &mut editor_stack.editors[editor_stack.current];
-            hm.hex_edit.clear_find();
-            hm.hex_edit.find(&command[1..].to_vec());
-            (CommandInstruction::NoOp, hm.hex_edit.seek_next())
-        },
-        '?' => {
-            let hm = &mut editor_stack.editors[editor_stack.current];
-            hm.hex_edit.clear_find();
-            hm.hex_edit.find(&command[1..].to_vec());
-            (CommandInstruction::NoOp, hm.hex_edit.seek_prev())
-        },
-        '\\' => {
-            let mut word = command[1..].to_vec();
-            word.insert(0, 'x');
-            match parse_bytes(&word) {
-                Ok(v) => {
-                    let hm = &mut editor_stack.editors[editor_stack.current];
-                    hm.hex_edit.clear_find();
-                    hm.hex_edit.find_bytes(&v);
-                    (CommandInstruction::NoOp, hm.hex_edit.seek_next())
-                },
-                Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg))
-            }
-        }
-        _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
-    }
-
-    //Ok(())
-}
 
 struct MacroManager {
     macros: [Option<Rc<CompoundAction>>; 32], //Needs to be 32 or less for Default::default() to work
@@ -832,7 +376,7 @@ impl<'a> App<'a> {
         }
     }
 
-    fn init(&mut self, window: &mut Window, filename: String, file_manager_type: FileManagerType, extract: bool) -> std::io::Result<()> {
+    fn init(&mut self, window: &mut Option<Window>, filename: String, file_manager_type: FileManagerType, extract: bool) -> std::io::Result<()> {
 
         self.editors.push(filename, file_manager_type, extract, None)?;
 
@@ -841,7 +385,9 @@ impl<'a> App<'a> {
 
             self.cursor_index_len = format!("{:x}", hm.hex_edit.len()).len();
             hm.hex_edit.set_viewport_row(0)?;
-            hm.hex_edit.draw(window);
+            if let Some(window) = window {
+                hm.hex_edit.draw(window);
+            }
         }
 
         self.line_entry.init(self.width - 1 - self.cursor_index_len);
@@ -849,30 +395,39 @@ impl<'a> App<'a> {
         Ok(())
     }
 
-    fn alert(&mut self, text: String, alert_type: AlertType, window: &mut Window) {
+    fn alert(&mut self, text: String, alert_type: AlertType, window: &mut Option<Window>) {
         self.line_entry.alert(text.chars().collect(), alert_type);
-        self.line_entry.draw(window);
+        if let Some(window) = window {
+            self.line_entry.draw(window);
+        }
         self.refresh_current_cursor(window);
     }
 
-    fn refresh_current_cursor(&self, window: &mut Window) {
-        self.editors.editors[self.editors.current].hex_edit.refresh_cursor(window);
+    fn refresh_current_cursor(&self, window: &mut Option<Window>)  {
+        // self.editors.editors[self.editors.current].hex_edit.refresh_cursor(window);
+        if let Some(window) = window {
+            self.editors.current().hex_edit.refresh_cursor(window);
+        }
     }
 
-    fn handle_action_result(&mut self, window: &mut Window, result: ActionResult) {
+    fn handle_action_result(&mut self, window: &mut Option<Window>, result: ActionResult) {
         if let Some(err) = result.alert {
             self.alert(err, result.alert_type.clone(), window);
         }
         if let Some(action) = result.action {
-            self.editors.editors[self.editors.current].action_stack.add(action);
+            self.editors.current_mut().action_stack.add(action);
         }
-        let result = self.editors.editors[self.editors.current].hex_edit.update(window, result.update);
-        if let Err(err) = result {
+        let mut update_result = Ok(());
+        if let Some(window) = window {
+            update_result = self.editors.current_mut().hex_edit.update(window, result.update);
+        }
+        if let Err(err) = update_result {
             self.alert(err.to_string(), AlertType::Error, window);
         }
+        
     }
 
-    fn transition_to_edit(&mut self, window: &mut Window, mode: EditMode) {
+    fn transition_to_edit(&mut self, window: &mut Option<Window>, mode: EditMode) {
         self.edit_state = EditState::Edit;
         self.editors.set_edit_mode(mode);
         self.refresh_current_cursor(window);
@@ -886,40 +441,515 @@ impl<'a> App<'a> {
         &mut self.editors.editors[self.editors.current].hex_edit
     }
 
+    fn execute_command(&mut self, command: Vec<char>) -> (CommandInstruction, ActionResult) {
+
+        match command[0] {
+            ':' => {
+                let tokens = parse_command(&command[1..].to_vec());
+                match tokens.len() {
+                    1 => {
+                        // let hm = &mut editor_stack.editors[editor_stack.current];
+                        match &tokens[0] {
+                            CommandToken::Keyword(CommandKeyword::Save) => {
+                                let result = self.editors.current_mut().hex_edit.save();
+                                if let Some(err) = result.alert {
+                                    (CommandInstruction::NoOp, ActionResult::error(err.to_string()))
+                                } else {
+                                    (CommandInstruction::NoOp, ActionResult::empty())
+                                }
+                            },
+                            CommandToken::Keyword(CommandKeyword::SaveAndQuit) => {
+                                let result = self.editors.current_mut().hex_edit.save();
+                                if let Some(err) = result.alert {
+                                    (CommandInstruction::NoOp, ActionResult::error(err.to_string()))
+                                } else {
+                                    (CommandInstruction::Exit, ActionResult::empty())
+                                }
+                            },
+                            CommandToken::Keyword(CommandKeyword::ForceQuit) => {
+                                (CommandInstruction::Exit, ActionResult::empty())
+                            },
+                            CommandToken::Keyword(CommandKeyword::Quit) => {
+                                if self.editors.current().hex_edit.is_modified() {
+                                    (CommandInstruction::NoOp, ActionResult::error("File has unsaved changes".to_string()))
+                                } else {
+                                    (CommandInstruction::Exit, ActionResult::empty())
+                                }
+                            },
+                            CommandToken::Keyword(CommandKeyword::Manual) => {
+                                (CommandInstruction::ChangeState(EditState::Manual), ActionResult::empty())
+                            },
+                            CommandToken::Keyword(CommandKeyword::Refresh) => {
+                                (CommandInstruction::Refresh, ActionResult::empty())
+                            }
+                            _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
+                        }
+                    }
+                    2 => {
+                        match (&tokens[0], &tokens[1]) {
+                            (CommandToken::Keyword(CommandKeyword::Swap), CommandToken::Register(n)) => {
+                                if *n < 32 {
+                                    (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.swap_register(*n as u8))
+                                } else if *n < 64 {
+                                    self.editors.clipboard_registers[*n - 32].reverse();
+                                    (CommandInstruction::NoOp, ActionResult::empty())
+                                } else {
+                                    (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
+                                }
+                                
+                            },
+                            (CommandToken::Keyword(CommandKeyword::Not), CommandToken::Register(n)) => {
+                                if *n < 32 {
+                                    (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.invert_register(*n as u8))
+                                } else if *n < 64 {
+                                    let new = self.editors.clipboard_registers[*n - 32].iter().map(|x| !x).collect();
+                                    self.editors.clipboard_registers[*n - 32] = new;
+                                    (CommandInstruction::NoOp, ActionResult::empty())
+                                } else {
+                                    (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
+                                }
+                                
+                            },
+                            (CommandToken::Keyword(CommandKeyword::Deflate), CommandToken::Register(n)) => {
+                                if *n < 32 {
+                                    let clevel = self.editors.clevel;
+                                    (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.deflate_register(*n as u8, clevel))
+                                } else if *n < 64 {
+                                    let mut e = DeflateEncoder::new(Vec::new(), Compression::new(self.editors.clevel as u32));
+                                    if let Err(msg) = e.write_all(&self.editors.clipboard_registers[*n - 32]) {
+                                        (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
+                                    } else {
+                                        match e.finish() {
+                                            Ok(w) => {
+                                                self.editors.clipboard_registers[*n - 32] = w;
+                                                (CommandInstruction::NoOp, ActionResult::empty())
+                                            },
+                                            Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
+                                        }
+                                    }
+                                } else {
+                                    (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
+                                }
+                            },
+                            (CommandToken::Keyword(CommandKeyword::Inflate), CommandToken::Register(n)) => {
+                                if *n < 32 {
+                                    (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.inflate_register(*n as u8)) // TODO: Make level variable
+                                } else if *n < 64 {
+                                    let mut e = DeflateDecoder::new(Vec::new());
+                                    if let Err(msg) = e.write_all(&self.editors.clipboard_registers[*n - 32]) {
+                                        (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
+                                    } else {
+                                        match e.finish() {
+                                            Ok(w) => {
+                                                self.editors.clipboard_registers[*n - 32] = w;
+                                                (CommandInstruction::NoOp, ActionResult::empty())
+                                            },
+                                            Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
+                                        }
+                                    }
+                                } else {
+                                    (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
+                                }
+                            }
+                            (CommandToken::Keyword(CommandKeyword::Clear), CommandToken::Register(n)) => {
+                                if *n < 32 {
+                                    (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.set_register(*n as u8, &Vec::<u8>::new()))
+                                } else if *n < 64 {
+                                    self.editors.clipboard_registers[*n - 32] = Vec::<u8>::new();
+                                    (CommandInstruction::NoOp, ActionResult::empty())
+                                } else {
+                                    (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
+                                }
+                            },
+                            (CommandToken::Keyword(CommandKeyword::Clear), CommandToken::Keyword(CommandKeyword::Undo)) => {
+                                self.editors.current_mut().action_stack.clear();
+                                (CommandInstruction::NoOp, ActionResult::empty())
+                            },
+                            (CommandToken::Keyword(CommandKeyword::Open), CommandToken::Word(word)) => {
+                                (CommandInstruction::Open(word.iter().collect()), ActionResult::empty())
+                            },
+                            (CommandToken::Keyword(kwrd), _) if matches!(kwrd, CommandKeyword::Print | CommandKeyword::PrintSeek) => { // :p []
+                                // let hm = &mut editor_stack.editors[editor_stack.current];
+    
+                                let fmt = match &tokens[1] {
+                                    CommandToken::Keyword(fmt_kwrd) => {
+                                        match command_kwrd_to_fmt(fmt_kwrd) {
+                                            Ok(f) => f,
+                                            _ => return (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
+                                        }
+                                    },
+                                    _ => return (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
+                                };
+    
+                                let n_bytes = fmt_length(&fmt);
+    
+                                let mut buffer = vec![0; n_bytes];
+
+                                let cursor_pos = self.editors.current().hex_edit.get_cursor_pos();
+    
+                                match self.editors.current_mut().hex_edit.get_bytes(cursor_pos, &mut buffer) {
+                                    Ok(n) if n == n_bytes => {
+                                        match from_bytes(&buffer, DataType {fmt, end: self.editors.endianness}) {
+                                            Ok(s) => {
+                                                let mut res = match kwrd {
+                                                    CommandKeyword::Print => ActionResult::empty(),
+                                                    CommandKeyword::PrintSeek => self.editors.current_mut().hex_edit.seek(SeekFrom::Current(n_bytes as i64)),
+                                                    _ => return (CommandInstruction::NoOp, ActionResult::error("Impossible state".to_string()))
+                                                };
+                                                res.set_info(s);
+                                                (CommandInstruction::NoOp, res)
+                                            },
+                                            Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg))
+                                        }
+                                    },
+                                    Ok(_) => (CommandInstruction::NoOp, ActionResult::error("Not enough bytes for datatype".to_string())),
+                                    Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
+                                }
+                            },
+                            _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
+                        }
+                    },
+                    3 => {
+                        match &tokens[0] {
+                            CommandToken::Keyword(CommandKeyword::Set) => { // :set [] []
+                                match (&tokens[1], &tokens[2]) {
+                                    (CommandToken::Keyword(CommandKeyword::Caps), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::On | CommandKeyword::Off) => {
+                                        self.editors.caps = matches!(kwrd, CommandKeyword::On);
+                                        (CommandInstruction::NoOp, self.editors.apply(|h| h.set_capitalize_hex(matches!(kwrd, CommandKeyword::On))))
+                                    },
+                                    (CommandToken::Keyword(CommandKeyword::Hex), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::On | CommandKeyword::Off) => {
+                                        self.editors.show_hex = matches!(kwrd, CommandKeyword::On);
+                                        (CommandInstruction::NoOp, self.editors.apply(|h| h.set_show_hex(matches!(kwrd, CommandKeyword::On))))
+                                    },
+                                    (CommandToken::Keyword(CommandKeyword::Ascii), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::On | CommandKeyword::Off) => {
+                                        self.editors.show_ascii = matches!(kwrd, CommandKeyword::On);
+                                        (CommandInstruction::NoOp, self.editors.apply(|h| h.set_show_ascii(matches!(kwrd, CommandKeyword::On))))
+                                    },
+                                    (CommandToken::Keyword(CommandKeyword::Filename), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::On | CommandKeyword::Off) => {
+                                        self.editors.show_filename = matches!(kwrd, CommandKeyword::On);
+                                        (CommandInstruction::NoOp, self.editors.apply(|h| h.set_show_filename(matches!(kwrd, CommandKeyword::On))))
+                                    },
+                                    (CommandToken::Keyword(CommandKeyword::Icase), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::On | CommandKeyword::Off) => {
+                                        (CommandInstruction::NoOp, self.editors.apply(|h| h.set_ignore_case(matches!(kwrd, CommandKeyword::On))))
+                                    },
+                                    (CommandToken::Keyword(CommandKeyword::Regex), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::On | CommandKeyword::Off) => {
+                                        (CommandInstruction::NoOp, self.editors.apply(|h| h.set_use_regex(matches!(kwrd, CommandKeyword::On))))
+                                    },
+                                    (CommandToken::Keyword(CommandKeyword::LNum), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::Off | CommandKeyword::Hex | CommandKeyword::Dec) => {
+                                        (CommandInstruction::NoOp, self.editors.apply(|h| h.set_show_lnum(match kwrd {
+                                            CommandKeyword::Off => ShowType::Off,
+                                            CommandKeyword::Dec => ShowType::Dec,
+                                            _ => ShowType::Hex,
+                                        })))
+                                    },
+                                    (CommandToken::Keyword(CommandKeyword::CNum), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::Off | CommandKeyword::Hex | CommandKeyword::Dec) => {
+                                        self.editors.cnum = match kwrd {
+                                            CommandKeyword::Off => ShowType::Off,
+                                            CommandKeyword::Dec => ShowType::Dec,
+                                            _ => ShowType::Hex,
+                                        };
+                                        (CommandInstruction::NoOp, ActionResult::empty())
+                                    },
+                                    (CommandToken::Keyword(CommandKeyword::Endian), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::BigEndian | CommandKeyword::LittleEndian | CommandKeyword::NetworkEndian) => {
+                                        self.editors.endianness = match kwrd {
+                                            CommandKeyword::BigEndian => Endianness::Big,
+                                            CommandKeyword::LittleEndian => Endianness::Little,
+                                            CommandKeyword::NetworkEndian => Endianness::Network,
+                                            _ => return (CommandInstruction::NoOp, ActionResult::error("Impossible state".to_string()))
+                                        };
+                                        (CommandInstruction::NoOp, ActionResult::empty())
+                                    },
+                                    (CommandToken::Keyword(CommandKeyword::Line), CommandToken::Integer(_, n)) => {
+                                        (CommandInstruction::NoOp, self.editors.apply(|h| h.set_line_length(*n as u8)))
+                                    },
+                                    (CommandToken::Keyword(CommandKeyword::Chunk), CommandToken::Integer(_, n)) => {
+                                        (CommandInstruction::NoOp, self.editors.apply(|h| h.set_block_size(*n)))
+                                    },
+                                    (CommandToken::Keyword(CommandKeyword::CLevel), CommandToken::Integer(_, n)) => { // TODO: Need this to work for saving gz files as well
+                                        if *n >= 10 {
+                                            (CommandInstruction::NoOp, ActionResult::error("Compression level must be 0-9".to_string()))
+                                        } else {
+                                            self.editors.clevel = *n as u8;
+                                            (CommandInstruction::NoOp, ActionResult::empty())
+                                        }
+                                    },
+                                    (CommandToken::Keyword(CommandKeyword::Undo), CommandToken::Integer(_, n)) => {
+                                        for hm in self.editors.editors.iter_mut() {
+                                            hm.action_stack.set_length(*n);
+                                        }
+                                        (CommandInstruction::NoOp, ActionResult::empty())
+                                    },
+                                    (CommandToken::Keyword(CommandKeyword::Syntax), CommandToken::Word(word)) => {
+                                        let syntax: String = word.into_iter().collect();
+                                        (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.set_syntax(Some(syntax)))
+                                    },
+                                    (CommandToken::Keyword(CommandKeyword::Syntax), CommandToken::Keyword(CommandKeyword::Off)) => {
+                                        (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.set_syntax(None))
+                                    },
+                                    (CommandToken::Keyword(CommandKeyword::Fill), CommandToken::Register(n)) => {
+                                        (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.set_fill(FillType::Register(*n as u8)))
+                                    },
+                                    (CommandToken::Keyword(CommandKeyword::Fill), CommandToken::Word(word)) => {
+                                        match parse_bytes(word) {
+                                            Ok(v) => (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.set_fill(FillType::Bytes(v))),
+                                            Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg))
+                                        }
+                                    },
+                                    _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
+                                }
+                            },
+                            CommandToken::Keyword(CommandKeyword::Cat) => { // :cat [] []
+                                match (&tokens[1], &tokens[2]) {
+                                    (CommandToken::Register(n1), CommandToken::Register(n2)) => {
+                                        if *n1 < 32 {
+                                            if *n2 < 32 {
+                                                (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.concatenate_register(*n1 as u8, FillType::Register(*n2 as u8)))
+                                            } else if *n2 < 64 { 
+                                                let fill = FillType::Bytes(self.editors.clipboard_registers[*n2 - 32].to_vec());
+                                                (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.concatenate_register(*n1 as u8, fill))
+                                            } else {
+                                                (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
+                                            }
+                                        } else if *n1 < 64 {
+                                            if *n2 < 32 {
+                                                let fill = self.editors.current().hex_edit.get_register(*n2 as u8).unwrap().to_vec();
+                                                self.editors.clipboard_registers[*n1 - 32].extend(fill);
+                                                (CommandInstruction::NoOp, ActionResult::empty())
+                                            } else if *n2 < 64 { 
+                                                let fill = self.editors.clipboard_registers[*n1 - 32].to_vec();
+                                                self.editors.clipboard_registers[*n1 - 32].extend(fill);
+                                                (CommandInstruction::NoOp, ActionResult::empty())
+                                            } else {
+                                                (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
+                                            }
+                                        } else {
+                                            (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
+                                        }
+                                        
+                                    },
+                                    (CommandToken::Register(n), CommandToken::Word(word)) => {
+                                        match parse_bytes(word) {
+                                            Ok(v) => {
+                                                if *n < 32 {
+                                                    (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.concatenate_register(*n as u8, FillType::Bytes(v)))
+                                                } else if *n < 64 {
+                                                    self.editors.clipboard_registers[*n - 32].extend(v);
+                                                    (CommandInstruction::NoOp, ActionResult::empty())
+                                                } else {
+                                                    (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
+                                                }
+                                            },
+                                            Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg))
+                                        }
+                                    },
+                                    _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
+                                }
+                            },
+                            CommandToken::Keyword(kwrd) if matches!(kwrd, CommandKeyword::And | CommandKeyword::Or | CommandKeyword::Nand | CommandKeyword::Nor | CommandKeyword::Xor | CommandKeyword::Xnor) => { // :and [] []
+                                let op = match kwrd {
+                                    CommandKeyword::And => ByteOperation::And,
+                                    CommandKeyword::Or => ByteOperation::Or,
+                                    CommandKeyword::Nand => ByteOperation::Nand,
+                                    CommandKeyword::Nor => ByteOperation::Nor,
+                                    CommandKeyword::Xor => ByteOperation::Xor,
+                                    CommandKeyword::Xnor => ByteOperation::Xnor,
+                                    _ => return (CommandInstruction::NoOp, ActionResult::error("Impossible state".to_string()))
+                                };
+                                match (&tokens[1], &tokens[2]) {
+                                    (CommandToken::Register(n1), CommandToken::Register(n2)) => {
+                                        if *n1 < 32 {
+                                            if *n2 < 32 {
+                                                (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.manipulate_register(*n1 as u8, FillType::Register(*n2 as u8), op))
+                                            } else if *n2 < 64 { 
+                                                let fill = FillType::Bytes(self.editors.clipboard_registers[*n2 - 32].to_vec());
+                                                (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.manipulate_register(*n1 as u8, fill, op))
+                                            } else {
+                                                (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
+                                            }
+                                        } else if *n1 < 64 {
+                                            if *n2 < 32 {
+                                                let fill = self.editors.current_mut().hex_edit.get_register(*n2 as u8).unwrap().to_vec();
+                                                vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| a & b);
+                                                (CommandInstruction::NoOp, ActionResult::empty())
+                                            } else if *n2 < 64 { 
+                                                let fill = self.editors.clipboard_registers[*n1 - 32].to_vec();
+                                                vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| a & b);
+                                                (CommandInstruction::NoOp, ActionResult::empty())
+                                            } else {
+                                                (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
+                                            }
+                                        } else {
+                                            (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
+                                        }
+                                        
+                                    },
+                                    (CommandToken::Register(n), CommandToken::Word(word)) => {
+                                        match parse_bytes(word) {
+                                            Ok(v) => {
+                                                if *n < 32 {
+                                                    (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.manipulate_register(*n as u8, FillType::Bytes(v), op))
+                                                } else if *n < 64 {
+                                                    vector_op(&mut self.editors.clipboard_registers[*n - 32], &v, |a, b| a & b);
+                                                    (CommandInstruction::NoOp, ActionResult::empty())
+                                                } else {
+                                                    (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
+                                                }
+                                            },
+                                            Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg))
+                                        }
+                                    },
+                                    _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
+                                }
+                            },
+                            CommandToken::Keyword(kwrd) if matches!(kwrd, CommandKeyword::Ins | CommandKeyword::Ovr) => { // :ins | ovr [] []
+                                // let hm = &mut editor_stack.editors[editor_stack.current];
+                                let input = match &tokens[2] {
+                                    CommandToken::Integer(word, _) => word,
+                                    CommandToken::Word(word) => word,
+                                    _ => return (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
+                                };
+    
+                                let fmt = match &tokens[1] {
+                                    CommandToken::Keyword(fmt_kwrd) => {
+                                        match command_kwrd_to_fmt(fmt_kwrd) {
+                                            Ok(f) => f,
+                                            _ => return (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
+                                        }
+                                    },
+                                    _ => return (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
+                                };
+    
+    
+                                match to_bytes(input, DataType {fmt, end: self.editors.endianness}){
+                                    Ok(bytes) => {
+                                        match kwrd {
+                                            CommandKeyword::Ins => (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.insert(DataSource::Bytes(bytes.to_vec()))),
+                                            CommandKeyword::Ovr => (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.overwrite(DataSource::Bytes(bytes.to_vec()))),
+                                            _ => (CommandInstruction::NoOp, ActionResult::error("Impossible state".to_string()))
+                                        }
+                                    },
+                                    Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg))
+                                }
+                            
+                            },
+                            CommandToken::Keyword(CommandKeyword::RShift | CommandKeyword::LShift) => { // :rshft | lshft [] []
+                                match (&tokens[1], &tokens[2]) {
+                                    (CommandToken::Register(register), CommandToken::Integer(_, n)) => {
+                                        let shift = match &tokens[0] {
+                                            CommandToken::Keyword(CommandKeyword::RShift) => *n as i8,
+                                            CommandToken::Keyword(CommandKeyword::LShift) => -(*n as i8),
+                                            _ => return (CommandInstruction::NoOp, ActionResult::error("Impossible state".to_string()))
+                                        };
+    
+                                        if *register < 32 {
+                                            (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.shift_register(*register as u8, shift))
+                                        } else if *register < 64 {
+                                            match shift_vector(&mut self.editors.clipboard_registers[*register - 32], shift) {
+                                                Ok(()) => (CommandInstruction::NoOp, ActionResult::empty()),
+                                                Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
+                                            }
+                                            
+                                        } else {
+                                            (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
+                                        }
+                                    },
+                                    _ => return (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
+                                }
+                            },
+                            _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
+                        }
+                    },
+                    4 => {
+                        match (&tokens[0], &tokens[1], &tokens[2], &tokens[3]) {
+                            (CommandToken::Keyword(CommandKeyword::Slice), CommandToken::Register(register), CommandToken::Integer(_, n1), CommandToken::Integer(_, n2)) => {
+                                if *register < 32 {
+                                    (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.slice_register(*register as u8, *n1, *n2))
+                                } else if *register < 64 {
+                                    if *n2 >= self.editors.clipboard_registers[*register - 32].len() {
+                                        (CommandInstruction::NoOp, ActionResult::error("Slice index outside of register contents bounds".to_string()))
+                                    } else if *n1 > *n2 {
+                                        (CommandInstruction::NoOp, ActionResult::error("Slice start index greater than slice end index".to_string()))
+                                    } else {
+                                        let temp = &self.editors.clipboard_registers[*register - 32][*n1..*n2];
+                                        self.editors.clipboard_registers[*register - 32] = temp.to_vec();
+                                        (CommandInstruction::NoOp, ActionResult::empty())
+                                    }
+                                } else {
+                                    (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
+                                }
+                            },
+                            _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
+                        }
+                    }
+                    _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
+                }
+            },
+            // FIND IN FILE
+            '/' => {
+                // let hm = &mut editor_stack.editors[editor_stack.current];
+                self.editors.current_mut().hex_edit.clear_find();
+                self.editors.current_mut().hex_edit.find(&command[1..].to_vec());
+                (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.seek_next())
+            },
+            '?' => {
+                // let hm = &mut editor_stack.editors[editor_stack.current];
+                self.editors.current_mut().hex_edit.clear_find();
+                self.editors.current_mut().hex_edit.find(&command[1..].to_vec());
+                (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.seek_prev())
+            },
+            '\\' => {
+                let mut word = command[1..].to_vec();
+                word.insert(0, 'x');
+                match parse_bytes(&word) {
+                    Ok(v) => {
+                        // let hm = &mut editor_stack.editors[editor_stack.current];
+                        self.editors.current_mut().hex_edit.clear_find();
+                        self.editors.current_mut().hex_edit.find_bytes(&v);
+                        (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.seek_next())
+                    },
+                    Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg))
+                }
+            }
+            _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
+        }
+    
+        //Ok(())
+    }
+
     fn execute_keystroke(&mut self, keystroke: Vec<char>) -> ActionResult {
 
         let tokens = parse_keystroke(&keystroke);
         match tokens.len() {
     
             1 => {
-                let hm = &mut self.editors.editors[self.editors.current];
+                // let hm = &mut self.editors.editors[self.editors.current];
                 match tokens[0] {
                     KeystrokeToken::Character('g') => {
-                        hm.hex_edit.seek(SeekFrom::Start(0))
+                        self.editors.current_mut().hex_edit.seek(SeekFrom::Start(0))
                     },
                     KeystrokeToken::Character('G') => {
-                        hm.hex_edit.seek(SeekFrom::End(0))
+                        self.editors.current_mut().hex_edit.seek(SeekFrom::End(0))
                     },
                     KeystrokeToken::Character('n') => {
-                        hm.hex_edit.seek_next()
+                        self.editors.current_mut().hex_edit.seek_next()
                     },
                     KeystrokeToken::Character('N') => {
-                        hm.hex_edit.seek_prev()
+                        self.editors.current_mut().hex_edit.seek_prev()
                     },
                     KeystrokeToken::Character('u') => {
-                        hm.action_stack.undo(&mut hm.hex_edit)
+                        self.editors.current_mut().undo()
                     },
                     KeystrokeToken::Character('U') => {
-                        hm.action_stack.redo(&mut hm.hex_edit)
+                        self.editors.current_mut().redo()
                     },
                     KeystrokeToken::Character('p') => {
-                        hm.hex_edit.insert(DataSource::Register(0))
+                        self.editors.current_mut().hex_edit.insert(DataSource::Register(0))
                     },
                     KeystrokeToken::Character('P') => {
-                        hm.hex_edit.overwrite(DataSource::Register(0))
+                        self.editors.current_mut().hex_edit.overwrite(DataSource::Register(0))
                     },
                     KeystrokeToken::Character('M') => {
-                        self.macro_manager.finish(&hm.action_stack)
+                        self.macro_manager.finish(&self.editors.current().action_stack)
                     },
                     _ => {
                         let s: String = keystroke.iter().collect();
@@ -931,51 +961,51 @@ impl<'a> App<'a> {
             2 => {
                 match (tokens[0], tokens[1]) {
                     (KeystrokeToken::Integer(n), KeystrokeToken::Character('g')) => {
-                        self.editors.editors[self.editors.current].hex_edit.seek(SeekFrom::Start(n as u64))
+                        self.editors.current_mut().hex_edit.seek(SeekFrom::Start(n as u64))
                     },
                     (KeystrokeToken::Integer(n), KeystrokeToken::Character('G')) => {
-                        self.editors.editors[self.editors.current].hex_edit.seek(SeekFrom::End(n as i64))
+                        self.editors.current_mut().hex_edit.seek(SeekFrom::End(n as i64))
                     },
                     (KeystrokeToken::Integer(n), KeystrokeToken::Character('f')) => {
-                        self.editors.editors[self.editors.current].hex_edit.insert(DataSource::Fill(n))
+                        self.editors.current_mut().hex_edit.insert(DataSource::Fill(n))
                     },
                     (KeystrokeToken::Integer(n), KeystrokeToken::Character('F')) => {
-                        self.editors.editors[self.editors.current].hex_edit.overwrite(DataSource::Fill(n))
+                        self.editors.current_mut().hex_edit.overwrite(DataSource::Fill(n))
                     },
                     (KeystrokeToken::Integer(n), KeystrokeToken::Character('d')) => {
-                        self.editors.editors[self.editors.current].hex_edit.delete_bytes(n)
+                        self.editors.current_mut().hex_edit.delete_bytes(n)
                     },
                     (KeystrokeToken::Integer(n), KeystrokeToken::Character('s')) => {
-                        self.editors.editors[self.editors.current].hex_edit.swap_bytes(n)
+                        self.editors.current_mut().hex_edit.swap_bytes(n)
                     },
                     (KeystrokeToken::Integer(n), KeystrokeToken::Character('y')) => {
-                        self.editors.editors[self.editors.current].hex_edit.yank(0, n)
+                        self.editors.current_mut().hex_edit.yank(0, n)
                     },
                     (KeystrokeToken::Integer(n), KeystrokeToken::Character('p')) => {
                         if n < 32 {
-                            self.editors.editors[self.editors.current].hex_edit.insert(DataSource::Register(n as u8))
+                            self.editors.current_mut().hex_edit.insert(DataSource::Register(n as u8))
                         } else if n < 64 {
                             let v = self.editors.clipboard_registers[n - 32].to_vec();
-                            self.editors.editors[self.editors.current].hex_edit.insert(DataSource::Bytes(v))
+                            self.editors.current_mut().hex_edit.insert(DataSource::Bytes(v))
                         } else {
                             ActionResult::error("Register indices must be less than 64".to_string())
                         }
                     },
                     (KeystrokeToken::Integer(n), KeystrokeToken::Character('P')) => {
                         if n < 32 {
-                            self.editors.editors[self.editors.current].hex_edit.overwrite(DataSource::Register(n as u8))
+                            self.editors.current_mut().hex_edit.overwrite(DataSource::Register(n as u8))
                         } else if n < 64 {
                             let v = self.editors.clipboard_registers[n - 32].to_vec();
-                            self.editors.editors[self.editors.current].hex_edit.overwrite(DataSource::Bytes(v))
+                            self.editors.current_mut().hex_edit.overwrite(DataSource::Bytes(v))
                         } else {
                             ActionResult::error("Register indices must be less than 64".to_string())
                         }
                     },
                     (KeystrokeToken::Integer(n), KeystrokeToken::Character('m')) => {
-                        self.macro_manager.run(n as u8, &mut self.editors.editors[self.editors.current].hex_edit)
+                        self.macro_manager.run(n as u8, &mut self.editors.current_mut().hex_edit)
                     },
                     (KeystrokeToken::Integer(n), KeystrokeToken::Character('M')) => {
-                        self.macro_manager.start(n as u8, &self.editors.editors[self.editors.current].action_stack)
+                        self.macro_manager.start(n as u8, &self.editors.current_mut().action_stack)
                     },
                     _ => {
                         let s: String = keystroke.iter().collect();
@@ -985,13 +1015,12 @@ impl<'a> App<'a> {
             },
     
             3 => {
-                let hm = &mut self.editors.editors[self.editors.current].hex_edit;
                 match (tokens[0], tokens[1], tokens[2]) {
                     (KeystrokeToken::Character('+'), KeystrokeToken::Integer(n), KeystrokeToken::Character('g')) => {
-                        hm.seek(SeekFrom::Current(n as i64))
+                        self.editors.current_mut().hex_edit.seek(SeekFrom::Current(n as i64))
                     },
                     (KeystrokeToken::Character('-'), KeystrokeToken::Integer(n), KeystrokeToken::Character('g')) => {
-                        hm.seek(SeekFrom::Current(-(n as i64)))
+                        self.editors.current_mut().hex_edit.seek(SeekFrom::Current(-(n as i64)))
                     },
                     _ => {
                         let s: String = keystroke.iter().collect();
@@ -1004,11 +1033,11 @@ impl<'a> App<'a> {
                 match (tokens[0], tokens[1], tokens[2], tokens[3]) {
                     (KeystrokeToken::Integer(n1), KeystrokeToken::Character('r'), KeystrokeToken::Integer(n2), KeystrokeToken::Character('y')) => {
                         if n1 < 32 {
-                            self.editors.editors[self.editors.current].hex_edit.yank(n1 as u8, n2)
+                            self.editors.current_mut().hex_edit.yank(n1 as u8, n2)
                         } else if n1 < 64 {
-                            let pos = self.editors.editors[self.editors.current].hex_edit.get_cursor_pos();
+                            let pos = self.editors.current().hex_edit.get_cursor_pos();
                             let mut v: Vec<u8> = vec![0;n2];
-                            let res = self.editors.editors[self.editors.current].hex_edit.get_bytes(pos, &mut v);
+                            let res = self.editors.current_mut().hex_edit.get_bytes(pos, &mut v);
                             match res {
                                 Ok(_) => { // TODO: Check if this is less han n2
                                     self.editors.clipboard_registers[n1 - 32] = v.to_vec();
@@ -1033,16 +1062,21 @@ impl<'a> App<'a> {
         }
     }
 
-    fn addch(&mut self, mut window: Window, ch_input: Option<Input>) -> std::io::Result<Window> {
+    fn addch(&mut self, mut window: Option<Window>, ch_input: Option<Input>) -> std::io::Result<Option<Window>> {
         match self.edit_state {
             EditState::Escaped => {
                 match ch_input {
                     Some(Input::KeyResize) => {
-                        resize_term(0, 0);
-                        self.editors.resize(window.get_max_x() as usize - 1, window.get_max_y()as usize - 1);
-                        self.line_entry.reset_geometry(window.get_max_x() as usize - 2 - self.cursor_index_len, 0, window.get_max_y() as usize - 1);
-                        self.line_entry.draw(&mut window);
-                        self.editors.editors[self.editors.current].hex_edit.update(&mut window, UpdateDescription::All); // TODO: Handle this result
+                        if let Some(window) = &mut window {
+                            resize_term(0, 0);
+                            self.editors.resize(window.get_max_x() as usize - 1, window.get_max_y()as usize - 1);
+                            self.line_entry.reset_geometry(window.get_max_x() as usize - 2 - self.cursor_index_len, 0, window.get_max_y() as usize - 1);
+                            self.line_entry.draw(window);
+                            self.editors.current_mut().hex_edit.update(window, UpdateDescription::All); // TODO: Handle this result
+                        } else {
+                            panic!("Resize not supported in headless mode");
+                        }
+                        
                     },
                     Some(Input::Character('\u{1b}')) => {
                         self.current_keystroke = Vec::<char>::new();
@@ -1062,12 +1096,16 @@ impl<'a> App<'a> {
                     Some(Input::Character(':')) | Some(Input::Character('/')) | Some(Input::Character('\\')) => {
                         self.edit_state = EditState::Command;
                         self.line_entry.addch(ch_input.unwrap()); 
-                        self.line_entry.draw(&mut window);
+                        if let Some(window) = &mut window {
+                            self.line_entry.draw(window);
+                        }
                     }, 
                     Some(Input::Character('t')) => {
                         self.editors.tab();
-                        self.editors.editors[self.editors.current].hex_edit.update(&mut window, UpdateDescription::All); // TODO: Handle this result
-                        let fname = self.editors.editors[self.editors.current].hex_edit.filename();
+                        if let Some(window) = &mut window {
+                            self.editors.current_mut().hex_edit.update(window, UpdateDescription::All); // TODO: Handle this result
+                        }
+                        let fname = self.editors.current().hex_edit.filename();
                         self.alert(fname, AlertType::Info, &mut window);
                     }
                     Some(Input::Character(c)) => {
@@ -1079,7 +1117,7 @@ impl<'a> App<'a> {
                         }
                     },
                     Some(ch) if matches!(ch, Input::KeyRight | Input::KeyLeft | Input::KeyUp | Input::KeyDown | Input::KeyNPage | Input::KeyPPage | Input::KeyHome | Input::KeyEnd) => {
-                        let result = self.editors.editors[self.editors.current].hex_edit.addch(ch);
+                        let result = self.editors.current_mut().hex_edit.addch(ch);
                         self.handle_action_result(&mut window, result);
                     },
                     _ => {
@@ -1097,14 +1135,19 @@ impl<'a> App<'a> {
                         if self.command_history_index > 0 {
                             self.command_history_index -= 1;
                             self.line_entry.set_text(self.command_history[self.command_history_index].to_vec());
-                            self.line_entry.draw(&mut window);
+                            if let Some(window) = &mut window {
+                                self.line_entry.draw(window);
+                            }
+                            
                         }
                     },
                     Some(Input::KeyDown) => {
                         if self.command_history_index + 1 < self.command_history.len() {
                             self.command_history_index += 1;
                             self.line_entry.set_text(self.command_history[self.command_history_index].to_vec());
-                            self.line_entry.draw(&mut window);
+                            if let Some(window) = &mut window {
+                                self.line_entry.draw(window);
+                            }
                         }
                     },
                     Some(Input::Character('\u{1b}')) => {
@@ -1115,12 +1158,14 @@ impl<'a> App<'a> {
                         self.command_history.push(self.line_entry.get_text());
                         self.command_history_index = self.command_history.len();
 
-                        let (instr, result) = execute_command(&mut self.editors, self.line_entry.get_text());
+                        let (instr, result) = self.execute_command(self.line_entry.get_text());
 
                         self.handle_action_result(&mut window, result);
 
                         self.line_entry.clear();
-                        self.line_entry.draw(&mut window);
+                        if let Some(window) = &mut window {
+                            self.line_entry.draw(window);
+                        }
 
                         match instr {
                             CommandInstruction::NoOp => {
@@ -1134,39 +1179,48 @@ impl<'a> App<'a> {
                                 std::process::exit(0);
                             },
                             CommandInstruction::ChangeState(EditState::Manual) => {
-                                self.edit_state = EditState::Manual;
-                                self.manual_view.resize(window.get_max_x() as usize - 1, window.get_max_y() as usize - 1);
-                                self.manual_view.draw(&mut window);
+                                if let Some(window) = &mut window {
+                                    self.edit_state = EditState::Manual;
+                                    self.manual_view.resize(window.get_max_x() as usize - 1, window.get_max_y() as usize - 1);
+                                    self.manual_view.draw(window);
+                                } else {
+                                    panic!("Manual state not valid in headless mode")
+                                }
                             },
                             CommandInstruction::Open(filename) => {
                                 if let Ok(i) = self.editors.push(filename, FileManagerType::ReadOnly, false, None) {
                                     self.editors.current = i;
-                                    self.editors.editors[self.editors.current].hex_edit.set_viewport_row(0);
-                                    self.editors.editors[self.editors.current].hex_edit.draw(&mut window);//.update(&mut window, UpdateDescription::All);
+                                    self.editors.current_mut().hex_edit.set_viewport_row(0);
+                                    if let Some(window) = &mut window {
+                                        self.editors.current().hex_edit.draw(window);//.update(&mut window, UpdateDescription::All);
+                                    }
                                     self.edit_state = EditState::Escaped;
                                 }
                             },
                             CommandInstruction::Refresh => {
                                 //resize_term(0, 0);
                                 endwin();
-                                window = initscr();
-                                window.refresh();
-                                window.keypad(true);
+                                let mut new_window = initscr();
+                                new_window.refresh();
+                                new_window.keypad(true);
                                 noecho();
                                 init_colors();
                                 //window.refresh();
-                                self.editors.resize(window.get_max_x() as usize - 1, window.get_max_y()as usize - 1);
+                                self.editors.resize(new_window.get_max_x() as usize - 1, new_window.get_max_y()as usize - 1);
                                 //panic!("{} {}", window.get_max_x(), window.get_max_y());
-                                self.line_entry.reset_geometry(window.get_max_x() as usize - 2 - self.cursor_index_len, 0, window.get_max_y() as usize - 1);
-                                self.line_entry.draw(&mut window);
-                                self.editors.editors[self.editors.current].hex_edit.update(&mut window, UpdateDescription::All); // TODO: Handle this result
+                                self.line_entry.reset_geometry(new_window.get_max_x() as usize - 2 - self.cursor_index_len, 0, new_window.get_max_y() as usize - 1);
+                                self.line_entry.draw(&mut new_window);
+                                self.editors.current_mut().hex_edit.update(&mut new_window, UpdateDescription::All); // TODO: Handle this result
+                                window = Some(new_window);
                             }
                             _ => () // This should never be hit
                         }
                     },
                     Some(ch) => { 
                         self.line_entry.addch(ch); 
-                        self.line_entry.draw(&mut window);
+                        if let Some(window) = &mut window {
+                            self.line_entry.draw(window);
+                        }
                     },
                     None => ()
                 }
@@ -1175,13 +1229,17 @@ impl<'a> App<'a> {
                 // let hm = &mut self.editors.editors[self.editors.current];
                 match ch_input {
                     Some(Input::KeyResize) => {
-                        resize_term(0, 0);
+                        if let Some(window) = &window {
+                            resize_term(0, 0);
+                        } else {
+                            panic!("Resize not valid in headless mode")
+                        }
                     }
                     Some(Input::Character('\u{1b}')) => {
                         self.edit_state = EditState::Escaped;
                     },
                     Some(ch) => { 
-                        let result = self.editors.editors[self.editors.current].hex_edit.addch(ch);
+                        let result = self.editors.current_mut().hex_edit.addch(ch);
                         self.handle_action_result(&mut window, result);
                     },
                     None => ()
@@ -1191,48 +1249,58 @@ impl<'a> App<'a> {
                 // let hm = &mut self.editors.editors[self.editors.current];
                 match ch_input {
                     Some(Input::KeyResize) => {
-                        resize_term(0, 0);
-                        self.manual_view.resize(window.get_max_x() as usize - 1, window.get_max_y() as usize - 1);
-                        self.manual_view.draw(&mut window);
+                        if let Some(window) = &mut window {
+                            resize_term(0, 0);
+                            self.manual_view.resize(window.get_max_x() as usize - 1, window.get_max_y() as usize - 1);
+                            self.manual_view.draw(window);
+                        } else {
+                            panic!("Resize not valid in headless mode")
+                        }
                     },
                     Some(Input::Character('\u{1b}')) => { // escape
                         self.edit_state = EditState::Escaped;
-                        self.editors.editors[self.editors.current].hex_edit.draw(&mut window);
-                        self.line_entry.draw(&mut window);
+                        if let Some(window) = &mut window {
+                            self.editors.current().hex_edit.draw(window);
+                            self.line_entry.draw(window);
+                        }
                     },
                     Some(ch) if matches!(ch, Input::KeyUp | Input::KeyDown | Input::KeyHome | Input::KeyEnd | Input::KeyPPage | Input::KeyNPage) => {
                         self.manual_view.addch(ch);
-                        self.manual_view.draw(&mut window);
+                        if let Some(window) = &mut window {
+                            self.manual_view.draw(window);
+                        }
                     },
                     _ => self.alert("Invalid Keystroke".to_string(), AlertType::Error, &mut window)
                 }
             }
         }
 
-        let (y, x) = window.get_cur_yx();
+        if let Some(window) = &window {
+            let (y, x) = window.get_cur_yx();
 
-        // Draw cursor index
-        let pos = self.editors.editors[self.editors.current].hex_edit.get_cursor_pos();
-        let length = self.editors.editors[self.editors.current].hex_edit.len();
-        let caps_hex = self.editors.editors[self.editors.current].hex_edit.get_capitalize_hex();
-        let cursor_label_len = match self.editors.cnum {
-            ShowType::Off => 0,
-            ShowType::Dec => format!("{}", length).len(),
-            ShowType::Hex => format!("{:x}", length).len()
-        };
-        let cursor_index_string = match self.editors.cnum {
-            ShowType::Off => "".to_string(),
-            ShowType::Dec => format!("{:0width$}", pos, width=cursor_label_len),
-            ShowType::Hex => match caps_hex {
-                true => format!("{:0width$x}", pos, width=cursor_label_len).to_ascii_uppercase(),
-                false => format!("{:0width$x}", pos, width=cursor_label_len)
-            }
-        };
-        window.mvaddstr((window.get_max_y() as usize - 1) as i32,
-        (window.get_max_x() as usize - 1 - cursor_label_len) as i32, 
-        cursor_index_string);
+            // Draw cursor index
+            let pos = self.editors.current().hex_edit.get_cursor_pos();
+            let length = self.editors.current().hex_edit.len();
+            let caps_hex = self.editors.current().hex_edit.get_capitalize_hex();
+            let cursor_label_len = match self.editors.cnum {
+                ShowType::Off => 0,
+                ShowType::Dec => format!("{}", length).len(),
+                ShowType::Hex => format!("{:x}", length).len()
+            };
+            let cursor_index_string = match self.editors.cnum {
+                ShowType::Off => "".to_string(),
+                ShowType::Dec => format!("{:0width$}", pos, width=cursor_label_len),
+                ShowType::Hex => match caps_hex {
+                    true => format!("{:0width$x}", pos, width=cursor_label_len).to_ascii_uppercase(),
+                    false => format!("{:0width$x}", pos, width=cursor_label_len)
+                }
+            };
+            window.mvaddstr((window.get_max_y() as usize - 1) as i32,
+            (window.get_max_x() as usize - 1 - cursor_label_len) as i32, 
+            cursor_index_string);
 
-        window.mv(y, x);
+            window.mv(y, x);
+        }
 
         Ok(window)
     }
@@ -1265,18 +1333,63 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
     init_colors();
 
     let mut app = App::new(window.get_max_x() as usize - 1, window.get_max_y() as usize - 1);
+
+    let mut window = Some(window);
     
     app.init(&mut window, filename, file_manager_type, extract)?;
 
     loop {
-        let ch_input = window.getch();
-        if app.line_entry.alerting() {
-            app.line_entry.unalert();
-            app.line_entry.draw(&mut window);
+        let ch_input;
+        if let Some(window) = &mut window {
+            ch_input = window.getch();
+            if app.line_entry.alerting() {
+                app.line_entry.unalert();
+                app.line_entry.draw(window);
+            }
+        } else {
+            unreachable!()
         }
 
         window = app.addch(window, ch_input)?;
 
     }
 
+}
+
+#[cfg(test)]
+mod app_string_tests {
+    use super::*;
+
+    fn test_driver(app: &mut App, inputs: &str) {
+        for c in inputs.chars() {
+            let input = match c {
+                '←' => Input::KeyLeft,
+                '↑' => Input::KeyUp,
+                '→' => Input::KeyRight,
+                '↓' => Input::KeyDown,
+                _ => Input::Character(c)
+            };
+            let window = app.addch(None, Some(input)).unwrap();
+            assert!(window.is_none());
+        }
+    }
+
+    #[test]
+    fn basic_test() {
+        let mut app = App::new(50, 50);
+        let mut window = None;
+        app.init(&mut window, r"tests\exif2c08.png".to_string(), FileManagerType::RamOnly, false).unwrap();
+        test_driver(&mut app, "4r16y↓4p-16g32y");
+        // for c in inputs {
+        //     window = app.addch(window, Some(Input::Character(c))).unwrap();
+        // }
+        let r0_expected = vec![
+            0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 
+            0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+            0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00, 0x20, 
+            0x08, 0x02, 0x00, 0x00, 0x00, 0xfc, 0x18, 0xed
+        ];
+        let r0 = app.editors.current().hex_edit.get_register(0).unwrap();
+        assert_eq!(r0_expected, r0)
+    }
 }
