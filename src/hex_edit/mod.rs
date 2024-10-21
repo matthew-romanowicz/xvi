@@ -191,7 +191,10 @@ impl DeleteAction {
 
 impl Action for DeleteAction {
     fn undo(&self, hex_edit: &mut HexEdit) -> ActionResult {
-        hex_edit.insert(DataSource::Bytes(self.bytes.to_vec()))
+        let mut insert_res = hex_edit.insert(DataSource::Bytes(self.bytes.to_vec()));
+        let seek_res = hex_edit.seek(SeekFrom::Current(-(self.bytes.len() as i64)));
+        insert_res.update = combine_update(&seek_res.update, &insert_res.update);
+        insert_res
     }
 
     fn redo(&self, hex_edit: &mut HexEdit) -> ActionResult {
@@ -1327,6 +1330,7 @@ impl<'a> HexEdit<'a> {
         }
     }
 
+    // Inserts data at cursor location and seeks to the end of the inserted data
     pub fn insert(&mut self, data: DataSource) -> ActionResult {
         let mut start_byte = self.cursor_pos;
         let file_end = self.file_manager.len();

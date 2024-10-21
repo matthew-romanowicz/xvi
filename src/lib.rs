@@ -1635,7 +1635,7 @@ mod app_string_tests {
 
         let buff_expected = vec![
             0x49, 0x48, 0x44, 0x52,
-            0x00, 0x00, 0x00, 0x02
+            0x00, 0x00, 0x00, 0x20
         ];
         let mut buff = vec![0; 8];
         assert_eq!(app.editors.current_mut().hex_edit.get_bytes(12, &mut buff).unwrap(), 8);
@@ -1651,6 +1651,47 @@ mod app_string_tests {
         assert_eq!(buff_expected, buff);
         assert_eq!(app.current_cursor_pos(), 16);
 
+        // Delete every other pair of bytes from byte 16 to 32
+        test_driver(&mut app, "16g2d+2g2d+2g2d+2g2d+2g"); 
+        assert_eq!(app.line_entry.get_alert(), None);
+        assert_eq!(app.current_cursor_pos(), 24);
+
+        let buff_expected = vec![
+            0x00, 0x03, 0x58, 0x49,
+            0x4d, 0x00, 0x00, 0x00
+        ];
+        let mut buff = vec![0; 8];
+        assert_eq!(app.editors.current_mut().hex_edit.get_bytes(16, &mut buff).unwrap(), 8);
+        assert_eq!(buff_expected, buff);
+
+        // Undo deleting pairs of bytes
+        test_driver(&mut app, "uuuuuuuu"); 
+        assert_eq!(app.line_entry.get_alert(), None);
+        assert_eq!(app.current_cursor_pos(), 16);
+
+        let buff_expected = vec![
+            0xa3, 0x00, 0x00, 0x03,
+            0xd2, 0x65, 0x58, 0x49,
+            0x66, 0x4d, 0x4d, 0x00,
+            0x2a, 0x00, 0x00, 0x00
+        ];
+        let mut buff = vec![0; 16];
+        assert_eq!(app.editors.current_mut().hex_edit.get_bytes(16, &mut buff).unwrap(), 16);
+        assert_eq!(buff_expected, buff);
+
+        // Redo deleting pairs of bytes
+        test_driver(&mut app, "UUUUUUUU"); 
+        assert_eq!(app.line_entry.get_alert(), None);
+        assert_eq!(app.current_cursor_pos(), 24);
+
+        let buff_expected = vec![
+            0x00, 0x03, 0x58, 0x49,
+            0x4d, 0x00, 0x00, 0x00
+        ];
+        let mut buff = vec![0; 8];
+        assert_eq!(app.editors.current_mut().hex_edit.get_bytes(16, &mut buff).unwrap(), 8);
+        assert_eq!(buff_expected, buff);
+
         // Delete 1200 bytes at index 0
         test_driver(&mut app, "g1200d"); 
         assert_eq!(app.line_entry.get_alert(), None);
@@ -1659,11 +1700,11 @@ mod app_string_tests {
         // Grab the first 8 bytes (left of deleted span) and confirm their contents
         test_driver(&mut app, "8yG");
         let r0_expected = vec![
-            0xff, 0x0c, 0xbe, 0x99, 0x00, 0x29, 0x47, 0x4b
+            0xb6, 0xa0, 0x37, 0x26, 0xe1, 0xf1, 0xb1, 0x70
         ];
         let r0 = app.editors.current().hex_edit.get_register(0).unwrap();
         assert_eq!(r0_expected, r0);
-        assert_eq!(app.current_cursor_pos(), file_length - 1216);
+        assert_eq!(app.current_cursor_pos(), file_length - 1216 - 8);
 
         // Attempt to delete past the end of the file
         test_driver(&mut app, "1500d");
@@ -1673,12 +1714,53 @@ mod app_string_tests {
         test_driver(&mut app, "1500g1d");
         assert_eq!(app.line_entry.get_alert(), Some("Cannot delete past EOF".to_string()));
 
+        // Undo deleting 1200 bytes (including seeks done since then)
+        test_driver(&mut app, "uuuu"); 
+        assert_eq!(app.line_entry.get_alert(), None);
+        assert_eq!(app.current_cursor_pos(), 0);
+
+        // Confirm some bytes in the previously deleted region
+        let buff_expected = vec![
+            0x00, 0x03, 0x58, 0x49,
+            0x4d, 0x00, 0x00, 0x00
+        ];
+        let mut buff = vec![0; 8];
+        assert_eq!(app.editors.current_mut().hex_edit.get_bytes(16, &mut buff).unwrap(), 8);
+        assert_eq!(buff_expected, buff);
+
+        // Redo 1200 byte deletion and grab the first 8 bytes (left of deleted span) and confirm their contents
+        test_driver(&mut app, "U8yG");
+        let r0_expected = vec![
+            0xb6, 0xa0, 0x37, 0x26, 0xe1, 0xf1, 0xb1, 0x70
+        ];
+        let r0 = app.editors.current().hex_edit.get_register(0).unwrap();
+        assert_eq!(r0_expected, r0);
+        assert_eq!(app.current_cursor_pos(), file_length - 1216 - 8);
+
         // Delete the remainder of the file
-        test_driver(&mut app, format!("g{}d", file_length - 1200 - 16).as_str());
+        test_driver(&mut app, format!("g{}d", file_length - 1200 - 16 - 8).as_str());
         assert_eq!(app.line_entry.get_alert(), None);
 
         // Confirm that the file is empty
         test_driver(&mut app, "G");
+        assert_eq!(app.current_cursor_pos(), 0);
+
+        // Undo deleting 1200 bytes and file (including seeks done since then)
+        test_driver(&mut app, "uuuuuu"); 
+        assert_eq!(app.line_entry.get_alert(), None);
+        assert_eq!(app.current_cursor_pos(), 0);
+
+        // Confirm some bytes in the previously deleted region
+        let buff_expected = vec![
+            0x00, 0x03, 0x58, 0x49,
+            0x4d, 0x00, 0x00, 0x00
+        ];
+        let mut buff = vec![0; 8];
+        assert_eq!(app.editors.current_mut().hex_edit.get_bytes(16, &mut buff).unwrap(), 8);
+        assert_eq!(buff_expected, buff);
+
+        // Redo file deletion and confirm file is empty
+        test_driver(&mut app, "UUUUUG"); 
         assert_eq!(app.current_cursor_pos(), 0);
     }
 }
