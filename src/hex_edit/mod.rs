@@ -965,7 +965,7 @@ impl<'a> HexEdit<'a> {
         ActionResult::no_error(UpdateDescription::All)
     }
 
-    pub fn get_capitalize_hex(&mut self) -> bool {
+    pub fn get_capitalize_hex(&self) -> bool {
         self.capitalize_hex
     }
 
@@ -1387,7 +1387,7 @@ impl<'a> HexEdit<'a> {
         }
     }
 
-    pub fn get_register(&mut self, register: u8) -> Result<Vec<u8>, String>{
+    pub fn get_register(&self, register: u8) -> Result<Vec<u8>, String>{
         if register < 32 {
             Ok(self.clipboard_registers[register as usize].to_vec())
         } else {
@@ -1671,10 +1671,17 @@ impl<'a> HexEdit<'a> {
                 self.set_cursor_pos(index as usize)
             },
             SeekFrom::End(index) => {
+                if index as usize > self.len() {
+                    return ActionResult::error("Cannot seek to negative index".to_string());
+                }
                 self.set_cursor_pos(self.len() - (index as usize))
             },
             SeekFrom::Current(index) => {
-                self.set_cursor_pos((current_pos as isize + (index as isize)) as usize)
+                let new_pos = current_pos as isize + (index as isize);
+                if new_pos < 0 {
+                    return ActionResult::error("Cannot seek to negative index".to_string());
+                }
+                self.set_cursor_pos(new_pos as usize)
             }
         };
         

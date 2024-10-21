@@ -441,6 +441,10 @@ impl<'a> App<'a> {
         &mut self.editors.editors[self.editors.current].hex_edit
     }
 
+    fn current_cursor_pos(&self) -> usize {
+        self.editors.current().hex_edit.get_cursor_pos()
+    }
+
     fn execute_command(&mut self, command: Vec<char>) -> (CommandInstruction, ActionResult) {
 
         match command[0] {
@@ -1369,6 +1373,9 @@ mod app_string_tests {
                 '↓' => Input::KeyDown,
                 _ => Input::Character(c)
             };
+            if app.line_entry.alerting() {
+                app.line_entry.unalert();
+            }
             let window = app.addch(None, Some(input)).unwrap();
             assert!(window.is_none());
         }
@@ -1380,9 +1387,6 @@ mod app_string_tests {
         let mut window = None;
         app.init(&mut window, r"tests\exif2c08.png".to_string(), FileManagerType::RamOnly, false).unwrap();
         test_driver(&mut app, "4r16y↓4p-16g32y");
-        // for c in inputs {
-        //     window = app.addch(window, Some(Input::Character(c))).unwrap();
-        // }
         let r0_expected = vec![
             0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 
             0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
@@ -1391,5 +1395,290 @@ mod app_string_tests {
         ];
         let r0 = app.editors.current().hex_edit.get_register(0).unwrap();
         assert_eq!(r0_expected, r0)
+    }
+
+    #[test]
+    fn seek_test() {
+        let mut app = App::new(50, 50);
+        let mut window = None;
+        app.init(&mut window, r"tests\exif2c08.png".to_string(), FileManagerType::RamOnly, false).unwrap();
+        let file_length = 1788;
+
+        // Index from start
+        test_driver(&mut app, "150g");
+        assert_eq!(app.current_cursor_pos(), 150);
+        assert_eq!(app.line_entry.get_alert(), None);
+        test_driver(&mut app, "1500g");
+        assert_eq!(app.current_cursor_pos(), 1500);
+        assert_eq!(app.line_entry.get_alert(), None);
+
+        // Negative index from current
+        test_driver(&mut app, "-100g");
+        assert_eq!(app.current_cursor_pos(), 1400);
+        assert_eq!(app.line_entry.get_alert(), None);
+        test_driver(&mut app, "-150g");
+        assert_eq!(app.current_cursor_pos(), 1250);
+        assert_eq!(app.line_entry.get_alert(), None);
+
+        // Try to seek to nevative index
+        test_driver(&mut app, "-1251g");
+        assert_eq!(app.current_cursor_pos(), 1250);
+        assert_eq!(app.line_entry.get_alert(), Some("Cannot seek to negative index".to_string()));
+
+        // Positive index from current
+        test_driver(&mut app, "+150g");
+        assert_eq!(app.current_cursor_pos(), 1400);
+        assert_eq!(app.line_entry.get_alert(), None);
+        test_driver(&mut app, "+100g");
+        assert_eq!(app.current_cursor_pos(), 1500);
+        assert_eq!(app.line_entry.get_alert(), None);
+
+        // Go to start
+        test_driver(&mut app, "g");
+        assert_eq!(app.current_cursor_pos(), 0);
+        assert_eq!(app.line_entry.get_alert(), None);
+
+        // Index from end
+        test_driver(&mut app, "G");
+        assert_eq!(app.current_cursor_pos(), file_length);
+        assert_eq!(app.line_entry.get_alert(), None);
+        test_driver(&mut app, "100G");
+        assert_eq!(app.current_cursor_pos(), file_length - 100);
+        assert_eq!(app.line_entry.get_alert(), None);
+        test_driver(&mut app, "1000G");
+        assert_eq!(app.current_cursor_pos(), file_length - 1000);
+        assert_eq!(app.line_entry.get_alert(), None);
+
+        // Try to seek to nevative index from end
+        test_driver(&mut app, "10000G");
+        assert_eq!(app.current_cursor_pos(), file_length - 1000);
+        assert_eq!(app.line_entry.get_alert(), Some("Cannot seek to negative index".to_string()));
+
+        // Exceed file length
+        test_driver(&mut app, "+6000g");
+        assert_eq!(app.current_cursor_pos(), file_length + 5000);
+        assert_eq!(app.line_entry.get_alert(), None);
+        // Using isize::MAX instead of usize::MAX since rust vectors can't actually get up to usize
+        test_driver(&mut app, format!("{}g", std::isize::MAX as usize).as_str());
+        assert_eq!(app.current_cursor_pos(), std::isize::MAX as usize);
+        assert_eq!(app.line_entry.get_alert(), None);
+    }
+
+    fn verify_cursor_history(app: &mut App, history: &Vec<usize>) {
+        for p in history.iter().rev().skip(1) {
+            test_driver(app, "u");
+            println!("{}", p);
+            assert_eq!(app.current_cursor_pos(), *p);
+            assert_eq!(app.line_entry.get_alert(), None);
+        }
+        test_driver(app, "u");
+        assert_eq!(app.line_entry.get_alert(), Some("No actions in stack".to_string()));
+        for p in history.iter().skip(1) {
+            test_driver(app, "U");
+            assert_eq!(app.current_cursor_pos(), *p);
+            assert_eq!(app.line_entry.get_alert(), None);
+        }
+        test_driver(app, "U");
+        assert_eq!(app.line_entry.get_alert(), Some("No actions in stack".to_string()));
+    }
+
+    #[test]
+    fn seek_undo_redo_test() {
+        let mut app = App::new(50, 50);
+        let mut window = None;
+        app.init(&mut window, r"tests\exif2c08.png".to_string(), FileManagerType::RamOnly, false).unwrap();
+        let file_length = 1788;
+
+        let mut pos_history = vec![0];
+
+        // Index from start
+        test_driver(&mut app, "150g");
+        assert_eq!(app.current_cursor_pos(), 150);
+        pos_history.push(150);
+        verify_cursor_history(&mut app, &pos_history);
+        test_driver(&mut app, "1500g");
+        assert_eq!(app.current_cursor_pos(), 1500);
+        pos_history.push(1500);
+        verify_cursor_history(&mut app, &pos_history);
+
+        // Negative index from current
+        test_driver(&mut app, "-100g");
+        assert_eq!(app.current_cursor_pos(), 1400);
+        pos_history.push(1400);
+        verify_cursor_history(&mut app, &pos_history);
+        test_driver(&mut app, "-150g");
+        assert_eq!(app.current_cursor_pos(), 1250);
+        pos_history.push(1250);
+        verify_cursor_history(&mut app, &pos_history);
+
+        // Try to seek to nevative index
+        test_driver(&mut app, "-1251g");
+        assert_eq!(app.current_cursor_pos(), 1250);
+        assert_eq!(app.line_entry.get_alert(), Some("Cannot seek to negative index".to_string()));
+        // Does not influence undo/redo stack
+        verify_cursor_history(&mut app, &pos_history);
+
+        // Positive index from current
+        test_driver(&mut app, "+150g");
+        assert_eq!(app.current_cursor_pos(), 1400);
+        pos_history.push(1400);
+        verify_cursor_history(&mut app, &pos_history);
+        test_driver(&mut app, "+100g");
+        assert_eq!(app.current_cursor_pos(), 1500);
+        pos_history.push(1500);
+        verify_cursor_history(&mut app, &pos_history);
+
+        // Go to start
+        test_driver(&mut app, "g");
+        assert_eq!(app.current_cursor_pos(), 0);
+        pos_history.push(0);
+        verify_cursor_history(&mut app, &pos_history);
+
+        // Index from end
+        test_driver(&mut app, "G");
+        assert_eq!(app.current_cursor_pos(), file_length);
+        pos_history.push(file_length);
+        verify_cursor_history(&mut app, &pos_history);
+        test_driver(&mut app, "100G");
+        assert_eq!(app.current_cursor_pos(), file_length - 100);
+        pos_history.push(file_length - 100);
+        verify_cursor_history(&mut app, &pos_history);
+        test_driver(&mut app, "1000G");
+        assert_eq!(app.current_cursor_pos(), file_length - 1000);
+        pos_history.push(file_length - 1000);
+        verify_cursor_history(&mut app, &pos_history);
+
+        // Try to seek to nevative index from end
+        test_driver(&mut app, "10000G");
+        assert_eq!(app.current_cursor_pos(), file_length - 1000);
+        assert_eq!(app.line_entry.get_alert(), Some("Cannot seek to negative index".to_string()));
+        // Does not influence the undo/redo stack
+        verify_cursor_history(&mut app, &pos_history);
+
+        // Exceed file length
+        test_driver(&mut app, "+6000g");
+        assert_eq!(app.current_cursor_pos(), file_length + 5000);
+        pos_history.push(file_length + 5000);
+        verify_cursor_history(&mut app, &pos_history);
+        // Using isize::MAX instead of usize::MAX since rust vectors can't actually get up to usize
+        test_driver(&mut app, format!("{}g", std::isize::MAX as usize).as_str());
+        assert_eq!(app.current_cursor_pos(), std::isize::MAX as usize);
+        pos_history.push(std::isize::MAX as usize);
+        verify_cursor_history(&mut app, &pos_history);
+    }
+
+    #[test]
+    fn delete_test() {
+        let mut app = App::new(50, 50);
+        let mut window = None;
+        app.init(&mut window, r"tests\exif2c08.png".to_string(), FileManagerType::RamOnly, false).unwrap();
+        let file_length = 1788;
+
+        // Delete 16 bytes at index 16
+        test_driver(&mut app, "16g16d"); 
+        assert_eq!(app.line_entry.get_alert(), None);
+        assert_eq!(app.current_cursor_pos(), 16);
+
+        // Copy 8 bytes at byte 12 (first 4 bytes are left of deleted span, 
+        // last 4 are right of deleted span) and confirm their contents
+        test_driver(&mut app, "12g8yG");
+        let r0_expected = vec![
+            0x49, 0x48, 0x44, 0x52,
+            0xa3, 0x00, 0x00, 0x03
+        ];
+        let r0 = app.editors.current().hex_edit.get_register(0).unwrap();
+        assert_eq!(r0_expected, r0);
+        assert_eq!(app.current_cursor_pos(), file_length - 16);
+
+        // Delete 1200 bytes at index 0
+        test_driver(&mut app, "g1200d"); 
+        assert_eq!(app.line_entry.get_alert(), None);
+        assert_eq!(app.current_cursor_pos(), 0);
+
+        // Grab the first 8 bytes (left of deleted span) and confirm their contents
+        test_driver(&mut app, "8yG");
+        let r0_expected = vec![
+            0xff, 0x0c, 0xbe, 0x99, 0x00, 0x29, 0x47, 0x4b
+        ];
+        let r0 = app.editors.current().hex_edit.get_register(0).unwrap();
+        assert_eq!(r0_expected, r0);
+        assert_eq!(app.current_cursor_pos(), file_length - 1216);
+
+        // Attempt to delete past the end of the file
+        test_driver(&mut app, "1500d");
+        assert_eq!(app.line_entry.get_alert(), Some("Cannot delete past EOF".to_string()));
+
+        // Attempt to delete starting from outside the file
+        test_driver(&mut app, "1500g1d");
+        assert_eq!(app.line_entry.get_alert(), Some("Cannot delete past EOF".to_string()));
+
+        // Delete the remainder of the file
+        test_driver(&mut app, format!("g{}d", file_length - 1200 - 16).as_str());
+        assert_eq!(app.line_entry.get_alert(), None);
+
+        // Confirm that the file is empty
+        test_driver(&mut app, "G");
+        assert_eq!(app.current_cursor_pos(), 0);
+    }
+
+    #[test]
+    fn delete_undo_redo_test() {
+        let mut app = App::new(50, 50);
+        let mut window = None;
+        app.init(&mut window, r"tests\exif2c08.png".to_string(), FileManagerType::RamOnly, false).unwrap();
+        let file_length = 1788;
+
+        // Delete 16 bytes at index 16 then undo
+        test_driver(&mut app, "16g16du"); 
+        assert_eq!(app.line_entry.get_alert(), None);
+        assert_eq!(app.current_cursor_pos(), 16);
+
+        let buff_expected = vec![
+            0x49, 0x48, 0x44, 0x52,
+            0x00, 0x00, 0x00, 0x02
+        ];
+        let mut buff = vec![0; 8];
+        assert_eq!(app.editors.current_mut().hex_edit.get_bytes(12, &mut buff).unwrap(), 8);
+        assert_eq!(buff_expected, buff);
+
+        // Redo and confirm
+        test_driver(&mut app, "U");
+        let buff_expected = vec![
+            0x49, 0x48, 0x44, 0x52,
+            0xa3, 0x00, 0x00, 0x03
+        ];
+        assert_eq!(app.editors.current_mut().hex_edit.get_bytes(12, &mut buff).unwrap(), 8);
+        assert_eq!(buff_expected, buff);
+        assert_eq!(app.current_cursor_pos(), 16);
+
+        // Delete 1200 bytes at index 0
+        test_driver(&mut app, "g1200d"); 
+        assert_eq!(app.line_entry.get_alert(), None);
+        assert_eq!(app.current_cursor_pos(), 0);
+
+        // Grab the first 8 bytes (left of deleted span) and confirm their contents
+        test_driver(&mut app, "8yG");
+        let r0_expected = vec![
+            0xff, 0x0c, 0xbe, 0x99, 0x00, 0x29, 0x47, 0x4b
+        ];
+        let r0 = app.editors.current().hex_edit.get_register(0).unwrap();
+        assert_eq!(r0_expected, r0);
+        assert_eq!(app.current_cursor_pos(), file_length - 1216);
+
+        // Attempt to delete past the end of the file
+        test_driver(&mut app, "1500d");
+        assert_eq!(app.line_entry.get_alert(), Some("Cannot delete past EOF".to_string()));
+
+        // Attempt to delete starting from outside the file
+        test_driver(&mut app, "1500g1d");
+        assert_eq!(app.line_entry.get_alert(), Some("Cannot delete past EOF".to_string()));
+
+        // Delete the remainder of the file
+        test_driver(&mut app, format!("g{}d", file_length - 1200 - 16).as_str());
+        assert_eq!(app.line_entry.get_alert(), None);
+
+        // Confirm that the file is empty
+        test_driver(&mut app, "G");
+        assert_eq!(app.current_cursor_pos(), 0);
     }
 }

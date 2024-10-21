@@ -121,9 +121,9 @@ fn autocomplete_path(text: &String) -> Vec<String> {
 
 impl LineEntry {
 
-    pub fn new(length: usize, pos_x: usize, pos_y:usize) -> LineEntry {
+    pub fn new(pos_x: usize, pos_y:usize) -> LineEntry {
         LineEntry {
-            length,
+            length: 0,
             pos_x,
             pos_y,
             text: Vec::<char>::new(),
@@ -138,6 +138,10 @@ impl LineEntry {
             alert_active: false,
             alert_type: AlertType::None
         }
+    }
+
+    pub fn init(&mut self, length: usize) {
+        self.length = length;
     }
 
     pub fn get_text(&self) -> Vec::<char> {
@@ -173,6 +177,14 @@ impl LineEntry {
 
     pub fn alerting(&self) -> bool {
         self.alert_active
+    }
+
+    pub fn get_alert(&self) -> Option<String> {
+        if self.alert_active {
+            Some(self.alert_text.iter().collect())
+        } else {
+            None
+        }
     }
 
     pub fn reset_geometry(&mut self, length: usize, pos_x: usize, pos_y: usize) {

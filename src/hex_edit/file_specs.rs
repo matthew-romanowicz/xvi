@@ -3403,38 +3403,49 @@ impl<'a> PartiallyResolvedStructure<'a> {
         Ok(dr)
     }
 
+    /// Attempts to determine the length of self and returns the result as a dependency report. If self's
+    /// length-policy is expand, then the length is computed as self's parent's spare length and self's parent's
+    /// spare length is the only dependency. If the length-policy is an expression, then the length is computed
+    /// by evaluating that expression and the expression's variables are returned as the dependencies. If the
+    /// length-policy is fit contents, then the length is equal to self's content length, and that is the only
+    /// dependency.
     fn try_get_length(&self, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, FileSpecError> {
 
+        // Get ident that's being computed so it can be included in the report
         let target_ident = self.id.get_attr_ident(StructureAttrType::Length);
 
-        match &self.length {
+        // Determine the ident that will represent a length equivalent to self's length, based on self's length
+        // policy. If the length policy is expand, then it's self's parent's spare length. If the length policy
+        // if fit contents, then it's self's contents length. If the length policy is an expression, then there's
+        // no other attribute that equivalent to self's length. Just try to evaluate the expression and return
+        // the result immediately.
+        let equivalent_length_id = match &self.length {
             LengthPolicy::Expand => {
-                let spare_length_id = self.parent_id.get_attr_ident(StructureAttrType::SpareLength);
-                let length = match vd.lookup_struct_attr(&spare_length_id) {
-                    Some(ev) => ev.expect_position()?,
-                    None => return Ok(DependencyReport::incomplete(HashSet::from([spare_length_id.to_abstract()])))
-                };
-                let mut dr = DependencyReport::success(ExprValue::Position(length));
-                dr.add_pc_pairs(HashSet::from([spare_length_id.to_abstract()]), HashSet::from([target_ident.to_abstract()]));
-                Ok(dr)
-            },
-            LengthPolicy::Expr(expr) => {
-                self.try_evaluate_position_expression(&expr, target_ident.to_abstract(), vd)
+                self.parent_id.get_attr_ident(StructureAttrType::SpareLength)
             },
             LengthPolicy::FitContents => {
-                let contents_length_id = self.id.get_attr_ident(StructureAttrType::ContentsLength);
-                let contents_length = match vd.lookup_struct_attr(&contents_length_id) {
-                    Some(ev) => ev.expect_position()?,
-                    None => return Ok(DependencyReport::incomplete(HashSet::from([contents_length_id.to_abstract()])))
-                };
-                let mut dr = DependencyReport::success(ExprValue::Position(contents_length));
-                dr.add_pc_pairs(HashSet::from([contents_length_id.to_abstract()]), HashSet::from([target_ident.to_abstract()]));
-                Ok(dr)
+                self.id.get_attr_ident(StructureAttrType::ContentsLength)
+            },
+            LengthPolicy::Expr(expr) => {
+                return self.try_evaluate_position_expression(&expr, target_ident.to_abstract(), vd)
             }
-        }
+        };
+
+        // If an equivalent length was found, try to look it up. If the lookup fails, return an incomplete report.
+        let length = match vd.lookup_struct_attr(&equivalent_length_id) {
+            Some(ev) => ev.expect_position()?,
+            None => return Ok(DependencyReport::incomplete(HashSet::from([equivalent_length_id.to_abstract()])))
+        };
+
+        // If the lookup was successful, return the result in a dependency report. Make sure to include the ID
+        // that was used as the equivalent length as the only depenency.
+        let mut dr = DependencyReport::success(ExprValue::Position(length));
+        dr.add_pc_pairs(HashSet::from([equivalent_length_id.to_abstract()]), HashSet::from([target_ident.to_abstract()]));
+        Ok(dr)
     }
 
-
+    /// Attempts to determine self's "spare length", which is essentially the length that's allocated to any
+    /// child with an expand length policy.
     fn try_get_spare_length(&self, vd: &ValueDictionary) -> Result<DependencyReport<ExprValue>, FileSpecError> {
 
         match self.length {
