@@ -1763,4 +1763,297 @@ mod app_string_tests {
         test_driver(&mut app, "UUUUUG"); 
         assert_eq!(app.current_cursor_pos(), 0);
     }
+
+    #[test]
+    fn yank_test() {
+        let mut app = App::new(50, 50);
+        let mut window = None;
+        app.init(&mut window, r"tests\exif2c08.png".to_string(), FileManagerType::RamOnly, false).unwrap();
+        let file_length = 1788;
+
+        // Yank 16 bytes starting at 1712
+        test_driver(&mut app, "1712g16y"); 
+        assert_eq!(app.line_entry.get_alert(), None);
+        assert_eq!(app.current_cursor_pos(), 1712);
+
+        // Paste them at byte 1728 and confirm their contents
+        test_driver(&mut app, "1728gp"); 
+        assert_eq!(app.line_entry.get_alert(), None);
+        assert_eq!(app.current_cursor_pos(), 1728 + 16);
+
+        let buff_expected = vec![
+            0x74, 0x98, 0xb2, 0x8e, 
+            0x72, 0x95, 0x1a, 0xfc, 
+            0xb7, 0xb5, 0x00, 0xb8, 
+            0x21, 0x2c, 0x64, 0x64
+        ];
+        let mut buff = vec![0; 16];
+        assert_eq!(app.editors.current_mut().hex_edit.get_bytes(1728, &mut buff).unwrap(), 16);
+        assert_eq!(buff_expected, buff);
+
+        // Confirm file length increased by 16
+        test_driver(&mut app, "G"); 
+        assert_eq!(app.line_entry.get_alert(), None);
+        assert_eq!(app.current_cursor_pos(), file_length + 16);
+
+        // (overwrite) paste the copied 16 bytes at 1744 and confirm their values
+        test_driver(&mut app, "1744gP"); 
+        assert_eq!(app.line_entry.get_alert(), None);
+        assert_eq!(app.current_cursor_pos(), 1744 + 16);
+
+        let buff_expected = vec![
+            0x74, 0x98, 0xb2, 0x8e, 
+            0x72, 0x95, 0x1a, 0xfc, 
+            0xb7, 0xb5, 0x00, 0xb8, 
+            0x21, 0x2c, 0x64, 0x64
+        ];
+        let mut buff = vec![0; 16];
+        assert_eq!(app.editors.current_mut().hex_edit.get_bytes(1744, &mut buff).unwrap(), 16);
+        assert_eq!(buff_expected, buff);
+
+        // Confirm file length did not change
+        test_driver(&mut app, "G"); 
+        assert_eq!(app.line_entry.get_alert(), None);
+        assert_eq!(app.current_cursor_pos(), file_length + 16);
+
+        // Yank sequential pairs of values into each register 0-31
+        for i in 0..32 {
+            test_driver(&mut app, format!("{}g{}r2y", 1040 + i*2, i).as_str()); 
+            assert_eq!(app.line_entry.get_alert(), None);
+            assert_eq!(app.current_cursor_pos(), 1040 + i*2);
+        }
+
+        // Paste (overwrite) each pair in reverse order. Confirm file length is unchanged
+        for i in 0..32 {
+            test_driver(&mut app, format!("{}g{}P", 1040 + i*2, 31 - i).as_str()); 
+            assert_eq!(app.line_entry.get_alert(), None);
+            assert_eq!(app.current_cursor_pos(), 1040 + i*2 + 2);
+
+            test_driver(&mut app, "G"); 
+            assert_eq!(app.current_cursor_pos(), file_length + 16);
+        }
+
+        // Paste (insert) each pair at the same location, so they end up in reverse order.
+        // Confirm that file length changes accordingly
+        for i in 0..32 {
+            test_driver(&mut app, format!("{}g{}p", 1104, i).as_str()); 
+            assert_eq!(app.line_entry.get_alert(), None);
+            assert_eq!(app.current_cursor_pos(), 1104 + 2);
+
+            test_driver(&mut app, "G"); 
+            assert_eq!(app.current_cursor_pos(), file_length + 16 + (i + 1) * 2);
+        }
+
+        // Verify data pasted by above two loops
+        let buff_expected = vec![
+            0xec, 0xee, 0xdf, 0xee, 0xbd, 0x99, 0x99, 0xdd, 
+            0x64, 0x73, 0x5a, 0xc0, 0x72, 0xb9, 0xb9, 0xbb, 
+            0xee, 0x66, 0xe1, 0xcc, 0xca, 0xe7, 0x91, 0x06, 
+            0x43, 0x42, 0x80, 0xe3, 0x97, 0xe3, 0x2b, 0x1c, 
+            0x50, 0xc0, 0xa5, 0xb4, 0x1e, 0x48, 0xd5, 0x07, 
+            0x2a, 0x36, 0x4a, 0x90, 0x18, 0x4d, 0x13, 0x25, 
+            0xd4, 0x37, 0xf8, 0x60, 0x44, 0xd3, 0xa3, 0xc6, 
+            0x8d, 0x1a, 0x10, 0x13, 0xaf, 0xc7, 0xc0, 0xf9
+        ];
+        let mut buff = vec![0; 64];
+        
+        assert_eq!(app.editors.current_mut().hex_edit.get_bytes(1040, &mut buff).unwrap(), 64);
+        assert_eq!(buff_expected, buff);
+        assert_eq!(app.editors.current_mut().hex_edit.get_bytes(1104, &mut buff).unwrap(), 64);
+        assert_eq!(buff_expected, buff);
+    }
+
+    #[test]
+    fn yank_undo_redo_test() {
+        let mut app = App::new(50, 50);
+        let mut window = None;
+        app.init(&mut window, r"tests\exif2c08.png".to_string(), FileManagerType::RamOnly, false).unwrap();
+        let file_length = 1788;
+
+        // Yank 16 bytes starting at 1712 and undo
+        test_driver(&mut app, "1712g16yu"); 
+        assert_eq!(app.line_entry.get_alert(), None);
+        assert_eq!(app.current_cursor_pos(), 1712);
+
+        // Try to paste them at byte 1728 and confirm nothing is pasted
+        test_driver(&mut app, "1728gp"); 
+        assert_eq!(app.line_entry.get_alert(), None);
+        assert_eq!(app.current_cursor_pos(), 1728);
+
+        let buff_expected = vec![
+            0x25, 0xe8, 0x2a, 0x96, 
+            0x36, 0x00, 0x40, 0x99, 
+            0xca, 0x19, 0x4d, 0x74, 
+            0x79, 0x1e, 0xe5, 0x2f
+        ];
+        let mut buff = vec![0; 16];
+        assert_eq!(app.editors.current_mut().hex_edit.get_bytes(1728, &mut buff).unwrap(), 16);
+        assert_eq!(buff_expected, buff);
+
+        // Try to paste (overwrite) them at byte 1728 and confirm nothing is pasted
+        test_driver(&mut app, "1728gP"); 
+        assert_eq!(app.line_entry.get_alert(), None);
+        assert_eq!(app.current_cursor_pos(), 1728);
+
+        let buff_expected = vec![
+            0x25, 0xe8, 0x2a, 0x96, 
+            0x36, 0x00, 0x40, 0x99, 
+            0xca, 0x19, 0x4d, 0x74, 
+            0x79, 0x1e, 0xe5, 0x2f
+        ];
+        let mut buff = vec![0; 16];
+        assert_eq!(app.editors.current_mut().hex_edit.get_bytes(1728, &mut buff).unwrap(), 16);
+        assert_eq!(buff_expected, buff);
+
+        // Yank 16 bytes starting at 1712 and undo then redo
+        test_driver(&mut app, "1712g16yuU"); 
+        assert_eq!(app.line_entry.get_alert(), None);
+        assert_eq!(app.current_cursor_pos(), 1712);
+
+        // Paste them at byte 1728 and confirm their contents
+        test_driver(&mut app, "1728gp"); 
+        assert_eq!(app.line_entry.get_alert(), None);
+        assert_eq!(app.current_cursor_pos(), 1728 + 16);
+
+        let buff_expected = vec![
+            0x74, 0x98, 0xb2, 0x8e, 
+            0x72, 0x95, 0x1a, 0xfc, 
+            0xb7, 0xb5, 0x00, 0xb8, 
+            0x21, 0x2c, 0x64, 0x64
+        ];
+        let mut buff = vec![0; 16];
+        assert_eq!(app.editors.current_mut().hex_edit.get_bytes(1728, &mut buff).unwrap(), 16);
+        assert_eq!(buff_expected, buff);
+
+        // Confirm file length increased by 16
+        test_driver(&mut app, "G"); 
+        assert_eq!(app.line_entry.get_alert(), None);
+        assert_eq!(app.current_cursor_pos(), file_length + 16);
+
+        // Undo and confirm previous state is restored
+        test_driver(&mut app, "uu"); 
+        assert_eq!(app.line_entry.get_alert(), None);
+        assert_eq!(app.current_cursor_pos(), 1728);
+
+        let buff_expected = vec![
+            0x25, 0xe8, 0x2a, 0x96, 
+            0x36, 0x00, 0x40, 0x99, 
+            0xca, 0x19, 0x4d, 0x74, 
+            0x79, 0x1e, 0xe5, 0x2f
+        ];
+        let mut buff = vec![0; 16];
+        assert_eq!(app.editors.current_mut().hex_edit.get_bytes(1728, &mut buff).unwrap(), 16);
+        assert_eq!(buff_expected, buff);
+
+        // Redo and confirm
+        test_driver(&mut app, "U"); 
+        assert_eq!(app.line_entry.get_alert(), None);
+        assert_eq!(app.current_cursor_pos(), 1728 + 16);
+
+        let buff_expected = vec![
+            0x74, 0x98, 0xb2, 0x8e, 
+            0x72, 0x95, 0x1a, 0xfc, 
+            0xb7, 0xb5, 0x00, 0xb8, 
+            0x21, 0x2c, 0x64, 0x64
+        ];
+        let mut buff = vec![0; 16];
+        assert_eq!(app.editors.current_mut().hex_edit.get_bytes(1728, &mut buff).unwrap(), 16);
+        assert_eq!(buff_expected, buff);
+
+        // Confirm file length increased by 16
+        test_driver(&mut app, "G"); 
+        assert_eq!(app.line_entry.get_alert(), None);
+        assert_eq!(app.current_cursor_pos(), file_length + 16);
+
+        // (overwrite) paste the copied 16 bytes at 1744 and undo. Confirm previous state is restored
+        test_driver(&mut app, "1744gPu"); 
+        assert_eq!(app.line_entry.get_alert(), None);
+        assert_eq!(app.current_cursor_pos(), 1728 + 16);
+
+        let buff_expected = vec![
+            0x74, 0x98, 0xb2, 0x8e, 
+            0x72, 0x95, 0x1a, 0xfc, 
+            0xb7, 0xb5, 0x00, 0xb8, 
+            0x21, 0x2c, 0x64, 0x64
+        ];
+        let mut buff = vec![0; 16];
+        assert_eq!(app.editors.current_mut().hex_edit.get_bytes(1728, &mut buff).unwrap(), 16);
+        assert_eq!(buff_expected, buff);
+
+        // Redo and confirm pasted values
+        test_driver(&mut app, "U"); 
+        assert_eq!(app.line_entry.get_alert(), None);
+        assert_eq!(app.current_cursor_pos(), 1744 + 16);
+
+        let buff_expected = vec![
+            0x74, 0x98, 0xb2, 0x8e, 
+            0x72, 0x95, 0x1a, 0xfc, 
+            0xb7, 0xb5, 0x00, 0xb8, 
+            0x21, 0x2c, 0x64, 0x64
+        ];
+        let mut buff = vec![0; 16];
+        assert_eq!(app.editors.current_mut().hex_edit.get_bytes(1744, &mut buff).unwrap(), 16);
+        assert_eq!(buff_expected, buff);
+
+        // Confirm file length did not change
+        test_driver(&mut app, "G"); 
+        assert_eq!(app.line_entry.get_alert(), None);
+        assert_eq!(app.current_cursor_pos(), file_length + 16);
+
+        // Yank sequential pairs of values into each register 0-31
+        for i in 0..32 {
+            test_driver(&mut app, format!("{}g{}r2y", 1040 + i*2, i).as_str()); 
+            assert_eq!(app.line_entry.get_alert(), None);
+            assert_eq!(app.current_cursor_pos(), 1040 + i*2);
+        }
+
+        // Yank sequential pairs of values into each register 0-31 starting from 0
+        for i in 0..32 {
+            test_driver(&mut app, format!("{}g{}r2y", i*2, i).as_str()); 
+            assert_eq!(app.line_entry.get_alert(), None);
+            assert_eq!(app.current_cursor_pos(), i*2);
+        }
+
+        // Undo previous set of yanks
+        test_driver(&mut app, &"u".repeat(64));
+
+        // Paste (overwrite) each pair in reverse order. Confirm file length is unchanged
+        for i in 0..32 {
+            test_driver(&mut app, format!("{}g{}P", 1040 + i*2, 31 - i).as_str()); 
+            assert_eq!(app.line_entry.get_alert(), None);
+            assert_eq!(app.current_cursor_pos(), 1040 + i*2 + 2);
+
+            test_driver(&mut app, "G"); 
+            assert_eq!(app.current_cursor_pos(), file_length + 16);
+        }
+
+        // Paste (insert) each pair at the same location, so they end up in reverse order.
+        // Confirm that file length changes accordingly
+        for i in 0..32 {
+            test_driver(&mut app, format!("{}g{}p", 1104, i).as_str()); 
+            assert_eq!(app.line_entry.get_alert(), None);
+            assert_eq!(app.current_cursor_pos(), 1104 + 2);
+
+            test_driver(&mut app, "G"); 
+            assert_eq!(app.current_cursor_pos(), file_length + 16 + (i + 1) * 2);
+        }
+
+        // Verify data pasted by above two loops
+        let buff_expected = vec![
+            0xec, 0xee, 0xdf, 0xee, 0xbd, 0x99, 0x99, 0xdd, 
+            0x64, 0x73, 0x5a, 0xc0, 0x72, 0xb9, 0xb9, 0xbb, 
+            0xee, 0x66, 0xe1, 0xcc, 0xca, 0xe7, 0x91, 0x06, 
+            0x43, 0x42, 0x80, 0xe3, 0x97, 0xe3, 0x2b, 0x1c, 
+            0x50, 0xc0, 0xa5, 0xb4, 0x1e, 0x48, 0xd5, 0x07, 
+            0x2a, 0x36, 0x4a, 0x90, 0x18, 0x4d, 0x13, 0x25, 
+            0xd4, 0x37, 0xf8, 0x60, 0x44, 0xd3, 0xa3, 0xc6, 
+            0x8d, 0x1a, 0x10, 0x13, 0xaf, 0xc7, 0xc0, 0xf9
+        ];
+        let mut buff = vec![0; 64];
+        
+        assert_eq!(app.editors.current_mut().hex_edit.get_bytes(1040, &mut buff).unwrap(), 64);
+        assert_eq!(buff_expected, buff);
+        assert_eq!(app.editors.current_mut().hex_edit.get_bytes(1104, &mut buff).unwrap(), 64);
+        assert_eq!(buff_expected, buff);
+    }
 }
