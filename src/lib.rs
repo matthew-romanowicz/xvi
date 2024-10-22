@@ -2038,6 +2038,41 @@ mod app_string_tests {
             assert_eq!(app.current_cursor_pos(), file_length + 16 + (i + 1) * 2);
         }
 
+        // Undo previous pastes
+        test_driver(&mut app, &"u".repeat(192));
+
+        let buff_expected_1040 = vec![
+            0xc0, 0xf9, 0xaf, 0xc7, 0x10, 0x13, 0x8d, 0x1a, 
+            0xa3, 0xc6, 0x44, 0xd3, 0xf8, 0x60, 0xd4, 0x37, 
+            0x13, 0x25, 0x18, 0x4d, 0x4a, 0x90, 0x2a, 0x36, 
+            0xd5, 0x07, 0x1e, 0x48, 0xa5, 0xb4, 0x50, 0xc0, 
+            0x2b, 0x1c, 0x97, 0xe3, 0x80, 0xe3, 0x43, 0x42, 
+            0x91, 0x06, 0xca, 0xe7, 0xe1, 0xcc, 0xee, 0x66, 
+            0xb9, 0xbb, 0x72, 0xb9, 0x5a, 0xc0, 0x64, 0x73, 
+            0x99, 0xdd, 0xbd, 0x99, 0xdf, 0xee, 0xec, 0xee
+        ];
+
+        let buff_expected_1104 = vec![
+            0xcc, 0x04, 0x16, 0x0b, 0xd8, 0x6a, 0x0b, 0xfc, 
+            0x27, 0xc0, 0xc5, 0x05, 0x18, 0x06, 0x94, 0xcb, 
+            0xa2, 0x0d, 0x87, 0x34, 0x68, 0x9a, 0xa2, 0xab, 
+            0x69, 0x50, 0xa9, 0x40, 0xbb, 0x0d, 0xe3, 0x31, 
+            0x58, 0x16, 0x4d, 0x4d, 0xa7, 0xd0, 0xe9, 0xd0, 
+            0x20, 0x4e, 0x55, 0xab, 0xa4, 0xee, 0x03, 0x18, 
+            0x8d, 0x48, 0xa1, 0xd5, 0x02, 0x5d, 0x77, 0x03, 
+            0xf0, 0xdb, 0x6c, 0x12, 0x1e, 0x6d, 0xa1, 0x3c
+        ];
+
+        let mut buff = vec![0; 64];
+        
+        assert_eq!(app.editors.current_mut().hex_edit.get_bytes(1040, &mut buff).unwrap(), 64);
+        assert_eq!(buff_expected_1040, buff);
+        assert_eq!(app.editors.current_mut().hex_edit.get_bytes(1104, &mut buff).unwrap(), 64);
+        assert_eq!(buff_expected_1104, buff);
+
+        // Redo previous pastes
+        test_driver(&mut app, &"U".repeat(192));
+
         // Verify data pasted by above two loops
         let buff_expected = vec![
             0xec, 0xee, 0xdf, 0xee, 0xbd, 0x99, 0x99, 0xdd, 
@@ -2054,6 +2089,83 @@ mod app_string_tests {
         assert_eq!(app.editors.current_mut().hex_edit.get_bytes(1040, &mut buff).unwrap(), 64);
         assert_eq!(buff_expected, buff);
         assert_eq!(app.editors.current_mut().hex_edit.get_bytes(1104, &mut buff).unwrap(), 64);
+        assert_eq!(buff_expected, buff);
+    }
+
+    #[test]
+    fn fill_test() {
+        let mut app = App::new(50, 50);
+        let mut window = None;
+        app.init(&mut window, r"tests\exif2c08.png".to_string(), FileManagerType::RamOnly, false).unwrap();
+        let file_length = 1788;
+
+        // Insert 8 default fill bytes at 0
+        test_driver(&mut app, "8f");
+        assert_eq!(app.current_cursor_pos(), 8);
+        assert_eq!(app.line_entry.get_alert(), None);
+
+        // Confirm file length is impacted
+        test_driver(&mut app, "G");
+        assert_eq!(app.current_cursor_pos(), file_length + 8);
+
+        // Overwrite 8 default fill bytes at 16
+        test_driver(&mut app, "16g8F");
+        assert_eq!(app.current_cursor_pos(), 24);
+        assert_eq!(app.line_entry.get_alert(), None);
+
+        // Confirm file length is not impacted
+        test_driver(&mut app, "G");
+        assert_eq!(app.current_cursor_pos(), file_length + 8);
+
+        let buff_expected = vec![
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
+            0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
+            0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00, 0x20
+        ];
+
+        let mut buff = vec![0; 32];
+        assert_eq!(app.editors.current_mut().hex_edit.get_bytes(0, &mut buff).unwrap(), 32);
+        assert_eq!(buff_expected, buff);
+
+        // Overwrite 8 bytes, 4 of which will be written past EOF
+        test_driver(&mut app, format!("{}g8F", file_length + 4).as_str());
+        assert_eq!(app.current_cursor_pos(), file_length + 12);
+        assert_eq!(app.line_entry.get_alert(), None);
+
+        // Confirm file length is impacted
+        test_driver(&mut app, "G");
+        assert_eq!(app.current_cursor_pos(), file_length + 12);
+
+        let buff_expected = vec![
+            0x49, 0x45, 0x4e, 0x44, 
+            0x00, 0x00, 0x00, 0x00, 
+            0x00, 0x00, 0x00, 0x00
+        ];
+
+        let mut buff = vec![0; 12];
+        assert_eq!(app.editors.current_mut().hex_edit.get_bytes(file_length, &mut buff).unwrap(), 12);
+        assert_eq!(buff_expected, buff);
+
+        // Insert ascii character 8 bytes past EOF
+        test_driver(&mut app, format!("{}gI?", file_length + 19).as_str());
+        assert_eq!(app.current_cursor_pos(), file_length + 20);
+        assert_eq!(app.line_entry.get_alert(), None);
+
+        // Confirm file length is impacted
+        test_driver(&mut app, "\u{1b}G");
+        assert_eq!(app.current_cursor_pos(), file_length + 20);
+
+        let buff_expected = vec![
+            0x49, 0x45, 0x4e, 0x44, 
+            0x00, 0x00, 0x00, 0x00, 
+            0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x3f,
+        ];
+
+        let mut buff = vec![0; 20];
+        assert_eq!(app.editors.current_mut().hex_edit.get_bytes(file_length, &mut buff).unwrap(), 20);
         assert_eq!(buff_expected, buff);
     }
 }
