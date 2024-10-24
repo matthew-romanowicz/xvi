@@ -272,6 +272,16 @@ impl<'a> EditorStack<'a> {
     fn current_mut<'b>(&'b mut self) -> &'b mut HexEditManager<'a> {
         &mut self.editors[self.current]
     }
+
+    fn get_current_register(&self, index: usize) -> Result<Vec<u8>, String> {
+        if index < 32 {
+            self.current().hex_edit.get_register(index as u8)
+        } else if index < 64 {
+            Ok(self.clipboard_registers[index - 32].clone())
+        } else {
+            Err("Clipboard register must be less than 64".to_string())
+        }
+    }
 }
 
 enum CommandInstruction {
@@ -776,7 +786,7 @@ impl<'a> App<'a> {
                                                 vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| a & b);
                                                 (CommandInstruction::NoOp, ActionResult::empty())
                                             } else if *n2 < 64 { 
-                                                let fill = self.editors.clipboard_registers[*n1 - 32].to_vec();
+                                                let fill = self.editors.clipboard_registers[*n2 - 32].to_vec();
                                                 vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| a & b);
                                                 (CommandInstruction::NoOp, ActionResult::empty())
                                             } else {
@@ -1358,6 +1368,13 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
 
     }
 
+}
+
+#[cfg(test)]
+impl<'a> std::process::Termination for App<'a> {
+    fn report(self) -> std::process::ExitCode {
+        std::process::ExitCode::SUCCESS
+    }
 }
 
 #[cfg(test)]
@@ -2291,5 +2308,240 @@ mod app_string_tests {
         let mut buff = vec![0; 20];
         assert_eq!(app.editors.current_mut().hex_edit.get_bytes(file_length + 8, &mut buff).unwrap(), 20);
         assert_eq!(buff_expected, buff);
+    }
+
+    #[test]
+    fn register_not_test<'a>() -> App<'a> {
+        let mut app = App::new(50, 50);
+        let mut window = None;
+        app.init(&mut window, r"tests\exif2c08.png".to_string(), FileManagerType::RamOnly, false).unwrap();
+
+        let mut bytes_8_16 = vec![
+            0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52
+        ];
+
+        let bytes_8_16_inv = bytes_8_16.iter().map(|b| !b).collect::<Vec<u8>>();
+
+        for n in 0..64 {
+            // Yank the bytes 8-16 into register n
+            // 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52
+            test_driver(&mut app, format!("8g{}r8y", n).as_str()); 
+        }
+
+        // Invert each register inversion 64 times and check its value before and after
+        for i in 0..64 {
+            for n in 0..64 {
+                let mut rn = app.editors.get_current_register(n).unwrap();
+                if i % 2 == 0 {
+                    assert_eq!(bytes_8_16, rn);
+                } else {
+                    assert_eq!(bytes_8_16_inv, rn);
+                }
+            
+                test_driver(&mut app, format!(":not r{}\n", n).as_str()); 
+                assert_eq!(app.line_entry.get_alert(), None);
+                rn = app.editors.get_current_register(n).unwrap();
+                if i % 2 == 0 {
+                    assert_eq!(bytes_8_16_inv, rn);
+                } else {
+                    assert_eq!(bytes_8_16, rn);
+                }
+                
+            }
+        }
+
+
+        app
+        
+    }
+
+    #[test]
+    fn register_not_undo_test<'a>() -> App<'a> {
+
+        let mut bytes_8_16 = vec![
+            0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52
+        ];
+
+        let bytes_8_16_inv = bytes_8_16.iter().map(|b| !b).collect::<Vec<u8>>();
+
+        let mut app = register_not_test();
+
+        // Uninvert each register 0-31 8 times and check its value before and after
+        for i in 0..8 {
+            for n in 0..32 {
+                let mut rn = app.editors.get_current_register(31 - n).unwrap();
+                if i % 2 == 0 {
+                    assert_eq!(bytes_8_16, rn);
+                } else {
+                    assert_eq!(bytes_8_16_inv, rn);
+                }
+            
+                test_driver(&mut app, "u"); 
+                assert_eq!(app.line_entry.get_alert(), None);
+                rn = app.editors.get_current_register(31 - n).unwrap();
+                if i % 2 == 0 {
+                    assert_eq!(bytes_8_16_inv, rn);
+                } else {
+                    assert_eq!(bytes_8_16, rn);
+                }
+                
+            }
+        }
+
+        // The default action stack is 256, so we should be at the bottom of it at this point
+        test_driver(&mut app, "u"); 
+        assert_eq!(app.line_entry.get_alert(), Some("No actions in stack".to_string()));
+
+        app
+    }
+
+    #[test]
+    fn register_not_redo_test<'a>() -> App<'a> {
+
+        let mut bytes_8_16 = vec![
+            0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52
+        ];
+
+        let bytes_8_16_inv = bytes_8_16.iter().map(|b| !b).collect::<Vec<u8>>();
+
+        let mut app = register_not_undo_test();
+
+        // Reinvert each register 0-31 8 times and check its value before and after
+        for i in 0..8 {
+            for n in 0..32 {
+                let mut rn = app.editors.get_current_register(n).unwrap();
+                if i % 2 == 0 {
+                    assert_eq!(bytes_8_16, rn);
+                } else {
+                    assert_eq!(bytes_8_16_inv, rn);
+                }
+            
+                test_driver(&mut app, "U"); 
+                assert_eq!(app.line_entry.get_alert(), None);
+                rn = app.editors.get_current_register(n).unwrap();
+                if i % 2 == 0 {
+                    assert_eq!(bytes_8_16_inv, rn);
+                } else {
+                    assert_eq!(bytes_8_16, rn);
+                }
+                
+            }
+        }
+
+        // We should be at the top of the action stack at this point
+        test_driver(&mut app, "U"); 
+        assert_eq!(app.line_entry.get_alert(), Some("No actions in stack".to_string()));
+
+        app
+    }
+
+    #[test]
+    fn register_and_test() {
+        let mut app = App::new(50, 50);
+        let mut window = None;
+        app.init(&mut window, r"tests\exif2c08.png".to_string(), FileManagerType::RamOnly, false).unwrap();
+        let file_length = 1788;
+
+        let bytes_0_8 = vec![
+            0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a
+        ];
+
+        let bytes_8_16 = vec![
+            0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52
+        ];
+
+        let bytes_28_32 = vec![
+            0x00, 0xfc, 0x18, 0xed
+        ];
+
+        let bytes_0_8_and_8_16 = bytes_0_8.iter().zip(bytes_8_16.iter()).map(|(b1, b2)| b1 & b2).collect::<Vec<u8>>();
+        let bytes_0_8_and_8_16_and_28_32 = bytes_0_8_and_8_16.iter().zip(bytes_28_32.iter().cycle()).map(|(b1, b2)| b1 & b2).collect::<Vec<u8>>();
+        let bytes_28_32_and_0_8_and_8_16 = bytes_28_32.iter().zip(bytes_0_8_and_8_16.iter().cycle()).map(|(b1, b2)| b1 & b2).collect::<Vec<u8>>();
+
+        for n in 0..64 {
+            if n % 2 == 0 {
+                test_driver(&mut app, format!("0g{}r8y", n).as_str()); 
+                let mut rn = app.editors.get_current_register(n).unwrap();
+                assert_eq!(bytes_0_8, rn);
+            } else {
+                test_driver(&mut app, format!("8g{}r8y", n).as_str()); 
+                let mut rn = app.editors.get_current_register(n).unwrap();
+                assert_eq!(bytes_8_16, rn);
+            }
+        }
+
+        // Performs "and" on each register with the register after it. The 63rd register gets anded with the
+        // 0th register. Keep in mind the 0th register has aleady been mutated at this point, but it doesnt matter
+        // because b & (a & b) == b & a
+        for n in 0..64 {
+            test_driver(&mut app, format!(":and r{} r{}\n", n, (n + 1) % 64).as_str()); 
+            assert_eq!(app.line_entry.get_alert(), None);
+            let mut rn = app.editors.get_current_register(n).unwrap();
+            assert_eq!(bytes_0_8_and_8_16, rn);
+        }
+
+        // Reset every even register to bytes 28-32
+        for n in 0..32 {
+            test_driver(&mut app, format!("28g{}r4y", n * 2).as_str()); 
+            let mut rn = app.editors.get_current_register(n * 2).unwrap();
+            assert_eq!(bytes_28_32, rn);
+        }
+
+        // Performs "and" on each register with the register before it. The 0th register gets anded with the
+        // 63rd register. Keep in mind the 32rd register gets used after mutation for r62, but it doesnt matter
+        // because b & (a & b) == b & a
+        for n in (0..64).rev() {
+            println!("{}", n);
+            test_driver(&mut app, format!(":and r{} r{}\n", n, (n + 63) % 64).as_str()); 
+            assert_eq!(app.line_entry.get_alert(), None);
+            let mut rn = app.editors.get_current_register(n).unwrap();
+            if n %2 == 0 {
+                assert_eq!(bytes_28_32_and_0_8_and_8_16, rn);
+            } else {
+                assert_eq!(bytes_0_8_and_8_16_and_28_32, rn);
+            }
+            
+        }
+    }
+
+    #[test]
+    fn register_ops_test() {
+        let mut app = App::new(50, 50);
+        let mut window = None;
+        app.init(&mut window, r"tests\exif2c08.png".to_string(), FileManagerType::RamOnly, false).unwrap();
+        let file_length = 1788;
+
+        // Yank the first 8 bytes into register 0
+        // 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a
+        test_driver(&mut app, "8y"); 
+        // Yank the next bytes into register 1
+        // 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52
+        test_driver(&mut app, "8g1r8y"); 
+
+        let mut r0_expected = vec![
+            0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a
+        ];
+        let mut r1_expected = vec![
+            0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52
+        ];
+        let mut r0 = app.editors.current().hex_edit.get_register(0).unwrap();
+        assert_eq!(r0_expected, r0);
+        let mut r1 = app.editors.current().hex_edit.get_register(1).unwrap();
+        assert_eq!(r1_expected, r1);
+
+        test_driver(&mut app, ":not r1\n"); 
+        r1_expected = vec![
+            0xff, 0xff, 0xff, 0xf2, 0xb6, 0xb7, 0xbb, 0xad
+        ];
+        r1 = app.editors.current().hex_edit.get_register(1).unwrap();
+        assert_eq!(r1_expected, r1);
+
+        test_driver(&mut app, ":and r0 r1\n"); 
+        r0_expected = vec![
+            0x89, 0x50, 0x4e, 0x42, 0x04, 0x02, 0x1a, 0x08
+        ];
+        r0 = app.editors.current().hex_edit.get_register(0).unwrap();
+        assert_eq!(r0_expected, r0);
+        
     }
 }
