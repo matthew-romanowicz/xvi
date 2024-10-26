@@ -783,11 +783,25 @@ impl<'a> App<'a> {
                                         } else if *n1 < 64 {
                                             if *n2 < 32 {
                                                 let fill = self.editors.current_mut().hex_edit.get_register(*n2 as u8).unwrap().to_vec();
-                                                vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| a & b);
+                                                match op {
+                                                    ByteOperation::And => vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| a & b),
+                                                    ByteOperation::Or => vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| a | b),
+                                                    ByteOperation::Nand => vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| !(a & b)),
+                                                    ByteOperation::Nor => vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| !(a | b)),
+                                                    ByteOperation::Xor => vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| a ^ b),
+                                                    ByteOperation::Xnor => vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| !(a ^ b))
+                                                };
                                                 (CommandInstruction::NoOp, ActionResult::empty())
                                             } else if *n2 < 64 { 
                                                 let fill = self.editors.clipboard_registers[*n2 - 32].to_vec();
-                                                vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| a & b);
+                                                match op {
+                                                    ByteOperation::And => vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| a & b),
+                                                    ByteOperation::Or => vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| a | b),
+                                                    ByteOperation::Nand => vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| !(a & b)),
+                                                    ByteOperation::Nor => vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| !(a | b)),
+                                                    ByteOperation::Xor => vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| a ^ b),
+                                                    ByteOperation::Xnor => vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| !(a ^ b))
+                                                };
                                                 (CommandInstruction::NoOp, ActionResult::empty())
                                             } else {
                                                 (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
@@ -803,7 +817,14 @@ impl<'a> App<'a> {
                                                 if *n < 32 {
                                                     (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.manipulate_register(*n as u8, FillType::Bytes(v), op))
                                                 } else if *n < 64 {
-                                                    vector_op(&mut self.editors.clipboard_registers[*n - 32], &v, |a, b| a & b);
+                                                    match op {
+                                                        ByteOperation::And => vector_op(&mut self.editors.clipboard_registers[*n - 32], &v, |a, b| a & b),
+                                                        ByteOperation::Or => vector_op(&mut self.editors.clipboard_registers[*n - 32], &v, |a, b| a | b),
+                                                        ByteOperation::Nand => vector_op(&mut self.editors.clipboard_registers[*n - 32], &v, |a, b| !(a & b)),
+                                                        ByteOperation::Nor => vector_op(&mut self.editors.clipboard_registers[*n - 32], &v, |a, b| !(a | b)),
+                                                        ByteOperation::Xor => vector_op(&mut self.editors.clipboard_registers[*n - 32], &v, |a, b| a ^ b),
+                                                        ByteOperation::Xnor => vector_op(&mut self.editors.clipboard_registers[*n - 32], &v, |a, b| !(a ^ b))
+                                                    };
                                                     (CommandInstruction::NoOp, ActionResult::empty())
                                                 } else {
                                                     (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
@@ -2316,7 +2337,7 @@ mod app_string_tests {
         let mut window = None;
         app.init(&mut window, r"tests\exif2c08.png".to_string(), FileManagerType::RamOnly, false).unwrap();
 
-        let mut bytes_8_16 = vec![
+        let bytes_8_16 = vec![
             0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52
         ];
 
@@ -2358,7 +2379,7 @@ mod app_string_tests {
     #[test]
     fn register_not_undo_test<'a>() -> App<'a> {
 
-        let mut bytes_8_16 = vec![
+        let bytes_8_16 = vec![
             0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52
         ];
 
@@ -2398,7 +2419,7 @@ mod app_string_tests {
     #[test]
     fn register_not_redo_test<'a>() -> App<'a> {
 
-        let mut bytes_8_16 = vec![
+        let bytes_8_16 = vec![
             0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52
         ];
 
@@ -2435,36 +2456,35 @@ mod app_string_tests {
         app
     }
 
-    #[test]
-    fn register_and_test<'a>() -> App<'a> {
+    fn register_op_test<'a, F>(op_name: &str, op: F) -> App<'a> where F: Fn((&u8, &u8)) -> u8 {
         let mut app = App::new(50, 50);
         let mut window = None;
         app.init(&mut window, r"tests\exif2c08.png".to_string(), FileManagerType::RamOnly, false).unwrap();
-        let file_length = 1788;
 
-        let bytes_0_8 = vec![
+
+        let bytes_0_8: Vec<u8> = vec![
             0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a
         ];
 
-        let bytes_8_16 = vec![
+        let bytes_8_16: Vec<u8> = vec![
             0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52
         ];
 
-        let bytes_28_32 = vec![
+        let bytes_28_32: Vec<u8> = vec![
             0x00, 0xfc, 0x18, 0xed
         ];
 
-        let count = vec![
+        let count: Vec<u8> = vec![
             0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa
         ];
 
-        let bytes_0_8_and_8_16 = bytes_0_8.iter().zip(bytes_8_16.iter()).map(|(b1, b2)| b1 & b2).collect::<Vec<u8>>();
-        let bytes_0_8_and_8_16_and_28_32 = bytes_0_8_and_8_16.iter().zip(bytes_28_32.iter().cycle()).map(|(b1, b2)| b1 & b2).collect::<Vec<u8>>();
-        let bytes_28_32_and_0_8_and_8_16 = bytes_28_32.iter().zip(bytes_0_8_and_8_16.iter().cycle()).map(|(b1, b2)| b1 & b2).collect::<Vec<u8>>();
-        let bytes_0_8_and_aa0f = bytes_0_8.iter().zip(vec![0xaa, 0x0f].iter().cycle()).map(|(b1, b2)| b1 & b2).collect::<Vec<u8>>();
-        let bytes_8_16_and_aa0f = bytes_8_16.iter().zip(vec![0xaa, 0x0f].iter().cycle()).map(|(b1, b2)| b1 & b2).collect::<Vec<u8>>();
-        let bytes_0_8_and_aa0f_and_count = bytes_0_8_and_aa0f.iter().zip(count.iter().cycle()).map(|(b1, b2)| b1 & b2).collect::<Vec<u8>>();
-        let bytes_8_16_and_aa0f_and_count = bytes_8_16_and_aa0f.iter().zip(count.iter().cycle()).map(|(b1, b2)| b1 & b2).collect::<Vec<u8>>();
+        let bytes_0_8_and_8_16: Vec<u8> = bytes_0_8.iter().zip(bytes_8_16.iter()).map(&op).collect::<Vec<u8>>();
+        let bytes_0_8_and_8_16_and_28_32: Vec<u8> = bytes_0_8_and_8_16.iter().zip(bytes_28_32.iter().cycle()).map(&op).collect::<Vec<u8>>();
+        let bytes_28_32_and_0_8_and_8_16: Vec<u8> = bytes_28_32.iter().zip(bytes_0_8_and_8_16.iter().cycle()).map(&op).collect::<Vec<u8>>();
+        let bytes_0_8_and_aa0f: Vec<u8> = bytes_0_8.iter().zip(vec![0xaa, 0x0f].iter().cycle()).map(&op).collect::<Vec<u8>>();
+        let bytes_8_16_and_aa0f: Vec<u8> = bytes_8_16.iter().zip(vec![0xaa, 0x0f].iter().cycle()).map(&op).collect::<Vec<u8>>();
+        let bytes_0_8_and_aa0f_and_count: Vec<u8> = bytes_0_8_and_aa0f.iter().zip(count.iter().cycle()).map(&op).collect::<Vec<u8>>();
+        let bytes_8_16_and_aa0f_and_count: Vec<u8> = bytes_8_16_and_aa0f.iter().zip(count.iter().cycle()).map(&op).collect::<Vec<u8>>();
 
         // Needed in order to fully undo all of the and operations later
         test_driver(&mut app, ":set undo 272\n");
@@ -2473,11 +2493,11 @@ mod app_string_tests {
         for n in 0..64 {
             if n % 2 == 0 {
                 test_driver(&mut app, format!("0g{}r8y", n).as_str()); 
-                let mut rn = app.editors.get_current_register(n).unwrap();
+                let rn = app.editors.get_current_register(n).unwrap();
                 assert_eq!(bytes_0_8, rn);
             } else {
                 test_driver(&mut app, format!("8g{}r8y", n).as_str()); 
-                let mut rn = app.editors.get_current_register(n).unwrap();
+                let rn = app.editors.get_current_register(n).unwrap();
                 assert_eq!(bytes_8_16, rn);
             }
         }
@@ -2486,16 +2506,16 @@ mod app_string_tests {
         // 0th register. Keep in mind the 0th register has aleady been mutated at this point, but it doesnt matter
         // because b & (a & b) == b & a
         for n in 0..64 {
-            test_driver(&mut app, format!(":and r{} r{}\n", n, (n + 1) % 64).as_str()); 
+            test_driver(&mut app, format!(":{} r{} r{}\n", op_name, n, (n + 1) % 64).as_str()); 
             assert_eq!(app.line_entry.get_alert(), None);
-            let mut rn = app.editors.get_current_register(n).unwrap();
+            let rn = app.editors.get_current_register(n).unwrap();
             assert_eq!(bytes_0_8_and_8_16, rn);
         }
 
         // Reset every even register to bytes 28-32
         for n in 0..32 {
             test_driver(&mut app, format!("28g{}r4y", n * 2).as_str()); 
-            let mut rn = app.editors.get_current_register(n * 2).unwrap();
+            let rn = app.editors.get_current_register(n * 2).unwrap();
             assert_eq!(bytes_28_32, rn);
         }
 
@@ -2503,9 +2523,9 @@ mod app_string_tests {
         // 63rd register. Keep in mind the 63rd register gets used after mutation for r62, but it doesnt matter
         // because b & (a & b) == b & a
         for n in (0..64).rev() {
-            test_driver(&mut app, format!(":and r{} r{}\n", n, (n + 63) % 64).as_str()); 
+            test_driver(&mut app, format!(":{} r{} r{}\n", op_name, n, (n + 63) % 64).as_str()); 
             assert_eq!(app.line_entry.get_alert(), None);
-            let mut rn = app.editors.get_current_register(n).unwrap();
+            let rn = app.editors.get_current_register(n).unwrap();
             if n %2 == 0 {
                 assert_eq!(bytes_28_32_and_0_8_and_8_16, rn);
             } else {
@@ -2518,11 +2538,11 @@ mod app_string_tests {
         for n in 0..64 {
             if n % 2 == 0 {
                 test_driver(&mut app, format!("0g{}r8y", n).as_str()); 
-                let mut rn = app.editors.get_current_register(n).unwrap();
+                let rn = app.editors.get_current_register(n).unwrap();
                 assert_eq!(bytes_0_8, rn);
             } else {
                 test_driver(&mut app, format!("8g{}r8y", n).as_str()); 
-                let mut rn = app.editors.get_current_register(n).unwrap();
+                let rn = app.editors.get_current_register(n).unwrap();
                 assert_eq!(bytes_8_16, rn);
             }
         }
@@ -2535,7 +2555,7 @@ mod app_string_tests {
             } else {
                 assert_eq!(bytes_8_16, rn);
             }
-            test_driver(&mut app, format!(":and r{} xaa0f\n", n).as_str()); 
+            test_driver(&mut app, format!(":{} r{} xaa0f\n", op_name, n).as_str()); 
             assert_eq!(app.line_entry.get_alert(), None);
             rn = app.editors.get_current_register(n).unwrap();
             if n % 2 == 0 {
@@ -2544,7 +2564,7 @@ mod app_string_tests {
                 assert_eq!(bytes_8_16_and_aa0f, rn);
             }
 
-            test_driver(&mut app, format!(":and r{} x112233445566778899aa\n", n).as_str()); 
+            test_driver(&mut app, format!(":{} r{} x112233445566778899aa\n", op_name, n).as_str()); 
             assert_eq!(app.line_entry.get_alert(), None);
             rn = app.editors.get_current_register(n).unwrap();
             if n % 2 == 0 {
@@ -2555,7 +2575,16 @@ mod app_string_tests {
         }
 
         app
+    }
 
+    #[test]
+    fn register_and_test<'a>() -> App<'a> {
+        register_op_test("and", |(a, b)| a & b)
+    }
+
+    #[test]
+    fn register_or_test<'a>() -> App<'a> {
+        register_op_test("or", |(a, b)| a | b)
     }
 
     #[test]
@@ -2608,7 +2637,7 @@ mod app_string_tests {
 
             test_driver(&mut app, "u"); 
             assert_eq!(app.line_entry.get_alert(), None);
-            let mut rn = app.editors.get_current_register(n).unwrap();
+            rn = app.editors.get_current_register(n).unwrap();
             if n % 2 == 0 {
                 assert_eq!(bytes_0_8, rn);
             } else {
@@ -2624,7 +2653,7 @@ mod app_string_tests {
         for n in (0..32).rev() {
             test_driver(&mut app, "uu"); 
             assert_eq!(app.line_entry.get_alert(), None);
-            let mut rn = app.editors.get_current_register(n).unwrap();
+            let rn = app.editors.get_current_register(n).unwrap();
             if n %2 == 0 {
                 assert_eq!(bytes_28_32_and_0_8_and_8_16, rn);
             } else {
@@ -2637,7 +2666,7 @@ mod app_string_tests {
         for n in 0..32 {
             test_driver(&mut app, "u"); 
             assert_eq!(app.line_entry.get_alert(), None);
-            let mut rn = app.editors.get_current_register(n).unwrap();
+            let rn = app.editors.get_current_register(n).unwrap();
             if n % 2 == 0 {
                 assert_eq!(bytes_28_32, rn);
             } else {
@@ -2656,7 +2685,7 @@ mod app_string_tests {
                 test_driver(&mut app, "uu"); 
                 assert_eq!(app.line_entry.get_alert(), None);
             }
-            let mut rn = app.editors.get_current_register(n).unwrap();
+            let rn = app.editors.get_current_register(n).unwrap();
             assert_eq!(bytes_0_8_and_8_16, rn);
         }
 
@@ -2664,7 +2693,7 @@ mod app_string_tests {
         for n in (0..32).rev() {
             test_driver(&mut app, "u"); 
             assert_eq!(app.line_entry.get_alert(), None);
-            let mut rn = app.editors.get_current_register(n).unwrap();
+            let rn = app.editors.get_current_register(n).unwrap();
             if n % 2 == 0 {
                 assert_eq!(bytes_0_8, rn);
             } else {
@@ -2722,7 +2751,7 @@ mod app_string_tests {
         for n in 0..32 {
             test_driver(&mut app, "U"); 
             assert_eq!(app.line_entry.get_alert(), None);
-            let mut rn = app.editors.get_current_register(n).unwrap();
+            let rn = app.editors.get_current_register(n).unwrap();
             assert_eq!(bytes_0_8_and_8_16, rn);
         }
 
@@ -2732,7 +2761,7 @@ mod app_string_tests {
                 test_driver(&mut app, "UU"); 
                 assert_eq!(app.line_entry.get_alert(), None);
             }
-            let mut rn = app.editors.get_current_register(n).unwrap();
+            let rn = app.editors.get_current_register(n).unwrap();
             if n % 2 == 0 {
                 assert_eq!(bytes_28_32, rn);
             } else {
@@ -2748,7 +2777,7 @@ mod app_string_tests {
         for n in (0..32).rev() {
             test_driver(&mut app, "U"); 
             assert_eq!(app.line_entry.get_alert(), None);
-            let mut rn = app.editors.get_current_register(n).unwrap();
+            let rn = app.editors.get_current_register(n).unwrap();
             if n %2 == 0 {
                 assert_eq!(bytes_28_32_and_0_8_and_8_16, rn);
             } else {
@@ -2761,7 +2790,7 @@ mod app_string_tests {
         for n in 0..32 {
             test_driver(&mut app, "UU"); 
             assert_eq!(app.line_entry.get_alert(), None);
-            let mut rn = app.editors.get_current_register(n).unwrap();
+            let rn = app.editors.get_current_register(n).unwrap();
             if n % 2 == 0 {
                 assert_eq!(bytes_0_8, rn);
             } else {
@@ -2818,7 +2847,6 @@ mod app_string_tests {
         let mut app = App::new(50, 50);
         let mut window = None;
         app.init(&mut window, r"tests\exif2c08.png".to_string(), FileManagerType::RamOnly, false).unwrap();
-        let file_length = 1788;
 
         // Yank the first 8 bytes into register 0
         // 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a
