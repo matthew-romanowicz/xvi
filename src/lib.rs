@@ -2436,7 +2436,7 @@ mod app_string_tests {
     }
 
     #[test]
-    fn register_and_test() {
+    fn register_and_test<'a>() -> App<'a> {
         let mut app = App::new(50, 50);
         let mut window = None;
         app.init(&mut window, r"tests\exif2c08.png".to_string(), FileManagerType::RamOnly, false).unwrap();
@@ -2454,9 +2454,21 @@ mod app_string_tests {
             0x00, 0xfc, 0x18, 0xed
         ];
 
+        let count = vec![
+            0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa
+        ];
+
         let bytes_0_8_and_8_16 = bytes_0_8.iter().zip(bytes_8_16.iter()).map(|(b1, b2)| b1 & b2).collect::<Vec<u8>>();
         let bytes_0_8_and_8_16_and_28_32 = bytes_0_8_and_8_16.iter().zip(bytes_28_32.iter().cycle()).map(|(b1, b2)| b1 & b2).collect::<Vec<u8>>();
         let bytes_28_32_and_0_8_and_8_16 = bytes_28_32.iter().zip(bytes_0_8_and_8_16.iter().cycle()).map(|(b1, b2)| b1 & b2).collect::<Vec<u8>>();
+        let bytes_0_8_and_aa0f = bytes_0_8.iter().zip(vec![0xaa, 0x0f].iter().cycle()).map(|(b1, b2)| b1 & b2).collect::<Vec<u8>>();
+        let bytes_8_16_and_aa0f = bytes_8_16.iter().zip(vec![0xaa, 0x0f].iter().cycle()).map(|(b1, b2)| b1 & b2).collect::<Vec<u8>>();
+        let bytes_0_8_and_aa0f_and_count = bytes_0_8_and_aa0f.iter().zip(count.iter().cycle()).map(|(b1, b2)| b1 & b2).collect::<Vec<u8>>();
+        let bytes_8_16_and_aa0f_and_count = bytes_8_16_and_aa0f.iter().zip(count.iter().cycle()).map(|(b1, b2)| b1 & b2).collect::<Vec<u8>>();
+
+        // Needed in order to fully undo all of the and operations later
+        test_driver(&mut app, ":set undo 272\n");
+        assert_eq!(app.line_entry.get_alert(), None);
 
         for n in 0..64 {
             if n % 2 == 0 {
@@ -2488,10 +2500,9 @@ mod app_string_tests {
         }
 
         // Performs "and" on each register with the register before it. The 0th register gets anded with the
-        // 63rd register. Keep in mind the 32rd register gets used after mutation for r62, but it doesnt matter
+        // 63rd register. Keep in mind the 63rd register gets used after mutation for r62, but it doesnt matter
         // because b & (a & b) == b & a
         for n in (0..64).rev() {
-            println!("{}", n);
             test_driver(&mut app, format!(":and r{} r{}\n", n, (n + 63) % 64).as_str()); 
             assert_eq!(app.line_entry.get_alert(), None);
             let mut rn = app.editors.get_current_register(n).unwrap();
@@ -2502,6 +2513,304 @@ mod app_string_tests {
             }
             
         }
+
+        // Reset all the registers to their original values
+        for n in 0..64 {
+            if n % 2 == 0 {
+                test_driver(&mut app, format!("0g{}r8y", n).as_str()); 
+                let mut rn = app.editors.get_current_register(n).unwrap();
+                assert_eq!(bytes_0_8, rn);
+            } else {
+                test_driver(&mut app, format!("8g{}r8y", n).as_str()); 
+                let mut rn = app.editors.get_current_register(n).unwrap();
+                assert_eq!(bytes_8_16, rn);
+            }
+        }
+
+        // "and" each register with 0xaa 0x0f, confirm result, and then and with 0x11 0x22 0x33 0x44 0x55 0x66 0x77 0x88 0x99 0xaa
+        for n in 0..64 {
+            let mut rn = app.editors.get_current_register(n).unwrap();
+            if n % 2 == 0 {
+                assert_eq!(bytes_0_8, rn);
+            } else {
+                assert_eq!(bytes_8_16, rn);
+            }
+            test_driver(&mut app, format!(":and r{} xaa0f\n", n).as_str()); 
+            assert_eq!(app.line_entry.get_alert(), None);
+            rn = app.editors.get_current_register(n).unwrap();
+            if n % 2 == 0 {
+                assert_eq!(bytes_0_8_and_aa0f, rn);
+            } else {
+                assert_eq!(bytes_8_16_and_aa0f, rn);
+            }
+
+            test_driver(&mut app, format!(":and r{} x112233445566778899aa\n", n).as_str()); 
+            assert_eq!(app.line_entry.get_alert(), None);
+            rn = app.editors.get_current_register(n).unwrap();
+            if n % 2 == 0 {
+                assert_eq!(bytes_0_8_and_aa0f_and_count, rn);
+            } else {
+                assert_eq!(bytes_8_16_and_aa0f_and_count, rn);
+            }
+        }
+
+        app
+
+    }
+
+    #[test]
+    fn register_and_undo_test<'a>() -> App<'a> {
+
+        let bytes_0_8 = vec![
+            0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a
+        ];
+
+        let bytes_8_16 = vec![
+            0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52
+        ];
+
+        let bytes_28_32 = vec![
+            0x00, 0xfc, 0x18, 0xed
+        ];
+
+        let count = vec![
+            0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa
+        ];
+
+        let bytes_0_8_and_8_16 = bytes_0_8.iter().zip(bytes_8_16.iter()).map(|(b1, b2)| b1 & b2).collect::<Vec<u8>>();
+        let bytes_0_8_and_8_16_and_28_32 = bytes_0_8_and_8_16.iter().zip(bytes_28_32.iter().cycle()).map(|(b1, b2)| b1 & b2).collect::<Vec<u8>>();
+        let bytes_28_32_and_0_8_and_8_16 = bytes_28_32.iter().zip(bytes_0_8_and_8_16.iter().cycle()).map(|(b1, b2)| b1 & b2).collect::<Vec<u8>>();
+        let bytes_0_8_and_aa0f = bytes_0_8.iter().zip(vec![0xaa, 0x0f].iter().cycle()).map(|(b1, b2)| b1 & b2).collect::<Vec<u8>>();
+        let bytes_8_16_and_aa0f = bytes_8_16.iter().zip(vec![0xaa, 0x0f].iter().cycle()).map(|(b1, b2)| b1 & b2).collect::<Vec<u8>>();
+        let bytes_0_8_and_aa0f_and_count = bytes_0_8_and_aa0f.iter().zip(count.iter().cycle()).map(|(b1, b2)| b1 & b2).collect::<Vec<u8>>();
+        let bytes_8_16_and_aa0f_and_count = bytes_8_16_and_aa0f.iter().zip(count.iter().cycle()).map(|(b1, b2)| b1 & b2).collect::<Vec<u8>>();
+
+        let mut app = register_and_test();
+
+        // undo "and" each register with 0x11 0x22 0x33 0x44 0x55 0x66 0x77 0x88 0x99 0xaa and then
+        // with 0xaa 0x0f
+        for n in (0..32).rev() {
+            let mut rn = app.editors.get_current_register(n).unwrap();
+            if n % 2 == 0 {
+                assert_eq!(bytes_0_8_and_aa0f_and_count, rn);
+            } else {
+                assert_eq!(bytes_8_16_and_aa0f_and_count, rn);
+            }
+
+            test_driver(&mut app, "u"); 
+            assert_eq!(app.line_entry.get_alert(), None);
+            rn = app.editors.get_current_register(n).unwrap();
+            if n % 2 == 0 {
+                assert_eq!(bytes_0_8_and_aa0f, rn);
+            } else {
+                assert_eq!(bytes_8_16_and_aa0f, rn);
+            }
+
+            test_driver(&mut app, "u"); 
+            assert_eq!(app.line_entry.get_alert(), None);
+            let mut rn = app.editors.get_current_register(n).unwrap();
+            if n % 2 == 0 {
+                assert_eq!(bytes_0_8, rn);
+            } else {
+                assert_eq!(bytes_8_16, rn);
+            }
+        }
+
+        // Undo seek for registers 32-63
+        test_driver(&mut app, &"u".repeat(32)); 
+        assert_eq!(app.line_entry.get_alert(), None);
+
+        // Undo seek and yank for registers 0-31
+        for n in (0..32).rev() {
+            test_driver(&mut app, "uu"); 
+            assert_eq!(app.line_entry.get_alert(), None);
+            let mut rn = app.editors.get_current_register(n).unwrap();
+            if n %2 == 0 {
+                assert_eq!(bytes_28_32_and_0_8_and_8_16, rn);
+            } else {
+                assert_eq!(bytes_0_8_and_8_16_and_28_32, rn);
+            }
+            
+        }
+
+        // Undo "and" between each register and the one before it
+        for n in 0..32 {
+            test_driver(&mut app, "u"); 
+            assert_eq!(app.line_entry.get_alert(), None);
+            let mut rn = app.editors.get_current_register(n).unwrap();
+            if n % 2 == 0 {
+                assert_eq!(bytes_28_32, rn);
+            } else {
+                assert_eq!(bytes_0_8_and_8_16, rn);
+            }
+            
+        }
+
+        // Undo seek for even registers 32-63
+        test_driver(&mut app, &"u".repeat(16)); 
+        assert_eq!(app.line_entry.get_alert(), None);
+
+        // Undo seek and yank for every even register
+        for n in (0..32).rev() {
+            if n %2 == 0 {
+                test_driver(&mut app, "uu"); 
+                assert_eq!(app.line_entry.get_alert(), None);
+            }
+            let mut rn = app.editors.get_current_register(n).unwrap();
+            assert_eq!(bytes_0_8_and_8_16, rn);
+        }
+
+        // Undo "and" of each register with the one after it
+        for n in (0..32).rev() {
+            test_driver(&mut app, "u"); 
+            assert_eq!(app.line_entry.get_alert(), None);
+            let mut rn = app.editors.get_current_register(n).unwrap();
+            if n % 2 == 0 {
+                assert_eq!(bytes_0_8, rn);
+            } else {
+                assert_eq!(bytes_8_16, rn);
+            }
+        }
+
+        // We should have hit the bottom of the stack at this point (272 operations)
+        test_driver(&mut app, "u"); 
+        assert_eq!(app.line_entry.get_alert(), Some("No actions in stack".to_string()));
+
+        // Verify registers 32-63 were not impacted by these operations
+        for n in 32..64 {
+            let rn = app.editors.get_current_register(n).unwrap();
+            if n % 2 == 0 {
+                assert_eq!(bytes_0_8_and_aa0f_and_count, rn);
+            } else {
+                assert_eq!(bytes_8_16_and_aa0f_and_count, rn);
+            }
+        }
+
+        app
+
+    }
+
+    #[test]
+    fn register_and_redo_test<'a>() -> App<'a> {
+        let bytes_0_8 = vec![
+            0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a
+        ];
+
+        let bytes_8_16 = vec![
+            0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52
+        ];
+
+        let bytes_28_32 = vec![
+            0x00, 0xfc, 0x18, 0xed
+        ];
+
+        let count = vec![
+            0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa
+        ];
+
+        let bytes_0_8_and_8_16 = bytes_0_8.iter().zip(bytes_8_16.iter()).map(|(b1, b2)| b1 & b2).collect::<Vec<u8>>();
+        let bytes_0_8_and_8_16_and_28_32 = bytes_0_8_and_8_16.iter().zip(bytes_28_32.iter().cycle()).map(|(b1, b2)| b1 & b2).collect::<Vec<u8>>();
+        let bytes_28_32_and_0_8_and_8_16 = bytes_28_32.iter().zip(bytes_0_8_and_8_16.iter().cycle()).map(|(b1, b2)| b1 & b2).collect::<Vec<u8>>();
+        let bytes_0_8_and_aa0f = bytes_0_8.iter().zip(vec![0xaa, 0x0f].iter().cycle()).map(|(b1, b2)| b1 & b2).collect::<Vec<u8>>();
+        let bytes_8_16_and_aa0f = bytes_8_16.iter().zip(vec![0xaa, 0x0f].iter().cycle()).map(|(b1, b2)| b1 & b2).collect::<Vec<u8>>();
+        let bytes_0_8_and_aa0f_and_count = bytes_0_8_and_aa0f.iter().zip(count.iter().cycle()).map(|(b1, b2)| b1 & b2).collect::<Vec<u8>>();
+        let bytes_8_16_and_aa0f_and_count = bytes_8_16_and_aa0f.iter().zip(count.iter().cycle()).map(|(b1, b2)| b1 & b2).collect::<Vec<u8>>();
+
+        let mut app = register_and_undo_test();
+
+        // Redo "and" of each register with the one after it
+        for n in 0..32 {
+            test_driver(&mut app, "U"); 
+            assert_eq!(app.line_entry.get_alert(), None);
+            let mut rn = app.editors.get_current_register(n).unwrap();
+            assert_eq!(bytes_0_8_and_8_16, rn);
+        }
+
+        // Redo seek and yank for every even register
+        for n in 0..32 {
+            if n %2 == 0 {
+                test_driver(&mut app, "UU"); 
+                assert_eq!(app.line_entry.get_alert(), None);
+            }
+            let mut rn = app.editors.get_current_register(n).unwrap();
+            if n % 2 == 0 {
+                assert_eq!(bytes_28_32, rn);
+            } else {
+                assert_eq!(bytes_0_8_and_8_16, rn);
+            }
+        }
+
+        // Redo seek for even registers 32-63
+        test_driver(&mut app, &"U".repeat(16)); 
+        assert_eq!(app.line_entry.get_alert(), None);
+
+        // Redo "and" between each register and the one before it
+        for n in (0..32).rev() {
+            test_driver(&mut app, "U"); 
+            assert_eq!(app.line_entry.get_alert(), None);
+            let mut rn = app.editors.get_current_register(n).unwrap();
+            if n %2 == 0 {
+                assert_eq!(bytes_28_32_and_0_8_and_8_16, rn);
+            } else {
+                assert_eq!(bytes_0_8_and_8_16_and_28_32, rn);
+            }
+            
+        }
+
+        // Redo seek and yank for registers 0-31
+        for n in 0..32 {
+            test_driver(&mut app, "UU"); 
+            assert_eq!(app.line_entry.get_alert(), None);
+            let mut rn = app.editors.get_current_register(n).unwrap();
+            if n % 2 == 0 {
+                assert_eq!(bytes_0_8, rn);
+            } else {
+                assert_eq!(bytes_8_16, rn);
+            }
+            
+        }
+
+        // Redo seek for registers 32-63
+        test_driver(&mut app, &"U".repeat(32)); 
+        assert_eq!(app.line_entry.get_alert(), None);
+
+        // Redo "and" each register with 0xaa 0x0f and then with 0x11 0x22 0x33 0x44 0x55 0x66 0x77 0x88 0x99 0xaa
+        for n in 0..32 {
+
+            test_driver(&mut app, "U"); 
+            assert_eq!(app.line_entry.get_alert(), None);
+            let mut rn = app.editors.get_current_register(n).unwrap();
+            if n % 2 == 0 {
+                assert_eq!(bytes_0_8_and_aa0f, rn);
+            } else {
+                assert_eq!(bytes_8_16_and_aa0f, rn);
+            }
+
+            test_driver(&mut app, "U"); 
+            assert_eq!(app.line_entry.get_alert(), None);
+            rn = app.editors.get_current_register(n).unwrap();
+            if n % 2 == 0 {
+                assert_eq!(bytes_0_8_and_aa0f_and_count, rn);
+            } else {
+                assert_eq!(bytes_8_16_and_aa0f_and_count, rn);
+            }
+        }
+
+        // We should have hit the top of the stack at this point (272 operations)
+        test_driver(&mut app, "U"); 
+        assert_eq!(app.line_entry.get_alert(), Some("No actions in stack".to_string()));
+
+        // Verify registers 32-63 were not impacted by these operations
+        for n in 32..64 {
+            let rn = app.editors.get_current_register(n).unwrap();
+            if n % 2 == 0 {
+                assert_eq!(bytes_0_8_and_aa0f_and_count, rn);
+            } else {
+                assert_eq!(bytes_8_16_and_aa0f_and_count, rn);
+            }
+        }
+
+        app
     }
 
     #[test]
