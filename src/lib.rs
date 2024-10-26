@@ -2479,6 +2479,9 @@ mod app_string_tests {
         ];
 
         let bytes_0_8_and_8_16: Vec<u8> = bytes_0_8.iter().zip(bytes_8_16.iter()).map(&op).collect::<Vec<u8>>();
+        let bytes_8_16_and_0_8_and_8_16: Vec<u8> = bytes_8_16.iter().zip(bytes_0_8_and_8_16.iter()).map(&op).collect::<Vec<u8>>();
+        let bytes_8_16_and_0_8_and_8_16_and_28_32: Vec<u8> = bytes_8_16_and_0_8_and_8_16.iter().zip(bytes_28_32.iter().cycle()).map(&op).collect::<Vec<u8>>();
+        let bytes_28_32_and_8_16_and_0_8_and_8_16_and_28_32: Vec<u8> = bytes_28_32.iter().zip(bytes_8_16_and_0_8_and_8_16_and_28_32.iter()).map(&op).collect::<Vec<u8>>();
         let bytes_0_8_and_8_16_and_28_32: Vec<u8> = bytes_0_8_and_8_16.iter().zip(bytes_28_32.iter().cycle()).map(&op).collect::<Vec<u8>>();
         let bytes_28_32_and_0_8_and_8_16: Vec<u8> = bytes_28_32.iter().zip(bytes_0_8_and_8_16.iter().cycle()).map(&op).collect::<Vec<u8>>();
         let bytes_0_8_and_aa0f: Vec<u8> = bytes_0_8.iter().zip(vec![0xaa, 0x0f].iter().cycle()).map(&op).collect::<Vec<u8>>();
@@ -2509,7 +2512,11 @@ mod app_string_tests {
             test_driver(&mut app, format!(":{} r{} r{}\n", op_name, n, (n + 1) % 64).as_str()); 
             assert_eq!(app.line_entry.get_alert(), None);
             let rn = app.editors.get_current_register(n).unwrap();
-            assert_eq!(bytes_0_8_and_8_16, rn);
+            if n == 63 {
+                assert_eq!(bytes_8_16_and_0_8_and_8_16, rn);
+            } else{
+                assert_eq!(bytes_0_8_and_8_16, rn);
+            }
         }
 
         // Reset every even register to bytes 28-32
@@ -2526,7 +2533,11 @@ mod app_string_tests {
             test_driver(&mut app, format!(":{} r{} r{}\n", op_name, n, (n + 63) % 64).as_str()); 
             assert_eq!(app.line_entry.get_alert(), None);
             let rn = app.editors.get_current_register(n).unwrap();
-            if n %2 == 0 {
+            if n == 0 {
+                assert_eq!(bytes_28_32_and_8_16_and_0_8_and_8_16_and_28_32, rn);
+            } else if n == 63 {
+                assert_eq!(bytes_8_16_and_0_8_and_8_16_and_28_32, rn);
+            } else if n %2 == 0 {
                 assert_eq!(bytes_28_32_and_0_8_and_8_16, rn);
             } else {
                 assert_eq!(bytes_0_8_and_8_16_and_28_32, rn);
@@ -2588,7 +2599,27 @@ mod app_string_tests {
     }
 
     #[test]
-    fn register_and_undo_test<'a>() -> App<'a> {
+    fn register_xor_test<'a>() -> App<'a> {
+        register_op_test("xor", |(a, b)| a ^ b)
+    }
+
+    #[test]
+    fn register_nor_test<'a>() -> App<'a> {
+        register_op_test("nor", |(a, b)| !(a | b))
+    }
+
+    #[test]
+    fn register_nand_test<'a>() -> App<'a> {
+        register_op_test("nand", |(a, b)| !(a & b))
+    }
+
+    #[test]
+    fn register_xnor_test<'a>() -> App<'a> {
+        register_op_test("xnor", |(a, b)| !(a ^ b))
+    }
+
+
+    fn register_op_undo_test<'a, F>(op_name: &str, op: F) -> App<'a> where F: Fn((&u8, &u8)) -> u8 {
 
         let bytes_0_8 = vec![
             0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a
@@ -2606,15 +2637,18 @@ mod app_string_tests {
             0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa
         ];
 
-        let bytes_0_8_and_8_16 = bytes_0_8.iter().zip(bytes_8_16.iter()).map(|(b1, b2)| b1 & b2).collect::<Vec<u8>>();
-        let bytes_0_8_and_8_16_and_28_32 = bytes_0_8_and_8_16.iter().zip(bytes_28_32.iter().cycle()).map(|(b1, b2)| b1 & b2).collect::<Vec<u8>>();
-        let bytes_28_32_and_0_8_and_8_16 = bytes_28_32.iter().zip(bytes_0_8_and_8_16.iter().cycle()).map(|(b1, b2)| b1 & b2).collect::<Vec<u8>>();
-        let bytes_0_8_and_aa0f = bytes_0_8.iter().zip(vec![0xaa, 0x0f].iter().cycle()).map(|(b1, b2)| b1 & b2).collect::<Vec<u8>>();
-        let bytes_8_16_and_aa0f = bytes_8_16.iter().zip(vec![0xaa, 0x0f].iter().cycle()).map(|(b1, b2)| b1 & b2).collect::<Vec<u8>>();
-        let bytes_0_8_and_aa0f_and_count = bytes_0_8_and_aa0f.iter().zip(count.iter().cycle()).map(|(b1, b2)| b1 & b2).collect::<Vec<u8>>();
-        let bytes_8_16_and_aa0f_and_count = bytes_8_16_and_aa0f.iter().zip(count.iter().cycle()).map(|(b1, b2)| b1 & b2).collect::<Vec<u8>>();
+        let bytes_0_8_and_8_16 = bytes_0_8.iter().zip(bytes_8_16.iter()).map(&op).collect::<Vec<u8>>();
+        let bytes_8_16_and_0_8_and_8_16: Vec<u8> = bytes_8_16.iter().zip(bytes_0_8_and_8_16.iter()).map(&op).collect::<Vec<u8>>();
+        let bytes_8_16_and_0_8_and_8_16_and_28_32: Vec<u8> = bytes_8_16_and_0_8_and_8_16.iter().zip(bytes_28_32.iter().cycle()).map(&op).collect::<Vec<u8>>();
+        let bytes_28_32_and_8_16_and_0_8_and_8_16_and_28_32: Vec<u8> = bytes_28_32.iter().zip(bytes_8_16_and_0_8_and_8_16_and_28_32.iter()).map(&op).collect::<Vec<u8>>();
+        let bytes_0_8_and_8_16_and_28_32 = bytes_0_8_and_8_16.iter().zip(bytes_28_32.iter().cycle()).map(&op).collect::<Vec<u8>>();
+        let bytes_28_32_and_0_8_and_8_16 = bytes_28_32.iter().zip(bytes_0_8_and_8_16.iter().cycle()).map(&op).collect::<Vec<u8>>();
+        let bytes_0_8_and_aa0f = bytes_0_8.iter().zip(vec![0xaa, 0x0f].iter().cycle()).map(&op).collect::<Vec<u8>>();
+        let bytes_8_16_and_aa0f = bytes_8_16.iter().zip(vec![0xaa, 0x0f].iter().cycle()).map(&op).collect::<Vec<u8>>();
+        let bytes_0_8_and_aa0f_and_count = bytes_0_8_and_aa0f.iter().zip(count.iter().cycle()).map(&op).collect::<Vec<u8>>();
+        let bytes_8_16_and_aa0f_and_count = bytes_8_16_and_aa0f.iter().zip(count.iter().cycle()).map(&op).collect::<Vec<u8>>();
 
-        let mut app = register_and_test();
+        let mut app = register_op_test(op_name, op);
 
         // undo "and" each register with 0x11 0x22 0x33 0x44 0x55 0x66 0x77 0x88 0x99 0xaa and then
         // with 0xaa 0x0f
@@ -2654,7 +2688,11 @@ mod app_string_tests {
             test_driver(&mut app, "uu"); 
             assert_eq!(app.line_entry.get_alert(), None);
             let rn = app.editors.get_current_register(n).unwrap();
-            if n %2 == 0 {
+            if n == 0 {
+                assert_eq!(bytes_28_32_and_8_16_and_0_8_and_8_16_and_28_32, rn);
+            } else if n == 63 {
+                assert_eq!(bytes_8_16_and_0_8_and_8_16_and_28_32, rn);
+            } else if n %2 == 0 {
                 assert_eq!(bytes_28_32_and_0_8_and_8_16, rn);
             } else {
                 assert_eq!(bytes_0_8_and_8_16_and_28_32, rn);
@@ -2686,7 +2724,11 @@ mod app_string_tests {
                 assert_eq!(app.line_entry.get_alert(), None);
             }
             let rn = app.editors.get_current_register(n).unwrap();
-            assert_eq!(bytes_0_8_and_8_16, rn);
+            if n == 63 {
+                assert_eq!(bytes_8_16_and_0_8_and_8_16, rn);
+            } else{
+                assert_eq!(bytes_0_8_and_8_16, rn);
+            }
         }
 
         // Undo "and" of each register with the one after it
@@ -2717,6 +2759,36 @@ mod app_string_tests {
 
         app
 
+    }
+
+    #[test]
+    fn register_and_undo_test<'a>() -> App<'a> {
+        register_op_undo_test("and", |(a, b)| a & b)
+    }
+
+    #[test]
+    fn register_or_undo_test<'a>() -> App<'a> {
+        register_op_undo_test("or", |(a, b)| a | b)
+    }
+
+    #[test]
+    fn register_xor_undo_test<'a>() -> App<'a> {
+        register_op_undo_test("xor", |(a, b)| a ^ b)
+    }
+
+    #[test]
+    fn register_nor_undo_test<'a>() -> App<'a> {
+        register_op_undo_test("nor", |(a, b)| !(a | b))
+    }
+
+    #[test]
+    fn register_nand_undo_test<'a>() -> App<'a> {
+        register_op_undo_test("nand", |(a, b)| !(a & b))
+    }
+
+    #[test]
+    fn register_xnor_undo_test<'a>() -> App<'a> {
+        register_op_undo_test("xnor", |(a, b)| !(a ^ b))
     }
 
     #[test]
