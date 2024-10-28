@@ -900,7 +900,7 @@ impl<'a> App<'a> {
                                 if *register < 32 {
                                     (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.slice_register(*register as u8, *n1, *n2))
                                 } else if *register < 64 {
-                                    if *n2 >= self.editors.clipboard_registers[*register - 32].len() {
+                                    if *n2 > self.editors.clipboard_registers[*register - 32].len() {
                                         (CommandInstruction::NoOp, ActionResult::error("Slice index outside of register contents bounds".to_string()))
                                     } else if *n1 > *n2 {
                                         (CommandInstruction::NoOp, ActionResult::error("Slice start index greater than slice end index".to_string()))
@@ -2452,6 +2452,163 @@ mod app_string_tests {
         // We should be at the top of the action stack at this point
         test_driver(&mut app, "U"); 
         assert_eq!(app.line_entry.get_alert(), Some("No actions in stack".to_string()));
+
+        app
+    }
+
+    #[test]
+    fn register_slice_test<'a>() -> App<'a> {
+        let mut app = App::new(50, 50);
+        let mut window = None;
+        app.init(&mut window, r"tests\exif2c08.png".to_string(), FileManagerType::RamOnly, false).unwrap();
+
+        let bytes_8_16 = vec![
+            0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52
+        ];
+
+        for n in 0..64 {
+            // Yank the bytes 8-16 into register n
+            // 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52
+            test_driver(&mut app, format!("8g{}r8y", n).as_str()); 
+        }
+
+        for n in 0..64 {
+            let mut rn = app.editors.get_current_register(n).unwrap();
+            assert_eq!(bytes_8_16, rn);
+
+            test_driver(&mut app, format!(":slice r{} 0 8\n", n).as_str());
+            assert_eq!(app.line_entry.get_alert(), None);
+            rn = app.editors.get_current_register(n).unwrap();
+            assert_eq!(bytes_8_16, rn);
+
+            test_driver(&mut app, format!(":slice r{} 0 6\n", n).as_str());
+            assert_eq!(app.line_entry.get_alert(), None);
+            rn = app.editors.get_current_register(n).unwrap();
+            assert_eq!(bytes_8_16[0..6], rn);
+
+            test_driver(&mut app, format!(":slice r{} 2 6\n", n).as_str());
+            assert_eq!(app.line_entry.get_alert(), None);
+            rn = app.editors.get_current_register(n).unwrap();
+            assert_eq!(bytes_8_16[2..6], rn);
+
+            test_driver(&mut app, format!(":slice r{} 1 4\n", n).as_str());
+            assert_eq!(app.line_entry.get_alert(), None);
+            rn = app.editors.get_current_register(n).unwrap();
+            assert_eq!(bytes_8_16[3..6], rn);
+
+            test_driver(&mut app, format!(":slice r{} 0 4\n", n).as_str());
+            assert_eq!(app.line_entry.get_alert(), Some("Slice index outside of register contents bounds".to_string()));
+            rn = app.editors.get_current_register(n).unwrap();
+            assert_eq!(bytes_8_16[3..6], rn);
+
+            test_driver(&mut app, format!(":slice r{} 2 1\n", n).as_str());
+            assert_eq!(app.line_entry.get_alert(), Some("Slice start index greater than slice end index".to_string()));
+            rn = app.editors.get_current_register(n).unwrap();
+            assert_eq!(bytes_8_16[3..6], rn);
+
+            test_driver(&mut app, format!(":slice r{} 1 2\n", n).as_str());
+            assert_eq!(app.line_entry.get_alert(), None);
+            rn = app.editors.get_current_register(n).unwrap();
+            assert_eq!(bytes_8_16[4..5], rn);
+
+            test_driver(&mut app, format!(":slice r{} 1 1\n", n).as_str());
+            assert_eq!(app.line_entry.get_alert(), None);
+            rn = app.editors.get_current_register(n).unwrap();
+            assert_eq!(bytes_8_16[5..5], rn);
+        }
+        app
+    }
+
+    #[test]
+    fn register_slice_undo_test<'a>() -> App<'a> {
+
+        let bytes_8_16 = vec![
+            0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52
+        ];
+
+        let mut app = register_slice_test();
+
+        for n in (0..32).rev() {
+            let mut rn = app.editors.get_current_register(n).unwrap();
+            assert_eq!(bytes_8_16[5..5], rn);
+
+            test_driver(&mut app, "u");
+            assert_eq!(app.line_entry.get_alert(), None);
+            rn = app.editors.get_current_register(n).unwrap();
+            assert_eq!(bytes_8_16[4..5], rn);
+
+            test_driver(&mut app, "u");
+            assert_eq!(app.line_entry.get_alert(), None);
+            rn = app.editors.get_current_register(n).unwrap();
+            assert_eq!(bytes_8_16[3..6], rn);
+
+            test_driver(&mut app, "u");
+            assert_eq!(app.line_entry.get_alert(), None);
+            rn = app.editors.get_current_register(n).unwrap();
+            assert_eq!(bytes_8_16[2..6], rn);
+
+            test_driver(&mut app, "u");
+            assert_eq!(app.line_entry.get_alert(), None);
+            rn = app.editors.get_current_register(n).unwrap();
+            assert_eq!(bytes_8_16[0..6], rn);
+
+            test_driver(&mut app, "u");
+            assert_eq!(app.line_entry.get_alert(), None);
+            rn = app.editors.get_current_register(n).unwrap();
+            assert_eq!(bytes_8_16, rn);
+
+            test_driver(&mut app, "u");
+            assert_eq!(app.line_entry.get_alert(), None);
+            rn = app.editors.get_current_register(n).unwrap();
+            assert_eq!(bytes_8_16, rn);
+        }
+
+        app
+    }
+
+    #[test]
+    fn register_slice_redo_test<'a>() -> App<'a> {
+
+        let bytes_8_16 = vec![
+            0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52
+        ];
+
+        let mut app = register_slice_undo_test();
+
+        for n in 0..32 {
+            let mut rn = app.editors.get_current_register(n).unwrap();
+            assert_eq!(bytes_8_16, rn);
+
+            test_driver(&mut app, "U");
+            assert_eq!(app.line_entry.get_alert(), None);
+            rn = app.editors.get_current_register(n).unwrap();
+            assert_eq!(bytes_8_16, rn);
+
+            test_driver(&mut app, "U");
+            assert_eq!(app.line_entry.get_alert(), None);
+            rn = app.editors.get_current_register(n).unwrap();
+            assert_eq!(bytes_8_16[0..6], rn);
+
+            test_driver(&mut app, "U");
+            assert_eq!(app.line_entry.get_alert(), None);
+            rn = app.editors.get_current_register(n).unwrap();
+            assert_eq!(bytes_8_16[2..6], rn);
+
+            test_driver(&mut app, "U");
+            assert_eq!(app.line_entry.get_alert(), None);
+            rn = app.editors.get_current_register(n).unwrap();
+            assert_eq!(bytes_8_16[3..6], rn);
+
+            test_driver(&mut app, "U");
+            assert_eq!(app.line_entry.get_alert(), None);
+            rn = app.editors.get_current_register(n).unwrap();
+            assert_eq!(bytes_8_16[4..5], rn);
+
+            test_driver(&mut app, "U");
+            assert_eq!(app.line_entry.get_alert(), None);
+            rn = app.editors.get_current_register(n).unwrap();
+            assert_eq!(bytes_8_16[5..5], rn);
+        }
 
         app
     }

@@ -1312,7 +1312,7 @@ impl<'a> HexEdit<'a> {
             return ActionResult::error("Register number must be less than 32".to_string())
         }
 
-        if n2 >= self.clipboard_registers[register as usize].len() {
+        if n2 > self.clipboard_registers[register as usize].len() {
             ActionResult::error("Slice index outside of register contents bounds".to_string())
         } else if n1 > n2 {
             ActionResult::error("Slice start index greater than slice end index".to_string())
