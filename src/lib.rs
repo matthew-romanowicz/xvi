@@ -2626,6 +2626,171 @@ mod app_string_tests {
         app
     }
 
+    #[test]
+    fn register_clear_test<'a>() -> App<'a> {
+        let mut app = App::new(50, 50);
+        let mut window = None;
+        app.init(&mut window, r"tests\exif2c08.png".to_string(), FileManagerType::RamOnly, false).unwrap();
+
+        let bytes_0_16 = vec![
+            0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+            0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52
+        ];
+
+        let bytes_8_16 = vec![
+            0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52
+        ];
+
+        for n in 0..64 {
+            // Yank the bytes 8-16 into register n
+            // 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52
+            test_driver(&mut app, format!("8g{}r8y", n).as_str()); 
+        }
+
+        for n in 0..64 {
+            let mut rn = app.editors.get_current_register(n).unwrap();
+            assert_eq!(bytes_8_16, rn);
+
+            test_driver(&mut app, format!(":clear r{}\n", n).as_str());
+            assert_eq!(app.line_entry.get_alert(), None);
+            rn = app.editors.get_current_register(n).unwrap();
+            assert_eq!(Vec::<u8>::new(), rn);
+        }
+
+        for n in 0..64 {
+            // Yank the bytes 8-16 into register n
+            // 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52
+            test_driver(&mut app, format!("0g{}r16y", n).as_str()); 
+        }
+
+        for n in (0..64).rev() {
+            let mut rn = app.editors.get_current_register(n).unwrap();
+            assert_eq!(bytes_0_16, rn);
+
+            test_driver(&mut app, format!(":clear r{}\n", n).as_str());
+            assert_eq!(app.line_entry.get_alert(), None);
+            rn = app.editors.get_current_register(n).unwrap();
+            assert_eq!(Vec::<u8>::new(), rn);
+        }
+
+        app
+    }
+
+    #[test]
+    fn register_clear_undo_test<'a>() -> App<'a> {
+        let mut app = register_clear_test();
+
+        let bytes_0_16 = vec![
+            0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+            0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52
+        ];
+
+        let bytes_8_16 = vec![
+            0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52
+        ];
+
+        // Undo clears
+        for n in 0..64 {
+            let mut rn = app.editors.get_current_register(n).unwrap();
+            assert_eq!(Vec::<u8>::new(), rn);
+
+            if n < 32 {
+                test_driver(&mut app, "u");
+                assert_eq!(app.line_entry.get_alert(), None);
+                rn = app.editors.get_current_register(n).unwrap();
+                assert_eq!(bytes_0_16, rn);
+            }
+        }
+
+        // Undo yanks
+        test_driver(&mut app, &"u".repeat(64 + 32)); 
+        assert_eq!(app.line_entry.get_alert(), None);
+
+        // Undo clears
+        for n in (0..64).rev() {
+            let mut rn = app.editors.get_current_register(n).unwrap();
+            assert_eq!(Vec::<u8>::new(), rn);
+
+            if n < 32 {
+                test_driver(&mut app, "u");
+                assert_eq!(app.line_entry.get_alert(), None);
+                rn = app.editors.get_current_register(n).unwrap();
+                assert_eq!(bytes_8_16, rn);
+            }
+        }
+
+        // Undo yanks
+        test_driver(&mut app, &"u".repeat(64 + 32)); 
+        assert_eq!(app.line_entry.get_alert(), None);
+
+        // We should have hit the bottom of the stack at this point
+        test_driver(&mut app, "u"); 
+        assert_eq!(app.line_entry.get_alert(), Some("No actions in stack".to_string()));
+
+        app
+    }
+
+    #[test]
+    fn register_clear_redo_test<'a>() -> App<'a> {
+        let mut app = register_clear_undo_test();
+
+        let bytes_0_16 = vec![
+            0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+            0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52
+        ];
+
+        let bytes_8_16 = vec![
+            0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52
+        ];
+
+        // Redo yanks
+        test_driver(&mut app, &"U".repeat(64 + 32)); 
+        assert_eq!(app.line_entry.get_alert(), None);
+
+        // Redo clears
+        for n in 0..64 {
+            let mut rn = app.editors.get_current_register(n).unwrap();
+
+            if n < 32 {
+                assert_eq!(bytes_8_16, rn);
+
+
+                test_driver(&mut app, "U");
+                assert_eq!(app.line_entry.get_alert(), None);
+                rn = app.editors.get_current_register(n).unwrap();
+                assert_eq!(Vec::<u8>::new(), rn);
+            } else {
+                assert_eq!(Vec::<u8>::new(), rn);
+            }
+        }
+
+        // Redo yanks
+        test_driver(&mut app, &"U".repeat(64 + 32)); 
+        assert_eq!(app.line_entry.get_alert(), None);
+
+        // Redo clears
+        for n in (0..64).rev() {
+            let mut rn = app.editors.get_current_register(n).unwrap();
+
+            if n < 32 {
+                assert_eq!(bytes_0_16, rn);
+
+                test_driver(&mut app, "U");
+                assert_eq!(app.line_entry.get_alert(), None);
+                rn = app.editors.get_current_register(n).unwrap();
+                assert_eq!(Vec::<u8>::new(), rn);
+            } else {
+                assert_eq!(Vec::<u8>::new(), rn);
+            }
+        }
+
+        // We should have hit the top of the stack at this point
+        test_driver(&mut app, "U"); 
+        assert_eq!(app.line_entry.get_alert(), Some("No actions in stack".to_string()));
+
+        app
+    }
+
     fn apply_elementwise<F>(lhs: &Vec<u8>, rhs: &Vec<u8>, op: &F) -> Vec<u8> where F: Fn((&u8, &u8)) -> u8 {
         lhs.iter().zip(rhs.iter().cycle()).map(op).collect()
     }
