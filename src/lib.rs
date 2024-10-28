@@ -2331,8 +2331,7 @@ mod app_string_tests {
         assert_eq!(buff_expected, buff);
     }
 
-    #[test]
-    fn register_not_test<'a>() -> App<'a> {
+    fn register_unary_op_test<'a, F>(op_name: &str, op: F) -> App<'a> where F: Fn(&Vec<u8>) -> Vec<u8> {
         let mut app = App::new(50, 50);
         let mut window = None;
         app.init(&mut window, r"tests\exif2c08.png".to_string(), FileManagerType::RamOnly, false).unwrap();
@@ -2341,71 +2340,70 @@ mod app_string_tests {
             0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52
         ];
 
-        let bytes_8_16_inv = bytes_8_16.iter().map(|b| !b).collect::<Vec<u8>>();
-
         for n in 0..64 {
             // Yank the bytes 8-16 into register n
             // 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52
             test_driver(&mut app, format!("8g{}r8y", n).as_str()); 
         }
 
+        let mut current = bytes_8_16.clone();
+
         // Invert each register inversion 64 times and check its value before and after
         for i in 0..64 {
+            let next = op(&current);
             for n in 0..64 {
                 let mut rn = app.editors.get_current_register(n).unwrap();
-                if i % 2 == 0 {
-                    assert_eq!(bytes_8_16, rn);
-                } else {
-                    assert_eq!(bytes_8_16_inv, rn);
-                }
+                assert_eq!(current, rn);
             
-                test_driver(&mut app, format!(":not r{}\n", n).as_str()); 
+                test_driver(&mut app, format!(":{} r{}\n", op_name, n).as_str()); 
                 assert_eq!(app.line_entry.get_alert(), None);
                 rn = app.editors.get_current_register(n).unwrap();
-                if i % 2 == 0 {
-                    assert_eq!(bytes_8_16_inv, rn);
-                } else {
-                    assert_eq!(bytes_8_16, rn);
-                }
+                assert_eq!(next, rn);
                 
             }
+            current = next;
         }
 
-
         app
-        
     }
 
     #[test]
-    fn register_not_undo_test<'a>() -> App<'a> {
+    fn register_not_test<'a>() -> App<'a> {
+        register_unary_op_test("not", |a| a.iter().map(|b| !b).collect::<Vec<u8>>())
+    }
+
+    #[test]
+    fn register_swap_test<'a>() -> App<'a> {
+        register_unary_op_test("swap", |a| a.iter().rev().cloned().collect::<Vec<u8>>())
+    }
+
+    fn register_unary_op_undo_test<'a, F>(op_name: &str, op: F) -> App<'a> where F: Fn(&Vec<u8>) -> Vec<u8> {
 
         let bytes_8_16 = vec![
             0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52
         ];
 
-        let bytes_8_16_inv = bytes_8_16.iter().map(|b| !b).collect::<Vec<u8>>();
-
-        let mut app = register_not_test();
-
-        // Uninvert each register 0-31 8 times and check its value before and after
+        let mut results = vec![];
+        let mut current = bytes_8_16.clone();
         for i in 0..8 {
-            for n in 0..32 {
-                let mut rn = app.editors.get_current_register(31 - n).unwrap();
-                if i % 2 == 0 {
-                    assert_eq!(bytes_8_16, rn);
-                } else {
-                    assert_eq!(bytes_8_16_inv, rn);
-                }
-            
+            results.push(current.clone());
+            current = op(&current);
+        }
+        results.push(current);
+
+        results.reverse();
+
+        let mut app = register_unary_op_test(op_name, op);
+
+        for i in 0..8 {
+            for n in (0..32).rev() {
+                let mut rn = app.editors.get_current_register(n).unwrap();
+                assert_eq!(results[i], rn);
+
                 test_driver(&mut app, "u"); 
                 assert_eq!(app.line_entry.get_alert(), None);
-                rn = app.editors.get_current_register(31 - n).unwrap();
-                if i % 2 == 0 {
-                    assert_eq!(bytes_8_16_inv, rn);
-                } else {
-                    assert_eq!(bytes_8_16, rn);
-                }
-                
+                rn = app.editors.get_current_register(n).unwrap();
+                assert_eq!(results[i + 1], rn);
             }
         }
 
@@ -2417,35 +2415,40 @@ mod app_string_tests {
     }
 
     #[test]
-    fn register_not_redo_test<'a>() -> App<'a> {
+    fn register_not_undo_test<'a>() -> App<'a> {
+        register_unary_op_undo_test("not", |a| a.iter().map(|b| !b).collect::<Vec<u8>>())
+    }
+
+    #[test]
+    fn register_swap_undo_test<'a>() -> App<'a> {
+        register_unary_op_undo_test("swap", |a| a.iter().rev().cloned().collect::<Vec<u8>>())
+    }
+
+    fn register_unary_op_redo_test<'a, F>(op_name: &str, op: F) -> App<'a> where F: Fn(&Vec<u8>) -> Vec<u8> {
 
         let bytes_8_16 = vec![
             0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52
         ];
 
-        let bytes_8_16_inv = bytes_8_16.iter().map(|b| !b).collect::<Vec<u8>>();
+        let mut results = vec![];
+        let mut current = bytes_8_16.clone();
+        for i in 0..8 {
+            results.push(current.clone());
+            current = op(&current);
+        }
+        results.push(current);
 
-        let mut app = register_not_undo_test();
+        let mut app = register_unary_op_undo_test(op_name, op);
 
-        // Reinvert each register 0-31 8 times and check its value before and after
         for i in 0..8 {
             for n in 0..32 {
                 let mut rn = app.editors.get_current_register(n).unwrap();
-                if i % 2 == 0 {
-                    assert_eq!(bytes_8_16, rn);
-                } else {
-                    assert_eq!(bytes_8_16_inv, rn);
-                }
-            
+                assert_eq!(results[i], rn);
+
                 test_driver(&mut app, "U"); 
                 assert_eq!(app.line_entry.get_alert(), None);
                 rn = app.editors.get_current_register(n).unwrap();
-                if i % 2 == 0 {
-                    assert_eq!(bytes_8_16_inv, rn);
-                } else {
-                    assert_eq!(bytes_8_16, rn);
-                }
-                
+                assert_eq!(results[i + 1], rn);
             }
         }
 
@@ -2454,6 +2457,16 @@ mod app_string_tests {
         assert_eq!(app.line_entry.get_alert(), Some("No actions in stack".to_string()));
 
         app
+    }
+
+    #[test]
+    fn register_not_redo_test<'a>() -> App<'a> {
+        register_unary_op_redo_test("not", |a| a.iter().map(|b| !b).collect::<Vec<u8>>())
+    }
+
+    #[test]
+    fn register_swap_redo_test<'a>() -> App<'a> {
+        register_unary_op_redo_test("swap", |a| a.iter().rev().cloned().collect::<Vec<u8>>())
     }
 
     #[test]
