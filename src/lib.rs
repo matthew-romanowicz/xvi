@@ -1436,6 +1436,84 @@ mod app_string_tests {
     }
 
     #[test]
+    fn hex_overwrite_test() {
+        let mut app = App::new(50, 50);
+        let mut window = None;
+        app.init(&mut window, r"tests\exif2c08.png".to_string(), FileManagerType::RamOnly, false).unwrap();
+        let file_length = 1788;
+
+        let mut bytes_1552_1568 = vec![
+            0x1F, 0x57, 0x1C, 0x79, 0x74, 0xF5, 0x21, 0x4F, 
+            0xE6, 0x64, 0x68, 0x8F, 0x85, 0xB3, 0x10, 0x0B
+        ];
+
+        let mut bytes_1680_1696 = vec![
+            0x5E, 0xF6, 0xA2, 0x88, 0xD7, 0x10, 0x98, 0x8D, 
+            0xE5, 0x21, 0x73, 0x8B, 0x18, 0xA5, 0x79, 0x35
+        ];
+
+        let mut buff = vec![0; 16];
+        assert_eq!(app.editors.current_mut().hex_edit.get_bytes(1552, &mut buff).unwrap(), 16);
+        assert_eq!(bytes_1552_1568, buff);
+        assert_eq!(app.editors.current_mut().hex_edit.get_bytes(1680, &mut buff).unwrap(), 16);
+        assert_eq!(bytes_1680_1696, buff);
+
+        test_driver(&mut app, "1552go");
+        assert_eq!(app.current_cursor_pos(), 1552);
+        assert_eq!(app.line_entry.get_alert(), None);
+
+        let hex_chars_lcase = "0123456789abcdef";
+        let hex_chars_ucase = "0123456789ABCDEF";
+        let mut cursor_offset = 0;
+
+        for i in 0..16 {
+
+            if i % 2 == 0 {
+                bytes_1552_1568[cursor_offset] &= 0x0f;
+                bytes_1552_1568[cursor_offset] |= (i as u8) << 4;
+            } else {
+                bytes_1552_1568[cursor_offset] &= 0xf0;
+                bytes_1552_1568[cursor_offset] |= i as u8;
+                cursor_offset += 1;
+            }
+
+            test_driver(&mut app, &hex_chars_lcase[i..i+1]);
+
+            assert_eq!(app.current_cursor_pos(), 1552 + cursor_offset);
+            assert_eq!(app.line_entry.get_alert(), None);
+
+            assert_eq!(app.editors.current_mut().hex_edit.get_bytes(1552, &mut buff).unwrap(), 16);
+            assert_eq!(bytes_1552_1568, buff);
+        }
+
+        test_driver(&mut app, "\u{1b}1680go");
+        assert_eq!(app.current_cursor_pos(), 1680);
+        assert_eq!(app.line_entry.get_alert(), None);
+
+        cursor_offset = 0;
+
+        for i in (0..16).rev() {
+
+            if i % 2 == 1 {
+                bytes_1680_1696[cursor_offset] &= 0x0f;
+                bytes_1680_1696[cursor_offset] |= (i as u8) << 4;
+            } else {
+                bytes_1680_1696[cursor_offset] &= 0xf0;
+                bytes_1680_1696[cursor_offset] |= i as u8;
+                cursor_offset += 1;
+            }
+
+            test_driver(&mut app, &hex_chars_ucase[i..i+1]);
+
+            assert_eq!(app.current_cursor_pos(), 1680 + cursor_offset);
+            assert_eq!(app.line_entry.get_alert(), None);
+
+            assert_eq!(app.editors.current_mut().hex_edit.get_bytes(1680, &mut buff).unwrap(), 16);
+            assert_eq!(bytes_1680_1696, buff);
+        }
+    }
+
+    #[test]
     fn seek_test() {
         let mut app = App::new(50, 50);
         let mut window = None;
