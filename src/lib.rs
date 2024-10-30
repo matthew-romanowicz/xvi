@@ -1493,20 +1493,28 @@ mod app_string_tests {
         cursor_offset = 0;
 
         for i in (0..16).rev() {
-
             if i % 2 == 1 {
-                bytes_1680_1696[cursor_offset] &= 0x0f;
-                bytes_1680_1696[cursor_offset] |= (i as u8) << 4;
+                bytes_1680_1696[cursor_offset + 1] &= 0x0f;
+                bytes_1680_1696[cursor_offset + 1] |= (i as u8) << 4;
+                test_driver(&mut app, "→→");
+                assert_eq!(app.line_entry.get_alert(), None);
             } else {
                 bytes_1680_1696[cursor_offset] &= 0xf0;
                 bytes_1680_1696[cursor_offset] |= i as u8;
                 cursor_offset += 1;
+                test_driver(&mut app, "←←");
+                assert_eq!(app.line_entry.get_alert(), None);
             }
 
+            
             test_driver(&mut app, &hex_chars_ucase[i..i+1]);
-
-            assert_eq!(app.current_cursor_pos(), 1680 + cursor_offset);
             assert_eq!(app.line_entry.get_alert(), None);
+            
+            if i % 2 == 1 {
+                assert_eq!(app.current_cursor_pos(), 1680 + cursor_offset + 1);
+            } else {
+                assert_eq!(app.current_cursor_pos(), 1680 + cursor_offset);
+            }
 
             assert_eq!(app.editors.current_mut().hex_edit.get_bytes(1680, &mut buff).unwrap(), 16);
             assert_eq!(bytes_1680_1696, buff);
@@ -3396,6 +3404,69 @@ mod app_string_tests {
     #[test]
     fn register_cat_redo_test<'a>() -> App<'a> {
         register_op_redo_test("cat", |a, b| a.clone().into_iter().chain(b.clone().into_iter()).collect())
+    }
+
+    #[test]
+    fn macro_test() {
+        let mut app = App::new(50, 50);
+        let mut window = None;
+        app.init(&mut window, r"tests\exif2c08.png".to_string(), FileManagerType::RamOnly, false).unwrap();
+
+        let mut bytes_8_16 = vec![
+            0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52
+        ];
+
+        let mut buff = vec![0; 8];
+        assert_eq!(app.editors.current_mut().hex_edit.get_bytes(8, &mut buff).unwrap(), 8);
+        assert_eq!(bytes_8_16, buff);
+
+        let bytes_8_16_3m = vec![
+            bytes_8_16[2], bytes_8_16[3], bytes_8_16[0], bytes_8_16[1], 
+            bytes_8_16[4], bytes_8_16[5], bytes_8_16[6], bytes_8_16[7]
+        ];
+
+        let bytes_8_16_4m = vec![
+            bytes_8_16[2], bytes_8_16[3], bytes_8_16[0], bytes_8_16[1], 
+            bytes_8_16[6], bytes_8_16[7], bytes_8_16[4], bytes_8_16[5]
+        ];
+
+        test_driver(&mut app, "8g");
+        // Create a macro that swaps the next two pairs of bytes
+        test_driver(&mut app, "3M");
+        assert_eq!(app.line_entry.get_alert(), None);
+        test_driver(&mut app, "4r2y");
+        assert_eq!(app.line_entry.get_alert(), None);
+        test_driver(&mut app, "2d");
+        assert_eq!(app.line_entry.get_alert(), None);
+        test_driver(&mut app, "+2g");
+        assert_eq!(app.line_entry.get_alert(), None);
+        test_driver(&mut app, "4p");
+        assert_eq!(app.line_entry.get_alert(), None);
+        test_driver(&mut app, "-4g");
+        assert_eq!(app.line_entry.get_alert(), None);
+        test_driver(&mut app, "M");
+        assert_eq!(app.line_entry.get_alert(), None);
+        assert_eq!(app.editors.current_mut().hex_edit.get_bytes(8, &mut buff).unwrap(), 8);
+        assert_eq!(bytes_8_16_3m, buff);
+        // Undo everything that was done while recording the macro
+        test_driver(&mut app, "uuuu");
+        assert_eq!(app.line_entry.get_alert(), None);
+        assert_eq!(app.editors.current_mut().hex_edit.get_bytes(8, &mut buff).unwrap(), 8);
+        assert_eq!(app.current_cursor_pos(), 8);
+        assert_eq!(bytes_8_16, buff);
+        // Create a new macro that swaps each pair of pairs of bytes in an 8-byte word
+        test_driver(&mut app, "4M");
+        assert_eq!(app.line_entry.get_alert(), None);
+        test_driver(&mut app, "3m");
+        assert_eq!(app.line_entry.get_alert(), None);
+        test_driver(&mut app, "+4g");
+        assert_eq!(app.line_entry.get_alert(), None);
+        test_driver(&mut app, "3m");
+        assert_eq!(app.line_entry.get_alert(), None);
+        test_driver(&mut app, "M");
+        assert_eq!(app.line_entry.get_alert(), None);
+        assert_eq!(app.editors.current_mut().hex_edit.get_bytes(8, &mut buff).unwrap(), 8);
+        assert_eq!(bytes_8_16_4m, buff);
     }
 
     #[test]
