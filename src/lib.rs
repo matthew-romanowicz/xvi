@@ -3430,6 +3430,27 @@ mod app_string_tests {
             bytes_8_16[6], bytes_8_16[7], bytes_8_16[4], bytes_8_16[5]
         ];
 
+        let bytes_1712_1728 = vec![
+            0x74, 0x98, 0xb2, 0x8e, 
+            0x72, 0x95, 0x1a, 0xfc, 
+            0xb7, 0xb5, 0x00, 0xb8, 
+            0x21, 0x2c, 0x64, 0x64
+        ];
+
+        let bytes_1712_1728_4m = vec![
+            0xb2, 0x8e, 0x74, 0x98,  
+            0x1a, 0xfc, 0x72, 0x95,  
+            0xb7, 0xb5, 0x00, 0xb8, 
+            0x21, 0x2c, 0x64, 0x64
+        ];
+
+        let bytes_1712_1728_4m_4m = vec![
+            0xb2, 0x8e, 0x74, 0x98,  
+            0x1a, 0xfc, 0x72, 0x95,  
+            0x00, 0xb8, 0xb7, 0xb5,  
+            0x64, 0x64, 0x21, 0x2c,
+        ];
+
         test_driver(&mut app, "8g");
         // Create a macro that swaps the next two pairs of bytes
         test_driver(&mut app, "3M");
@@ -3446,10 +3467,11 @@ mod app_string_tests {
         assert_eq!(app.line_entry.get_alert(), None);
         test_driver(&mut app, "M");
         assert_eq!(app.line_entry.get_alert(), None);
+        assert_eq!(app.current_cursor_pos(), 8);
         assert_eq!(app.editors.current_mut().hex_edit.get_bytes(8, &mut buff).unwrap(), 8);
         assert_eq!(bytes_8_16_3m, buff);
         // Undo everything that was done while recording the macro
-        test_driver(&mut app, "uuuu");
+        test_driver(&mut app, "uuuuu");
         assert_eq!(app.line_entry.get_alert(), None);
         assert_eq!(app.editors.current_mut().hex_edit.get_bytes(8, &mut buff).unwrap(), 8);
         assert_eq!(app.current_cursor_pos(), 8);
@@ -3465,8 +3487,38 @@ mod app_string_tests {
         assert_eq!(app.line_entry.get_alert(), None);
         test_driver(&mut app, "M");
         assert_eq!(app.line_entry.get_alert(), None);
+        assert_eq!(app.current_cursor_pos(), 12);
         assert_eq!(app.editors.current_mut().hex_edit.get_bytes(8, &mut buff).unwrap(), 8);
         assert_eq!(bytes_8_16_4m, buff);
+
+        buff = vec![0; 16];
+
+        assert_eq!(app.editors.current_mut().hex_edit.get_bytes(1712, &mut buff).unwrap(), 16);
+        assert_eq!(bytes_1712_1728, buff);
+
+        test_driver(&mut app, "1712g4m");
+        assert_eq!(app.line_entry.get_alert(), None);
+        assert_eq!(app.current_cursor_pos(), 1716);
+        assert_eq!(app.editors.current_mut().hex_edit.get_bytes(1712, &mut buff).unwrap(), 16);
+        assert_eq!(bytes_1712_1728_4m, buff);
+
+        test_driver(&mut app, "+4g4m");
+        assert_eq!(app.line_entry.get_alert(), None);
+        assert_eq!(app.current_cursor_pos(), 1724);
+        assert_eq!(app.editors.current_mut().hex_edit.get_bytes(1712, &mut buff).unwrap(), 16);
+        assert_eq!(bytes_1712_1728_4m_4m, buff);
+
+        test_driver(&mut app, "-4g4m");
+        assert_eq!(app.line_entry.get_alert(), None);
+        assert_eq!(app.current_cursor_pos(), 1724);
+        assert_eq!(app.editors.current_mut().hex_edit.get_bytes(1712, &mut buff).unwrap(), 16);
+        assert_eq!(bytes_1712_1728_4m, buff);
+
+        test_driver(&mut app, "-12g4m");
+        assert_eq!(app.line_entry.get_alert(), None);
+        assert_eq!(app.current_cursor_pos(), 1716);
+        assert_eq!(app.editors.current_mut().hex_edit.get_bytes(1712, &mut buff).unwrap(), 16);
+        assert_eq!(bytes_1712_1728, buff);
     }
 
     #[test]
