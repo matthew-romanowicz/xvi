@@ -3983,6 +3983,21 @@ impl<'a> PartiallyResolvedStructure<'a> {
 
     }  
 
+    fn get_assembly(&self, prs_map: &PrsMap<'a>) -> Result<StructureIdent, FileSpecError> {
+        // TODO: Account for if there are multiple prs's that list this as a semgent (get the closest one in the tree)
+        for prs in prs_map.values() {
+            match prs.borrow().stype.as_ref() {
+                PartiallyResolvedStructureType::Assembly{segments, ..} => {
+                    if segments.contains(&self.id.id) {
+                        return Ok(prs.borrow().id.clone())
+                    }
+                },
+                _ => {}
+            }
+        }
+        todo!()
+    }
+
     fn try_get_data(&self, fm: &mut crate::FileManager, vd: &ValueDictionary, prs_map: &HashMap<StructureIdent, 
                 Rc<RefCell<PartiallyResolvedStructure<'a>>>>) -> Result<DependencyReport<BitField>, FileSpecError> {
 
@@ -5314,6 +5329,35 @@ impl<'a> FileMap<'a> {
         
     }
 
+    pub fn get_assembly(&self, ident: StructureIdent) -> Result<StructureIdent, FileSpecError> {
+        let structure = self.prs_map.get(&ident).unwrap().clone();
+        let result = structure.borrow().get_assembly(&self.prs_map);
+        result
+    }
+
+    pub fn assemble(&mut self, fm: &mut crate::FileManager, ident: StructureIdent) -> Result<Vec<u8>, FileSpecError> {
+
+        let structure = self.prs_map.get(&ident).unwrap().clone();
+        loop {
+            let dr = structure.borrow().try_get_data(fm, &self.value_dict, &self.prs_map)?;
+            match dr.result {
+                DepResult::Success(bf) => {
+                    // TODO: Get rid of this unwrap
+                    return Ok(bf.into_boxed_slice().unwrap().into_vec())
+                },
+                DepResult::Incomplete(deps) | DepResult::MightExist(deps) => {
+                    let deps: Vec<AbstractIdent> = deps.into_iter().collect();
+                    self.get_data(deps.into_iter().collect(), fm)?;
+                },
+                DepResult::DoesNotExist => {
+                    // error!("Field does not exist: {:?}", field);
+                    // return Err(FileSpecError::ident_not_found(field.to_abstract()))
+                    todo!()
+                }
+            }
+        }
+    }
+
     fn get_data(&mut self, targets: Vec<AbstractIdent>, fm: &mut crate::FileManager) -> Result<(), FileSpecError> {
         let mut dg = std::mem::take(&mut self.dep_graph);
         let mut vd = std::mem::take(&mut self.value_dict);
@@ -5794,7 +5838,7 @@ struct ExifIfdEntry {
 mod png_tests {
     use super::*;
 
-    fn start_file<'a>(filename: &'a str) -> (FileMap<'a>, crate::FileManager<'a>) {
+    fn start_file<'a>(filename: &'a str) -> (FileMap<'a>, crate::FileManager) {
         // pretty_env_logger::init();
         let s = Rc::new(make_png());
         let mut fm = crate::FileManager::new(filename.to_string(), crate::FileManagerType::ReadOnly, false).unwrap();

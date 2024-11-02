@@ -834,7 +834,7 @@ struct FormatSummary {
 }
 
 pub struct HexEdit<'a> {
-    file_manager: FileManager<'a>,
+    file_manager: FileManager,
     x: usize,
     y: usize,
     width: usize,
@@ -904,7 +904,7 @@ pub fn vector_op<F>(buffer1: &mut Vec<u8>, buffer2: &Vec<u8>, op: F) where F: Fn
 impl<'a> HexEdit<'a> {
 
     pub fn new(mut file_manager: FileManager, x: usize, y: usize, width: usize, height: usize, line_length: u8, show_filename: bool, 
-                show_hex: bool, show_ascii: bool, invalid_ascii_char: char, separator: String, capitalize_hex: bool) -> HexEdit {
+                show_hex: bool, show_ascii: bool, invalid_ascii_char: char, separator: String, capitalize_hex: bool) -> HexEdit<'a> {
 
         // let fs = PngFileSpec::new(&mut file_manager);
         // let png_struct = make_png();
@@ -1065,6 +1065,24 @@ impl<'a> HexEdit<'a> {
         let mut fs = FileMap::new(fs, &mut self.file_manager);
         fs.initialize(&mut self.file_manager).unwrap();
         self.file_spec = Some(fs)
+    }
+
+    pub fn assemble(&mut self) -> Result<Vec<u8>, crate::hex_edit::file_specs::FileSpecError> {
+        match &mut self.file_spec {
+            Some(ref mut fs) => {
+                match fs.region_at(BitIndex::bytes(self.cursor_pos), &mut self.file_manager)? {
+                    FileRegion::Segment(struct_id, rng) => {
+                        let assem_id = fs.get_assembly(struct_id)?;
+                        let buff = fs.assemble(&mut self.file_manager, assem_id)?;
+                        return Ok(buff)
+                    },
+                    _ => {
+                        todo!()
+                    }
+                }
+            },
+            None => todo!()
+        }
     }
 
     pub fn get_cursor_pos(&self) -> usize {
@@ -1733,7 +1751,7 @@ impl<'a> HexEdit<'a> {
                         self.current_field = Some((rng, true));
                         let s_name = fs.structure_name(struct_id);
                         Some(format!("[{}] Segment", s_name).to_string())
-                    }
+                    },
                     _ => todo!()
                 }
             } else {

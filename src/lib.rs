@@ -232,6 +232,23 @@ impl<'a> EditorStack<'a> {
         Ok(self.editors.len() - 1)
     }
 
+    fn push_no_file(&mut self, buffer: Vec<u8>, file_spec: Option<Rc<Structure>>) -> usize {
+        let fm = FileManager::from_buffer(buffer);
+        let mut hex_edit = HexEdit::new(fm, self.x, self.y, self.width, self.height,
+            16, self.show_filename, self.show_hex, self.show_ascii, // Line Length, Show filename, Show Hex, Show ASCII
+            '.', "  ".to_string(), self.caps);
+        if let Some(s) = file_spec {
+            hex_edit.set_file_spec(s);
+        }
+        
+        self.editors.push(HexEditManager {
+            hex_edit,
+            action_stack: ActionStack::new(256)
+        });
+
+        self.editors.len() - 1
+    }
+
     fn set_current(&mut self, index: usize) {
         self.current = index;
     }
@@ -289,6 +306,7 @@ enum CommandInstruction {
     Exit,
     ChangeState(EditState),
     Open(String),
+    NewEditor(Vec<u8>),
     Refresh
 }
 
@@ -495,7 +513,11 @@ impl<'a> App<'a> {
                             },
                             CommandToken::Keyword(CommandKeyword::Refresh) => {
                                 (CommandInstruction::Refresh, ActionResult::empty())
-                            }
+                            },
+                            CommandToken::Keyword(CommandKeyword::Step) => {
+                                let buff = self.editors.current_mut().hex_edit.assemble().unwrap();
+                                (CommandInstruction::NewEditor(buff), ActionResult::empty())
+                            },
                             _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
                         }
                     }
@@ -1231,6 +1253,15 @@ impl<'a> App<'a> {
                                     }
                                     self.edit_state = EditState::Escaped;
                                 }
+                            },
+                            CommandInstruction::NewEditor(buff) => {
+                                let i = self.editors.push_no_file(buff, None);
+                                self.editors.current = i;
+                                self.editors.current_mut().hex_edit.set_viewport_row(0);
+                                if let Some(window) = &mut window {
+                                    self.editors.current().hex_edit.draw(window);//.update(&mut window, UpdateDescription::All);
+                                }
+                                self.edit_state = EditState::Escaped;
                             },
                             CommandInstruction::Refresh => {
                                 //resize_term(0, 0);
