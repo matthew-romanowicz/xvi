@@ -833,7 +833,7 @@ struct FormatSummary {
     format: CharacterFormat
 }
 
-pub struct HexEdit<'a> {
+pub struct HexEdit {
     file_manager: FileManager,
     x: usize,
     y: usize,
@@ -860,7 +860,7 @@ pub struct HexEdit<'a> {
     display_data: Vec::<u8>,
     valid_bytes: usize,
     clipboard_registers: [Vec::<u8>; 32], //Needs to be 32 or less for Default::default() to work
-    file_spec: Option<FileMap<'a>>,
+    file_spec: Option<FileMap>,
     current_field: Option<(std::ops::Range<BitIndex>, bool)>, // (range, is_valid)
     related_fields: Vec<std::ops::Range<BitIndex>>
 }
@@ -901,10 +901,10 @@ pub fn vector_op<F>(buffer1: &mut Vec<u8>, buffer2: &Vec<u8>, op: F) where F: Fn
     }
 }
 
-impl<'a> HexEdit<'a> {
+impl HexEdit {
 
     pub fn new(mut file_manager: FileManager, x: usize, y: usize, width: usize, height: usize, line_length: u8, show_filename: bool, 
-                show_hex: bool, show_ascii: bool, invalid_ascii_char: char, separator: String, capitalize_hex: bool) -> HexEdit<'a> {
+                show_hex: bool, show_ascii: bool, invalid_ascii_char: char, separator: String, capitalize_hex: bool) -> HexEdit {
 
         // let fs = PngFileSpec::new(&mut file_manager);
         // let png_struct = make_png();
@@ -1027,6 +1027,7 @@ impl<'a> HexEdit<'a> {
                 Ok(string) => string,
                 Err(err) => return ActionResult::error(format!("Could not read file '{}'", fname).to_string())
             };
+            println!("Reading syntax file");
             let mut s = match Structure::from_xml(&xml, Some(Rc::new(fname.clone()))) {
                 Ok(s) => s,
                 Err(mut err) => {
@@ -1036,6 +1037,7 @@ impl<'a> HexEdit<'a> {
                     panic!()
                 }
             };
+            println!("Finished reading syntax file!");
             // s.set_fname(fname);
             let mut fs = FileMap::new(Rc::new(s), &mut self.file_manager);
             match fs.initialize(&mut self.file_manager) {
@@ -1063,18 +1065,31 @@ impl<'a> HexEdit<'a> {
 
     pub fn set_file_spec(&mut self, fs: Rc<Structure>) {
         let mut fs = FileMap::new(fs, &mut self.file_manager);
+        println!("starting init!");
         fs.initialize(&mut self.file_manager).unwrap();
-        self.file_spec = Some(fs)
+        println!("Finished init!");
+        self.file_spec = Some(fs);
     }
 
-    pub fn assemble(&mut self) -> Result<Vec<u8>, crate::hex_edit::file_specs::FileSpecError> {
+    pub fn set_file_map(&mut self, mut fs: FileMap) {
+        fs.initialize(&mut self.file_manager).unwrap();
+        self.file_spec = Some(fs);
+    }
+
+    pub fn assemble(&mut self) -> Result<(FileManager, FileMap), crate::hex_edit::file_specs::FileSpecError> {
         match &mut self.file_spec {
             Some(ref mut fs) => {
                 match fs.region_at(BitIndex::bytes(self.cursor_pos), &mut self.file_manager)? {
                     FileRegion::Segment(struct_id, rng) => {
                         let assem_id = fs.get_assembly(struct_id)?;
-                        let buff = fs.assemble(&mut self.file_manager, assem_id)?;
-                        return Ok(buff)
+                        return fs.get_file_map_for_struct(&mut self.file_manager, assem_id)
+                        // let buff = fs.assemble(&mut self.file_manager, assem_id)?;
+                        // return Ok(buff)
+                    },
+                    FileRegion::Compressed(struct_id, rng) => {
+                        return fs.get_file_map_for_struct(&mut self.file_manager, struct_id)
+                        // let buff = fs.assemble(&mut self.file_manager, assem_id)?;
+                        // return Ok(buff)
                     },
                     _ => {
                         todo!()
@@ -1751,6 +1766,11 @@ impl<'a> HexEdit<'a> {
                         self.current_field = Some((rng, true));
                         let s_name = fs.structure_name(struct_id);
                         Some(format!("[{}] Segment", s_name).to_string())
+                    },
+                    FileRegion::Compressed(struct_id, rng) => {
+                        self.current_field = Some((rng, true));
+                        let s_name = fs.structure_name(struct_id);
+                        Some(format!("[{}] Compressed", s_name).to_string())
                     },
                     _ => todo!()
                 }

@@ -21,7 +21,7 @@ use crate::large_text_view::LargeTextView;
 mod hex_edit;
 use crate::hex_edit::{FileManager, Action, CompoundAction, ActionStack, UpdateDescription, 
         EditMode, ActionResult, ShowType, ByteOperation, FillType, shift_vector, 
-        vector_op, HexEdit, DataSource, Structure};
+        vector_op, HexEdit, DataSource, Structure, FileMap};
 pub use crate::hex_edit::FileManagerType;
 
 
@@ -163,12 +163,12 @@ const BUGS: &str = "Inputting numbers greater than usize maximum in commands/key
 Setting line length to value greater than width of terminal causes panic
 ";
 
-struct HexEditManager<'a> {
-    hex_edit: HexEdit<'a>,
+struct HexEditManager {
+    hex_edit: HexEdit,
     action_stack: ActionStack
 }
 
-impl<'a> HexEditManager<'a> {
+impl HexEditManager {
     fn undo(&mut self) -> ActionResult {
         self.action_stack.undo(&mut self.hex_edit)
     }
@@ -178,8 +178,8 @@ impl<'a> HexEditManager<'a> {
     }
 }
 
-struct EditorStack<'a> {
-    editors: Vec<HexEditManager<'a>>,
+struct EditorStack {
+    editors: Vec<HexEditManager>,
     current: usize,
     x: usize,
     y: usize,
@@ -195,8 +195,8 @@ struct EditorStack<'a> {
     clevel: u8
 }
 
-impl<'a> EditorStack<'a> {
-    fn new(x: usize, y: usize, width: usize, height: usize) -> EditorStack<'a> {
+impl EditorStack {
+    fn new(x: usize, y: usize, width: usize, height: usize) -> EditorStack {
         EditorStack {
             editors: Vec::new(),
             current: 0,
@@ -232,13 +232,13 @@ impl<'a> EditorStack<'a> {
         Ok(self.editors.len() - 1)
     }
 
-    fn push_no_file(&mut self, buffer: Vec<u8>, file_spec: Option<Rc<Structure>>) -> usize {
-        let fm = FileManager::from_buffer(buffer);
+    fn push_no_file(&mut self, fm: FileManager, file_map: Option<FileMap>) -> usize {
+        // let fm = FileManager::from_buffer(buffer);
         let mut hex_edit = HexEdit::new(fm, self.x, self.y, self.width, self.height,
             16, self.show_filename, self.show_hex, self.show_ascii, // Line Length, Show filename, Show Hex, Show ASCII
             '.', "  ".to_string(), self.caps);
-        if let Some(s) = file_spec {
-            hex_edit.set_file_spec(s);
+        if let Some(f) = file_map {
+            hex_edit.set_file_map(f);
         }
         
         self.editors.push(HexEditManager {
@@ -282,11 +282,11 @@ impl<'a> EditorStack<'a> {
     }
 
 
-    fn current<'b>(&'b self) -> &'b HexEditManager<'a> {
+    fn current<'b>(&'b self) -> &'b HexEditManager {
         &self.editors[self.current]
     }
 
-    fn current_mut<'b>(&'b mut self) -> &'b mut HexEditManager<'a> {
+    fn current_mut<'b>(&'b mut self) -> &'b mut HexEditManager {
         &mut self.editors[self.current]
     }
 
@@ -306,7 +306,7 @@ enum CommandInstruction {
     Exit,
     ChangeState(EditState),
     Open(String),
-    NewEditor(Vec<u8>),
+    NewEditor(FileManager, Option<FileMap>),
     Refresh
 }
 
@@ -364,11 +364,11 @@ impl MacroManager {
     }
 }
 
-struct App<'a> {
+struct App {
     width: usize,
     height: usize,
     edit_state: EditState,
-    editors: EditorStack<'a>,
+    editors: EditorStack,
     macro_manager: MacroManager,
     current_keystroke: Vec<char>,
     cursor_index_len: usize,
@@ -378,9 +378,9 @@ struct App<'a> {
     manual_view: LargeTextView
 }
 
-impl<'a> App<'a> {
+impl App {
 
-    fn new(width: usize, height: usize) -> App<'a> {
+    fn new(width: usize, height: usize) -> App {
         let editors = EditorStack::new(0, 0, width, height);
 
         let cursor_index_len = 0;
@@ -461,11 +461,11 @@ impl<'a> App<'a> {
         self.refresh_current_cursor(window);
     }
 
-    fn current_editor(&self) -> &'a HexEdit {
+    fn current_editor(&self) -> &HexEdit {
         &self.editors.editors[self.editors.current].hex_edit
     }
 
-    fn current_editor_mut(&mut self) -> &'a mut HexEdit {
+    fn current_editor_mut(&mut self) -> &mut HexEdit {
         &mut self.editors.editors[self.editors.current].hex_edit
     }
 
@@ -515,8 +515,8 @@ impl<'a> App<'a> {
                                 (CommandInstruction::Refresh, ActionResult::empty())
                             },
                             CommandToken::Keyword(CommandKeyword::Step) => {
-                                let buff = self.editors.current_mut().hex_edit.assemble().unwrap();
-                                (CommandInstruction::NewEditor(buff), ActionResult::empty())
+                                let (fm, file_map) = self.editors.current_mut().hex_edit.assemble().unwrap();
+                                (CommandInstruction::NewEditor(fm, Some(file_map)), ActionResult::empty())
                             },
                             _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
                         }
@@ -1254,8 +1254,8 @@ impl<'a> App<'a> {
                                     self.edit_state = EditState::Escaped;
                                 }
                             },
-                            CommandInstruction::NewEditor(buff) => {
-                                let i = self.editors.push_no_file(buff, None);
+                            CommandInstruction::NewEditor(fm, file_map) => {
+                                let i = self.editors.push_no_file(fm, file_map);
                                 self.editors.current = i;
                                 self.editors.current_mut().hex_edit.set_viewport_row(0);
                                 if let Some(window) = &mut window {
@@ -1423,7 +1423,7 @@ pub fn run(filename: String, file_manager_type: FileManagerType, extract: bool) 
 }
 
 #[cfg(test)]
-impl<'a> std::process::Termination for App<'a> {
+impl<'a> std::process::Termination for App {
     fn report(self) -> std::process::ExitCode {
         std::process::ExitCode::SUCCESS
     }
@@ -1432,6 +1432,28 @@ impl<'a> std::process::Termination for App<'a> {
 #[cfg(test)]
 mod app_string_tests {
     use super::*;
+
+    #[test]
+    fn stack_size() {
+        // panic!("{}", std::mem::size_of::<crate::hex_edit::Structure>());
+        backtrace::trace(|frame| {
+            println!("Stack Pointer: {:?}", frame.sp());
+            let ip = frame.ip();
+            let symbol_address = frame.symbol_address();
+
+            // Resolve this instruction pointer to a symbol name
+            backtrace::resolve_frame(frame, |symbol| {
+                if let Some(name) = symbol.name() {
+                    println!("Symbol name: {}", name);
+                }
+                if let Some(filename) = symbol.filename() {
+                    // ...
+                }
+            });
+            true
+        });
+        panic!()
+    }
 
     fn test_driver(app: &mut App, inputs: &str) {
         for c in inputs.chars() {
@@ -2448,7 +2470,7 @@ mod app_string_tests {
         assert_eq!(buff_expected, buff);
     }
 
-    fn register_unary_op_test<'a, F>(op_name: &str, op: F) -> App<'a> where F: Fn(&Vec<u8>) -> Vec<u8> {
+    fn register_unary_op_test<'a, F>(op_name: &str, op: F) -> App where F: Fn(&Vec<u8>) -> Vec<u8> {
         let mut app = App::new(50, 50);
         let mut window = None;
         app.init(&mut window, r"tests\exif2c08.png".to_string(), FileManagerType::RamOnly, false).unwrap();
@@ -2485,16 +2507,16 @@ mod app_string_tests {
     }
 
     #[test]
-    fn register_not_test<'a>() -> App<'a> {
+    fn register_not_test<'a>() -> App {
         register_unary_op_test("not", |a| a.iter().map(|b| !b).collect::<Vec<u8>>())
     }
 
     #[test]
-    fn register_swap_test<'a>() -> App<'a> {
+    fn register_swap_test<'a>() -> App {
         register_unary_op_test("swap", |a| a.iter().rev().cloned().collect::<Vec<u8>>())
     }
 
-    fn register_unary_op_undo_test<'a, F>(op_name: &str, op: F) -> App<'a> where F: Fn(&Vec<u8>) -> Vec<u8> {
+    fn register_unary_op_undo_test<'a, F>(op_name: &str, op: F) -> App where F: Fn(&Vec<u8>) -> Vec<u8> {
 
         let bytes_8_16 = vec![
             0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52
@@ -2532,16 +2554,16 @@ mod app_string_tests {
     }
 
     #[test]
-    fn register_not_undo_test<'a>() -> App<'a> {
+    fn register_not_undo_test<'a>() -> App {
         register_unary_op_undo_test("not", |a| a.iter().map(|b| !b).collect::<Vec<u8>>())
     }
 
     #[test]
-    fn register_swap_undo_test<'a>() -> App<'a> {
+    fn register_swap_undo_test<'a>() -> App {
         register_unary_op_undo_test("swap", |a| a.iter().rev().cloned().collect::<Vec<u8>>())
     }
 
-    fn register_unary_op_redo_test<'a, F>(op_name: &str, op: F) -> App<'a> where F: Fn(&Vec<u8>) -> Vec<u8> {
+    fn register_unary_op_redo_test<'a, F>(op_name: &str, op: F) -> App where F: Fn(&Vec<u8>) -> Vec<u8> {
 
         let bytes_8_16 = vec![
             0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52
@@ -2577,17 +2599,17 @@ mod app_string_tests {
     }
 
     #[test]
-    fn register_not_redo_test<'a>() -> App<'a> {
+    fn register_not_redo_test<'a>() -> App {
         register_unary_op_redo_test("not", |a| a.iter().map(|b| !b).collect::<Vec<u8>>())
     }
 
     #[test]
-    fn register_swap_redo_test<'a>() -> App<'a> {
+    fn register_swap_redo_test<'a>() -> App {
         register_unary_op_redo_test("swap", |a| a.iter().rev().cloned().collect::<Vec<u8>>())
     }
 
     #[test]
-    fn register_slice_test<'a>() -> App<'a> {
+    fn register_slice_test<'a>() -> App {
         let mut app = App::new(50, 50);
         let mut window = None;
         app.init(&mut window, r"tests\exif2c08.png".to_string(), FileManagerType::RamOnly, false).unwrap();
@@ -2650,7 +2672,7 @@ mod app_string_tests {
     }
 
     #[test]
-    fn register_slice_undo_test<'a>() -> App<'a> {
+    fn register_slice_undo_test<'a>() -> App {
 
         let bytes_8_16 = vec![
             0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52
@@ -2697,7 +2719,7 @@ mod app_string_tests {
     }
 
     #[test]
-    fn register_slice_redo_test<'a>() -> App<'a> {
+    fn register_slice_redo_test<'a>() -> App {
 
         let bytes_8_16 = vec![
             0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52
@@ -2744,7 +2766,7 @@ mod app_string_tests {
     }
 
     #[test]
-    fn register_clear_test<'a>() -> App<'a> {
+    fn register_clear_test<'a>() -> App {
         let mut app = App::new(50, 50);
         let mut window = None;
         app.init(&mut window, r"tests\exif2c08.png".to_string(), FileManagerType::RamOnly, false).unwrap();
@@ -2794,7 +2816,7 @@ mod app_string_tests {
     }
 
     #[test]
-    fn register_clear_undo_test<'a>() -> App<'a> {
+    fn register_clear_undo_test<'a>() -> App {
         let mut app = register_clear_test();
 
         let bytes_0_16 = vec![
@@ -2848,7 +2870,7 @@ mod app_string_tests {
     }
 
     #[test]
-    fn register_clear_redo_test<'a>() -> App<'a> {
+    fn register_clear_redo_test<'a>() -> App {
         let mut app = register_clear_undo_test();
 
         let bytes_0_16 = vec![
@@ -2912,7 +2934,7 @@ mod app_string_tests {
         lhs.iter().zip(rhs.iter().cycle()).map(op).collect()
     }
 
-    fn register_op_test<'a, F>(op_name: &str, op: F) -> App<'a> where F: Fn(&Vec<u8>, &Vec<u8>) -> Vec<u8> {
+    fn register_op_test<'a, F>(op_name: &str, op: F) -> App where F: Fn(&Vec<u8>, &Vec<u8>) -> Vec<u8> {
         let mut app = App::new(50, 50);
         let mut window = None;
         app.init(&mut window, r"tests\exif2c08.png".to_string(), FileManagerType::RamOnly, false).unwrap();
@@ -3050,42 +3072,42 @@ mod app_string_tests {
 
 
     #[test]
-    fn register_and_test<'a>() -> App<'a> {
+    fn register_and_test<'a>() -> App {
         register_op_test("and", |a, b| apply_elementwise(a, b, &|(c, d)| c & d))
     }
 
     #[test]
-    fn register_or_test<'a>() -> App<'a> {
+    fn register_or_test<'a>() -> App {
         register_op_test("or", |a, b| apply_elementwise(a, b, &|(c, d)| c | d))
     }
 
     #[test]
-    fn register_xor_test<'a>() -> App<'a> {
+    fn register_xor_test<'a>() -> App {
         register_op_test("xor", |a, b| apply_elementwise(a, b, &|(c, d)| c ^ d))
     }
 
     #[test]
-    fn register_nor_test<'a>() -> App<'a> {
+    fn register_nor_test<'a>() -> App {
         register_op_test("nor", |a, b| apply_elementwise(a, b, &|(c, d)| !(c | d)))
     }
 
     #[test]
-    fn register_nand_test<'a>() -> App<'a> {
+    fn register_nand_test<'a>() -> App {
         register_op_test("nand", |a, b| apply_elementwise(a, b, &|(c, d)| !(c & d)))
     }
 
     #[test]
-    fn register_xnor_test<'a>() -> App<'a> {
+    fn register_xnor_test<'a>() -> App {
         register_op_test("xnor", |a, b| apply_elementwise(a, b, &|(c, d)| !(c ^ d)))
     }
 
     #[test]
-    fn register_cat_test<'a>() -> App<'a> {
+    fn register_cat_test<'a>() -> App {
         register_op_test("cat", |a, b| a.clone().into_iter().chain(b.clone().into_iter()).collect())
     }
 
 
-    fn register_op_undo_test<'a, F>(op_name: &str, op: F) -> App<'a> where F: Fn(&Vec<u8>, &Vec<u8>) -> Vec<u8> {
+    fn register_op_undo_test<'a, F>(op_name: &str, op: F) -> App where F: Fn(&Vec<u8>, &Vec<u8>) -> Vec<u8> {
 
         let bytes_0_8 = vec![
             0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a
@@ -3232,41 +3254,41 @@ mod app_string_tests {
     }
 
     #[test]
-    fn register_and_undo_test<'a>() -> App<'a> {
+    fn register_and_undo_test<'a>() -> App {
         register_op_undo_test("and", |a, b| apply_elementwise(a, b, &|(c, d)| c & d))
     }
 
     #[test]
-    fn register_or_undo_test<'a>() -> App<'a> {
+    fn register_or_undo_test<'a>() -> App {
         register_op_undo_test("or", |a, b| apply_elementwise(a, b, &|(c, d)| c | d))
     }
 
     #[test]
-    fn register_xor_undo_test<'a>() -> App<'a> {
+    fn register_xor_undo_test<'a>() -> App {
         register_op_undo_test("xor", |a, b| apply_elementwise(a, b, &|(c, d)| c ^ d))
     }
 
     #[test]
-    fn register_nor_undo_test<'a>() -> App<'a> {
+    fn register_nor_undo_test<'a>() -> App {
         register_op_undo_test("nor", |a, b| apply_elementwise(a, b, &|(c, d)| !(c | d)))
     }
 
     #[test]
-    fn register_nand_undo_test<'a>() -> App<'a> {
+    fn register_nand_undo_test<'a>() -> App {
         register_op_undo_test("nand", |a, b| apply_elementwise(a, b, &|(c, d)| !(c & d)))
     }
 
     #[test]
-    fn register_xnor_undo_test<'a>() -> App<'a> {
+    fn register_xnor_undo_test<'a>() -> App {
         register_op_undo_test("xnor", |a, b| apply_elementwise(a, b, &|(c, d)| !(c ^ d)))
     }
 
     #[test]
-    fn register_cat_undo_test<'a>() -> App<'a> {
+    fn register_cat_undo_test<'a>() -> App {
         register_op_undo_test("cat", |a, b| a.clone().into_iter().chain(b.clone().into_iter()).collect())
     }
 
-    fn register_op_redo_test<'a, F>(op_name: &str, op: F) -> App<'a> where F: Fn(&Vec<u8>, &Vec<u8>) -> Vec<u8> {
+    fn register_op_redo_test<'a, F>(op_name: &str, op: F) -> App where F: Fn(&Vec<u8>, &Vec<u8>) -> Vec<u8> {
         let bytes_0_8 = vec![
             0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a
         ];
@@ -3403,37 +3425,37 @@ mod app_string_tests {
     }
 
     #[test]
-    fn register_and_redo_test<'a>() -> App<'a> {
+    fn register_and_redo_test<'a>() -> App {
         register_op_redo_test("and", |a, b| apply_elementwise(a, b, &|(c, d)| c & d))
     }
 
     #[test]
-    fn register_or_redo_test<'a>() -> App<'a> {
+    fn register_or_redo_test<'a>() -> App {
         register_op_redo_test("or", |a, b| apply_elementwise(a, b, &|(c, d)| c | d))
     }
 
     #[test]
-    fn register_xor_redo_test<'a>() -> App<'a> {
+    fn register_xor_redo_test<'a>() -> App {
         register_op_redo_test("xor", |a, b| apply_elementwise(a, b, &|(c, d)| c ^ d))
     }
 
     #[test]
-    fn register_nor_redo_test<'a>() -> App<'a> {
+    fn register_nor_redo_test<'a>() -> App {
         register_op_redo_test("nor", |a, b| apply_elementwise(a, b, &|(c, d)| !(c | d)))
     }
 
     #[test]
-    fn register_nand_redo_test<'a>() -> App<'a> {
+    fn register_nand_redo_test<'a>() -> App {
         register_op_redo_test("nand", |a, b| apply_elementwise(a, b, &|(c, d)| !(c & d)))
     }
 
     #[test]
-    fn register_xnor_redo_test<'a>() -> App<'a> {
+    fn register_xnor_redo_test<'a>() -> App {
         register_op_redo_test("xnor", |a, b| apply_elementwise(a, b, &|(c, d)| !(c ^ d)))
     }
 
     #[test]
-    fn register_cat_redo_test<'a>() -> App<'a> {
+    fn register_cat_redo_test<'a>() -> App {
         register_op_redo_test("cat", |a, b| a.clone().into_iter().chain(b.clone().into_iter()).collect())
     }
 

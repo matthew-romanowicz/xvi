@@ -1143,6 +1143,7 @@ impl Expr {
         let tokens = Expr::tokens_from_str_span(&input)?;
         let mut expr = Expr::from_tokens(&input, tokens)?;
         expr.span = Some(input.range());
+        info!("Finished parsing expr!");
         Ok(expr)
         
     }
