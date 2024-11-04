@@ -4,10 +4,18 @@
         <field id="png_sig" name="PNG Signature" length="8B" dtype="B"/>
     </section>
 
-    <repeat id="png_chunks" name="PNG Chunks" until="file.end" length-policy="expand">
+    <repeat id="png_chunks" name="PNG Chunks" until="EOF" length-policy="expand">
+        <export source="ihdr_width"/>
+        <export source="ihdr_height"/>
+        <export source="ihdr_bit_depth"/>
+        <export source="ihdr_color_type"/>
+
         <break condition="chunk_type == 'IEND'"/>
         <sequence id="chunk" name="Chunk" length-policy="fit">
 
+            <export source="ihdr_width"/>
+            <export source="ihdr_height"/>
+            <export source="ihdr_bit_depth"/>
             <export source="ihdr_color_type"/>
 
             <section-header id="chunk_header" name="Chunk Header" length="8B">
@@ -19,17 +27,25 @@
 
             <switch id="chunk_body" name="Chunk Body" value="chunk_type" length="bytes(chunk_length)">
 
+                <export source="ihdr_width"/>
+                <export source="ihdr_height"/>
+                <export source="ihdr_bit_depth"/>
                 <export source="ihdr_color_type"/>
+
                 <anchor id="chunk_body_start" offset="0B"/>
 
 
                 <switch-case check="$0 == 'IHDR'">
                     <section-body id="ihdr_body" name="IHDR Body" length-policy="expand">
+                        <export source="ihdr_width"/>
+                        <export source="ihdr_height"/>
+                        <export source="ihdr_bit_depth"/>
                         <export source="ihdr_color_type"/>
+
                         <field id="ihdr_width" name="Width" length="4B" dtype="U" endian="big" units="px"/>
                         <field id="ihdr_height" name="Height" length="4B" dtype="U" endian="big" units="px"/>
                         <field id="ihdr_bit_depth" name="Bit Depth" length="1B" dtype="U" endian="big"/>
-                        <field id="ihdr_color_type" name="Color Type" length="1B" dtype="U" endian="big">
+                        <field id="ihdr_color_type" name="Color Type" length="1B" dtype="U" endian="big" valid="$0 &lt;= 6">
                             <enum>
                                 <enum-case index="0" value="Grayscale"/>
                                 <enum-case index="2" value="Truecolor"/>
@@ -39,19 +55,19 @@
                                 <enum-else value="Invalid"/>
                             </enum>
                         </field>
-                        <field id="ihdr_compression_method" name="Compression Method" length="1B" dtype="U" endian="big">
+                        <field id="ihdr_compression_method" name="Compression Method" length="1B" dtype="U" endian="big" valid="$0 == 0">
                             <enum>
                                 <enum-case index="0" value="Only Accepted Value"/>
                                 <enum-else value="Invalid"/>
                             </enum>
                         </field>
-                        <field id="ihdr_filter_method" name="Filter Method" length="1B" dtype="U" endian="big">
+                        <field id="ihdr_filter_method" name="Filter Method" length="1B" dtype="U" endian="big" valid="$0 == 0">
                             <enum>
                                 <enum-case index="0" value="Only Accepted Value"/>
                                 <enum-else value="Invalid"/>
                             </enum>
                         </field>
-                        <field id="ihdr_interlace_method" name="Interlace Method" length="1B" dtype="U" endian="big">
+                        <field id="ihdr_interlace_method" name="Interlace Method" length="1B" dtype="U" endian="big" valid="$0 &lt;= 1">
                             <enum>
                                 <enum-case index="0" value="No Interlace"/>
                                 <enum-case index="1" value="Adam7 Interlace"/>
@@ -59,6 +75,10 @@
                             </enum>
                         </field>
                     </section-body>
+                </switch-case>
+
+                <switch-case check="$0 == 'IDAT'">
+                    <segment id="idat_body" length="bytes(chunk_length)"></segment>
                 </switch-case>
 
                 <!-- https://www.w3.org/TR/png/#11PLTE -->
@@ -293,5 +313,79 @@
 
         </sequence>
     </repeat>
+
+    <assembly id="idat_assembly" segments="idat_body" length="0B">
+
+        <!-- https://www.rfc-editor.org/rfc/rfc1950 -->
+        <sequence length-policy="expand">
+            <section-header id="zlib_header" name="ZLIB Header" length="2B">
+                <export source="zlib_cm"/>
+                <export source="zlib_fdict"/>
+                <field id="zlib_cinfo" name="ZLIB Compression Info" dtype="U" length="4b"/>
+                <field id="zlib_cm" name="ZLIB Compression Method" dtype="U" length="4b" align="1b">
+                    <enum>
+                        <enum-case index="8" value="DEFLATE"/>
+                        <enum-case index="15" value="Reserved"/>
+                        <enum-else value="Invalid"/>
+                    </enum>
+                </field>
+                <field id="zlib_flevel" name="ZLIB Compression Level" dtype="U" length="2b"/>
+                <field id="zlib_fdict" name="ZLIB Dictionary" dtype="U" length="1b" align="1b"/>
+                <!-- TODO: Actually check this checksum -->
+                <field id="zlib_fcheck" name="ZLIB Checksum" dtype="U" length="5b" align="1b"/>
+            </section-header>
+            <switch value="zlib_fdict">
+                <switch-case check="$0 == 1">
+                    <section-header>
+                        <field id="zlib_dict" name="ZLIB Dictionary ID" dtype="B" length="2B"/> 
+                    </section-header>
+                </switch-case>
+                <switch-else>
+                    <section></section>
+                </switch-else>
+            </switch>
+            <switch value="zlib_cm" length-policy="expand">
+                <switch-case check="$0 == 8">
+                    <compressed id="idat_deflate" method="deflate" length-policy="expand">
+                        <switch value="ihdr_color_type">
+                            <switch-case check="$0 == 2">
+                                <repeat id="idat_samples" n="ihdr_height">
+                                    <sequence>
+                                        <section>
+                                            <field id="idat_filter_type" name="Filter Type" dtype="U" length="1B">
+                                                <enum>
+                                                    <enum-case index="0" value="None"/>
+                                                    <enum-case index="2" value="Sub"/>
+                                                    <enum-case index="3" value="Up"/>
+                                                    <enum-case index="4" value="Average"/>
+                                                    <enum-case index="6" value="Paeth"/>
+                                                    <enum-else value="Invalid"/>
+                                                </enum>
+                                            </field>
+                                        </section>
+                                        <repeat n="ihdr_width">
+                                            <section id="idat_scanline" name="IDAT Scanline">
+                                                <field id="idat_sample" name="IDAT Sample" dtype="U" length="3B"/>
+                                            </section>
+                                        </repeat>
+                                    </sequence>
+                                </repeat>
+                            </switch-case>
+                            <switch-else>
+                                <section></section>
+                            </switch-else>
+                        </switch>
+                    </compressed>
+                </switch-case>
+                <switch-else>
+                    <section length-policy="expand"></section>
+                </switch-else>
+            </switch>
+            <section-footer id="zlib_footer" name="ZLIB Footer" length="4B">
+                <!-- TODO: Actually check this checksum -->
+                <field id="zlib_adler32" name="ZLIB ADLER32" dtype="B" length="4B"/>
+            </section-footer>
+        </sequence>
+    </assembly>
 
 </sequence>

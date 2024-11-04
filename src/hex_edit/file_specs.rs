@@ -4,7 +4,7 @@ use std::io::Write;
 
 use bitutils2::{BitIndex, BitField, BinRegex};
 use xmlparser::{Tokenizer, Token, ElementEnd, StrSpan};
-use flate2::write::ZlibDecoder;
+use flate2::write::DeflateDecoder;
 use log::*;
 
 fn get_index_from_row_col(input: &str, row: usize, col: usize) -> usize {
@@ -4159,7 +4159,7 @@ impl PartiallyResolvedStructure {
                 let mut buffer = vec![0; end.ceil().byte() - start.byte()];
                 fm.get_bytes(start.byte(), &mut buffer)?;
 
-                let mut e = ZlibDecoder::new(Vec::new());
+                let mut e = DeflateDecoder::new(Vec::new());
                 if let Err(msg) = e.write_all(&buffer) {
                     println!("{:?}", buffer);
                     panic!("{}", msg)
@@ -5320,35 +5320,35 @@ impl FileMap {
 
     /// Returns a list of fields that are related to the given field. Related fields include
     /// those used to derive ancestral switch values, addressed positions, and repetitions
-    pub fn related_fields(&self, field: FieldIdent) -> Vec<FieldIdent> {
-        info!("Getting related fields for {}", field);
+    pub fn related_fields(&self, structure: &StructureIdent) -> Vec<FieldIdent> {
+        info!("Getting related fields for {}", structure);
         let mut related = Vec::new();
-        let mut structure = self.prs_map.get(&field.structure).unwrap();
+        let mut structure = self.prs_map.get(structure).unwrap();//self.prs_map.get(&field.structure).unwrap();
         loop {
             match structure.borrow().stype.as_ref() {
                 PartiallyResolvedStructureType::Switch{value, ..} => {
                     for s in value.vars() {
-                        match structure.borrow().get_source_field(s, &self.prs_map) {
+                        match structure.borrow().get_source_field(s.clone(), &self.prs_map) {
                             Ok(Some(fid)) => related.push(fid),
-                            Ok(None) => info!("{} must be a derived field", field),
+                            Ok(None) => info!("{} must be a derived field", s),
                             Err(err) => error!("Error while finding related fields: {}", err)
                         }
                     }
                 },
                 PartiallyResolvedStructureType::Repeat{n, ..} => {
                     for s in n.vars() {
-                        match structure.borrow().get_source_field(s, &self.prs_map) {
+                        match structure.borrow().get_source_field(s.clone(), &self.prs_map) {
                             Ok(Some(fid)) => related.push(fid),
-                            Ok(None) => info!("{} must be a derived field", field),
+                            Ok(None) => info!("{} must be a derived field", s),
                             Err(err) => error!("Error while finding related fields: {}", err)
                         }
                     }
                 },
                 PartiallyResolvedStructureType::RepeatUntil{end, ..} => {
                     for s in end.vars() {
-                        match structure.borrow().get_source_field(s, &self.prs_map) {
+                        match structure.borrow().get_source_field(s.clone(), &self.prs_map) {
                             Ok(Some(fid)) => related.push(fid),
-                            Ok(None) => info!("{} must be a derived field", field),
+                            Ok(None) => info!("{} must be a derived field", s),
                             Err(err) => error!("Error while finding related fields: {}", err)
                         }
                     }
@@ -5357,9 +5357,9 @@ impl FileMap {
                     info!("Addressed parent");
                     for s in position.vars() {
                         info!("Position var: {}", s);
-                        match structure.borrow().get_source_field(s, &self.prs_map) {
+                        match structure.borrow().get_source_field(s.clone(), &self.prs_map) {
                             Ok(Some(fid)) => related.push(fid),
-                            Ok(None) => info!("{} must be a derived field", field),
+                            Ok(None) => info!("{} must be a derived field", s),
                             Err(err) => error!("Error while finding related fields: {}", err)
                         }
                     }
@@ -5383,9 +5383,9 @@ impl FileMap {
                                 &seq[i - 1]
                             };
                             for s in next.vars() {
-                                match context.borrow().get_source_field(s, &self.prs_map) {
+                                match context.borrow().get_source_field(s.clone(), &self.prs_map) {
                                     Ok(Some(fid)) => related.push(fid),
-                                    Ok(None) => info!("{} must be a derived field", field),
+                                    Ok(None) => info!("{} must be a derived field", s),
                                     Err(err) => error!("Error while finding related fields: {}", err)
                                 }
                             }

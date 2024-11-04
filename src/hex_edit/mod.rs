@@ -1,6 +1,7 @@
 use std::rc::Rc;
 use std::io::SeekFrom;
 use std::io::Write;
+use std::collections::HashMap;
 
 use flate2::write::DeflateEncoder;
 use flate2::write::DeflateDecoder;
@@ -1740,7 +1741,7 @@ impl HexEdit {
                         let field = fs.get_field(field_id.clone(), &mut self.file_manager).unwrap();
                         let field_valid = fs.get_field_valid(field_id.clone(), &mut self.file_manager).unwrap();
                         self.current_field = Some((field.start..(field.start + field.span), field_valid));
-                        for fid in fs.related_fields(field_id.clone()) {
+                        for fid in fs.related_fields(&field_id.structure) {
                             let related_field = fs.get_field(fid, &mut self.file_manager).unwrap();
                             self.related_fields.push(related_field.start..(related_field.start + related_field.span));
                         }
@@ -1759,16 +1760,28 @@ impl HexEdit {
                     },
                     FileRegion::Spare(struct_id, rng) => {
                         self.current_field = Some((rng, true));
+                        for fid in fs.related_fields(&struct_id) {
+                            let related_field = fs.get_field(fid, &mut self.file_manager).unwrap();
+                            self.related_fields.push(related_field.start..(related_field.start + related_field.span));
+                        }
                         let s_name = fs.structure_name(struct_id);
                         Some(format!("[{}] Spare", s_name).to_string())
                     },
                     FileRegion::Segment(struct_id, rng) => {
                         self.current_field = Some((rng, true));
+                        for fid in fs.related_fields(&struct_id) {
+                            let related_field = fs.get_field(fid, &mut self.file_manager).unwrap();
+                            self.related_fields.push(related_field.start..(related_field.start + related_field.span));
+                        }
                         let s_name = fs.structure_name(struct_id);
                         Some(format!("[{}] Segment", s_name).to_string())
                     },
                     FileRegion::Compressed(struct_id, rng) => {
                         self.current_field = Some((rng, true));
+                        for fid in fs.related_fields(&struct_id) {
+                            let related_field = fs.get_field(fid, &mut self.file_manager).unwrap();
+                            self.related_fields.push(related_field.start..(related_field.start + related_field.span));
+                        }
                         let s_name = fs.structure_name(struct_id);
                         Some(format!("[{}] Compressed", s_name).to_string())
                     },
@@ -2141,25 +2154,29 @@ impl HexEdit {
         let mut highlights = vec![];
         if let Some((h, v)) = &self.current_field {
             if *v {
-                highlights.push((h.start.byte(), h.end.byte(), 1));
+                highlights.push((h.start, h.end, 1));
             } else {
-                highlights.push((h.start.byte(), h.end.byte(), 3));
+                highlights.push((h.start, h.end, 3));
             }
             
         }
 
         for h in &self.related_fields {
-            highlights.push((h.start.byte(), h.end.byte(), 2));
+            highlights.push((h.start, h.end, 2));
         }
 
         for h in &self.highlights {
-            highlights.push((h.start, h.start + h.span, 0));
+            highlights.push((BitIndex::bytes(h.start), BitIndex::bytes(h.start + h.span), 0));
         }
 
+        // println!("{:?}", highlights);
+
+        let mut bit_offset_indicators = HashMap::new();
+
         for (h_start, h_end, attr_index) in highlights {
-            if h_end > start && h_start < end { // If the highlight is in the viewport
-                let first_line = (h_start / (self.line_length as usize)) as isize - (self.start_line as isize);
-                let last_line = ((h_end) / (self.line_length as usize)) as isize - (self.start_line as isize);
+            if h_end.byte() >= start && h_start.byte() < end { // If the highlight is in the viewport
+                let first_line = (h_start.byte() / (self.line_length as usize)) as isize - (self.start_line as isize);
+                let last_line = ((h_end.byte()) / (self.line_length as usize)) as isize - (self.start_line as isize);
                 // if (h_start + h.span) % (self.line_length as usize) == 0 {
                 //     last_line -= 1;
                 // }
@@ -2168,10 +2185,30 @@ impl HexEdit {
                     let mut x1 = 0;
                     let mut x2 = self.line_length as usize;
                     if y == first_line {
-                        x1 = h_start % (self.line_length as usize);
+                        x1 = h_start.byte() % (self.line_length as usize);
+
+                        if h_start.bit() != 0 {
+                            let boi_index = (top_margin + y as i32, (x1*3 + hex_offset - 1) as i32);
+                            if bit_offset_indicators.contains_key(&boi_index) {
+                                bit_offset_indicators.insert(boi_index, "?");
+                            } else {
+                                bit_offset_indicators.insert(boi_index, ["0", "1", "2", "3", "4", "5", "6", "7"][h_start.bit() as usize]);
+                            }
+                        }
+                        // window.mvaddstr(top_margin + y as i32, (x1*3 + hex_offset - 1) as i32, );
                     }
                     if y == last_line {
-                        x2 = (h_end) % (self.line_length as usize);
+                        x2 = (h_end.byte()) % (self.line_length as usize);
+
+                        if h_end.bit() != 0 {
+                            let boi_index = (top_margin + y as i32, (x2*3 + hex_offset - 1) as i32);
+                            if bit_offset_indicators.contains_key(&boi_index) {
+                                bit_offset_indicators.insert(boi_index, "?");
+                            } else {
+                                bit_offset_indicators.insert(boi_index, ["!", "@", "#", "$", "%", "^", "&", "*"][h_end.bit() as usize]);
+                            }
+                        }
+                        // window.mvaddstr(top_margin + y as i32, (x2*3 + hex_offset - 1) as i32, ["!", "@", "#", "$", "%", "^", "&", "*"][h_end.bit() as usize]);
                     }
                     // println!("y={}, x1={}, x2={}, h_start={}, h.span={}, line_length={}", y, x1, x2, h_start, h.span, self.line_length);
                     if x1 != x2 {
@@ -2180,6 +2217,10 @@ impl HexEdit {
                     }
                 }
             }
+        }
+
+        for ((y, x), ch) in bit_offset_indicators {
+            window.mvaddstr(y, x, ch);
         }
         
 
