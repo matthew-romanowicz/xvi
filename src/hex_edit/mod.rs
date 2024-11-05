@@ -1349,7 +1349,7 @@ impl HexEdit {
         if register >= 32 {
             return ActionResult::error("Register number must be less than 32".to_string())
         }
-        let original_bytes = self.clipboard_registers[register as usize].clone(); // TODO: use take here
+        let original_bytes = std::mem::take(&mut self.clipboard_registers[register as usize]);
         let mut op_bytes = match &fill {
             FillType::Bytes(bytes) => {
                 bytes.clone()
@@ -1359,7 +1359,7 @@ impl HexEdit {
             }
         };
 
-        self.clipboard_registers[register as usize] = op.apply(&self.clipboard_registers[register as usize], &op_bytes);
+        self.clipboard_registers[register as usize] = op.apply(&original_bytes, &op_bytes);
         ActionResult {
             alert: None,
             alert_type: AlertType::None,
@@ -1372,10 +1372,10 @@ impl HexEdit {
         if register >= 32 {
             return ActionResult::error("Register number must be less than 32".to_string())
         }
-        if shift < 0 { // TODO: use 'take' here
-            self.clipboard_registers[register as usize] = self.clipboard_registers[register as usize].clone() << (shift.abs() as usize);
+        if shift < 0 {
+            self.clipboard_registers[register as usize] = std::mem::take(&mut self.clipboard_registers[register as usize]) << (shift.abs() as usize);
         } else {
-            self.clipboard_registers[register as usize] = self.clipboard_registers[register as usize].clone() >> (shift as usize);
+            self.clipboard_registers[register as usize] = std::mem::take(&mut self.clipboard_registers[register as usize]) >> (shift as usize);
         }
         ActionResult {
             alert: None,
