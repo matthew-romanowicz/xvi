@@ -815,71 +815,11 @@ impl App {
                                         } else if *n1 < 64 {
                                             if *n2 < 32 {
                                                 let mut fill = self.editors.current_mut().hex_edit.get_register(*n2 as u8).unwrap();
-                                                // TODO: Use a bitfield method here
-                                                let len = fill.len();
-                                                let repetitions = (self.editors.clipboard_registers[*n1 - 32].len().total_bits() / len.total_bits()) as usize;
-                                                fill.repeat(repetitions + 1);
-                                                fill.truncate(&self.editors.clipboard_registers[*n1 - 32].len());
-                                                match op {
-                                                    // ByteOperation::And => vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| a & b),
-                                                    // ByteOperation::Or => vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| a | b),
-                                                    // ByteOperation::Nand => vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| !(a & b)),
-                                                    // ByteOperation::Nor => vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| !(a | b)),
-                                                    // ByteOperation::Xor => vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| a ^ b),
-                                                    // ByteOperation::Xnor => vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| !(a ^ b))
-                                                    ByteOperation::And => {
-                                                        self.editors.clipboard_registers[*n1 - 32] = &self.editors.clipboard_registers[*n1 - 32] & (&fill);
-                                                    },
-                                                    ByteOperation::Or => {
-                                                        self.editors.clipboard_registers[*n1 - 32] = &self.editors.clipboard_registers[*n1 - 32] | (&fill);
-                                                    },
-                                                    ByteOperation::Nand => {
-                                                        self.editors.clipboard_registers[*n1 - 32] = !&(&self.editors.clipboard_registers[*n1 - 32] & (&fill));
-                                                    },
-                                                    ByteOperation::Nor => {
-                                                        self.editors.clipboard_registers[*n1 - 32] = !&(&self.editors.clipboard_registers[*n1 - 32] | (&fill));
-                                                    },
-                                                    ByteOperation::Xor => {
-                                                        self.editors.clipboard_registers[*n1 - 32] = &self.editors.clipboard_registers[*n1 - 32]^ (&fill);
-                                                    },
-                                                    ByteOperation::Xnor => {
-                                                        self.editors.clipboard_registers[*n1 - 32] = !&(&self.editors.clipboard_registers[*n1 - 32] ^ (&fill));
-                                                    }
-                                                };
+                                                self.editors.clipboard_registers[*n1 - 32] = op.apply(&self.editors.clipboard_registers[*n1 - 32], &fill);
                                                 (CommandInstruction::NoOp, ActionResult::empty())
                                             } else if *n2 < 64 { 
                                                 let mut fill = self.editors.clipboard_registers[*n2 - 32].clone();
-                                                // TODO: Use a bitfield method here
-                                                let len = fill.len();
-                                                let repetitions = (self.editors.clipboard_registers[*n1 - 32].len().total_bits() / len.total_bits()) as usize;
-                                                fill.repeat(repetitions + 1);
-                                                fill.truncate(&self.editors.clipboard_registers[*n1 - 32].len());
-                                                match op {
-                                                    // ByteOperation::And => vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| a & b),
-                                                    // ByteOperation::Or => vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| a | b),
-                                                    // ByteOperation::Nand => vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| !(a & b)),
-                                                    // ByteOperation::Nor => vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| !(a | b)),
-                                                    // ByteOperation::Xor => vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| a ^ b),
-                                                    // ByteOperation::Xnor => vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| !(a ^ b))
-                                                    ByteOperation::And => {
-                                                        self.editors.clipboard_registers[*n1 - 32] = &self.editors.clipboard_registers[*n1 - 32] & (&fill);
-                                                    },
-                                                    ByteOperation::Or => {
-                                                        self.editors.clipboard_registers[*n1 - 32] = &self.editors.clipboard_registers[*n1 - 32] | (&fill);
-                                                    },
-                                                    ByteOperation::Nand => {
-                                                        self.editors.clipboard_registers[*n1 - 32] = !&(&self.editors.clipboard_registers[*n1 - 32] & (&fill));
-                                                    },
-                                                    ByteOperation::Nor => {
-                                                        self.editors.clipboard_registers[*n1 - 32] = !&(&self.editors.clipboard_registers[*n1 - 32] | (&fill));
-                                                    },
-                                                    ByteOperation::Xor => {
-                                                        self.editors.clipboard_registers[*n1 - 32] = &self.editors.clipboard_registers[*n1 - 32]^ (&fill);
-                                                    },
-                                                    ByteOperation::Xnor => {
-                                                        self.editors.clipboard_registers[*n1 - 32] = !&(&self.editors.clipboard_registers[*n1 - 32] ^ (&fill));
-                                                    }
-                                                };
+                                                self.editors.clipboard_registers[*n1 - 32] = op.apply(&self.editors.clipboard_registers[*n1 - 32], &fill);
                                                 (CommandInstruction::NoOp, ActionResult::empty())
                                             } else {
                                                 (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
@@ -896,37 +836,7 @@ impl App {
                                                     (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.manipulate_register(*n as u8, FillType::Bytes(BitField::from_vec(v)), op))
                                                 } else if *n < 64 {
                                                     let mut fill = BitField::from_vec(v);
-                                                    // TODO: Use a bitfield method here
-                                                    let len = fill.len();
-                                                    let repetitions = (self.editors.clipboard_registers[*n - 32].len().total_bits() / len.total_bits()) as usize;
-                                                    fill.repeat(repetitions + 1);
-                                                    fill.truncate(&self.editors.clipboard_registers[*n - 32].len());
-                                                    match op {
-                                                        // ByteOperation::And => vector_op(&mut self.editors.clipboard_registers[*n - 32], &v, |a, b| a & b),
-                                                        // ByteOperation::Or => vector_op(&mut self.editors.clipboard_registers[*n - 32], &v, |a, b| a | b),
-                                                        // ByteOperation::Nand => vector_op(&mut self.editors.clipboard_registers[*n - 32], &v, |a, b| !(a & b)),
-                                                        // ByteOperation::Nor => vector_op(&mut self.editors.clipboard_registers[*n - 32], &v, |a, b| !(a | b)),
-                                                        // ByteOperation::Xor => vector_op(&mut self.editors.clipboard_registers[*n - 32], &v, |a, b| a ^ b),
-                                                        // ByteOperation::Xnor => vector_op(&mut self.editors.clipboard_registers[*n - 32], &v, |a, b| !(a ^ b))
-                                                        ByteOperation::And => {
-                                                            self.editors.clipboard_registers[*n - 32] = &self.editors.clipboard_registers[*n - 32] & (&fill);
-                                                        },
-                                                        ByteOperation::Or => {
-                                                            self.editors.clipboard_registers[*n - 32] = &self.editors.clipboard_registers[*n - 32] | (&fill);
-                                                        },
-                                                        ByteOperation::Nand => {
-                                                            self.editors.clipboard_registers[*n - 32] = !&(&self.editors.clipboard_registers[*n - 32] & (&fill));
-                                                        },
-                                                        ByteOperation::Nor => {
-                                                            self.editors.clipboard_registers[*n - 32] = !&(&self.editors.clipboard_registers[*n - 32] | (&fill));
-                                                        },
-                                                        ByteOperation::Xor => {
-                                                            self.editors.clipboard_registers[*n - 32] = &self.editors.clipboard_registers[*n - 32]^ (&fill);
-                                                        },
-                                                        ByteOperation::Xnor => {
-                                                            self.editors.clipboard_registers[*n - 32] = !&(&self.editors.clipboard_registers[*n - 32] ^ (&fill));
-                                                        }
-                                                    };
+                                                    self.editors.clipboard_registers[*n - 32] = op.apply(&self.editors.clipboard_registers[*n - 32], &fill);
                                                     (CommandInstruction::NoOp, ActionResult::empty())
                                                 } else {
                                                     (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))

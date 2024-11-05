@@ -63,6 +63,37 @@ pub enum ByteOperation {
     Xnor
 }
 
+impl ByteOperation {
+    pub fn apply(&self, lhs: &BitField, rhs: &BitField) -> BitField {
+        // TODO: Use a bitfield method here
+        // let len = fill.len();
+        let repetitions = (lhs.len().total_bits() / rhs.len().total_bits()) as usize;
+        let mut rhs = rhs.clone();
+        rhs.repeat(repetitions + 1);
+        rhs.truncate(&lhs.len());
+        match self {
+            ByteOperation::And => {
+                lhs & (&rhs)
+            },
+            ByteOperation::Or => {
+                lhs | (&rhs)
+            },
+            ByteOperation::Nand => {
+                !&(lhs & (&rhs))
+            },
+            ByteOperation::Nor => {
+                !&(lhs | (&rhs))
+            },
+            ByteOperation::Xor => {
+                lhs ^ (&rhs)
+            },
+            ByteOperation::Xnor => {
+                !&(lhs ^ (&rhs))
+            }
+        }
+    }
+}
+
 pub struct Highlight {
     pub start: usize,
     pub span: usize
@@ -1245,7 +1276,6 @@ impl HexEdit {
         if register >= 32 {
             return ActionResult::error("Register number must be less than 32".to_string())
         }
-        // self.clipboard_registers[register as usize].reverse();
         // TODO: Consider swap_le_to_be?
         self.clipboard_registers[register as usize].swap_be_to_le();
         ActionResult {
@@ -1260,8 +1290,6 @@ impl HexEdit {
         if register >= 32 {
             return ActionResult::error("Register number must be less than 32".to_string())
         }
-        // let new = self.clipboard_registers[register as usize].iter().map(|x| !x).collect();
-        // self.clipboard_registers[register as usize] = new;
         self.clipboard_registers[register as usize] = !&self.clipboard_registers[register as usize];
         ActionResult {
             alert: None,
@@ -1331,38 +1359,7 @@ impl HexEdit {
             }
         };
 
-        // TODO: Use a bitfield method here
-        let len = op_bytes.len();
-        let repetitions = (self.clipboard_registers[register as usize].len().total_bits() / len.total_bits()) as usize;
-        op_bytes.repeat(repetitions + 1);
-        op_bytes.truncate(&self.clipboard_registers[register as usize].len());
-        
-        match op {
-            ByteOperation::And => {
-                //vector_op(&mut self.clipboard_registers[register as usize], &op_bytes, |a, b| a & b)
-                self.clipboard_registers[register as usize] = &self.clipboard_registers[register as usize] & (&op_bytes);
-            },
-            ByteOperation::Or => {
-                // vector_op(&mut self.clipboard_registers[register as usize], &op_bytes, |a, b| a | b)
-                self.clipboard_registers[register as usize] = &self.clipboard_registers[register as usize] | (&op_bytes);
-            },
-            ByteOperation::Nand => {
-                // vector_op(&mut self.clipboard_registers[register as usize], &op_bytes, |a, b| !(a & b))
-                self.clipboard_registers[register as usize] = !&(&self.clipboard_registers[register as usize] & (&op_bytes));
-            },
-            ByteOperation::Nor => {
-                // vector_op(&mut self.clipboard_registers[register as usize], &op_bytes, |a, b| !(a | b))
-                self.clipboard_registers[register as usize] = !&(&self.clipboard_registers[register as usize] | (&op_bytes));
-            },
-            ByteOperation::Xor => {
-                // vector_op(&mut self.clipboard_registers[register as usize], &op_bytes, |a, b| a ^ b)
-                self.clipboard_registers[register as usize] = &self.clipboard_registers[register as usize]^ (&op_bytes);
-            },
-            ByteOperation::Xnor => {
-                self.clipboard_registers[register as usize] = !&(&self.clipboard_registers[register as usize] ^ (&op_bytes));
-                // vector_op(&mut self.clipboard_registers[register as usize], &op_bytes, |a, b| !(a ^ b))
-            }
-        };
+        self.clipboard_registers[register as usize] = op.apply(&self.clipboard_registers[register as usize], &op_bytes);
         ActionResult {
             alert: None,
             alert_type: AlertType::None,
@@ -1398,7 +1395,6 @@ impl HexEdit {
 
     }
 
-    // pub fn slice_register(&mut self, register: u8, n1: usize, n2: usize) -> ActionResult {
     pub fn slice_register(&mut self, register: u8, n1: BitIndex, n2: BitIndex) -> ActionResult {
         if register >= 32 {
             return ActionResult::error("Register number must be less than 32".to_string())
@@ -1409,10 +1405,6 @@ impl HexEdit {
         } else if n1 > n2 {
             ActionResult::error("Slice start index greater than slice end index".to_string())
         } else {
-            // let temp = &self.clipboard_registers[register as usize][n1..n2];
-            // let left = self.clipboard_registers[register as usize][..n1].to_vec();
-            // let right = self.clipboard_registers[register as usize][n2..].to_vec();
-            // self.clipboard_registers[register as usize] = temp.to_vec();
             let temp = self.clipboard_registers[register as usize].bit_slice(&n1, &n2);
             let left = self.clipboard_registers[register as usize].bit_slice(&BitIndex::zero(), &n1);
             let register_len = self.clipboard_registers[register as usize].len();
