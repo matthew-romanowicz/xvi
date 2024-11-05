@@ -9,6 +9,8 @@ use flate2::Compression;
 extern crate pancurses;
 use pancurses::{initscr, endwin, Input, noecho, Window, resize_term, start_color, init_color, init_pair, COLORS, COLOR_PAIRS};
 
+use bitutils2::{BitIndex, BitField, BitIndexable};
+
 mod expr;
 use crate::expr::*;
 
@@ -185,7 +187,7 @@ struct EditorStack {
     y: usize,
     width: usize,
     height: usize,
-    clipboard_registers: [Vec<u8>; 32],
+    clipboard_registers: [BitField; 32],
     endianness: Endianness,
     cnum: ShowType,
     show_hex: bool,
@@ -290,7 +292,7 @@ impl EditorStack {
         &mut self.editors[self.current]
     }
 
-    fn get_current_register(&self, index: usize) -> Result<Vec<u8>, String> {
+    fn get_current_register(&self, index: usize) -> Result<BitField, String> {
         if index < 32 {
             self.current().hex_edit.get_register(index as u8)
         } else if index < 64 {
@@ -527,7 +529,9 @@ impl App {
                                 if *n < 32 {
                                     (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.swap_register(*n as u8))
                                 } else if *n < 64 {
-                                    self.editors.clipboard_registers[*n - 32].reverse();
+                                    // self.editors.clipboard_registers[*n - 32].reverse();
+                                    // TODO: Consider swap_le_to_be
+                                    self.editors.clipboard_registers[*n - 32].swap_be_to_le();
                                     (CommandInstruction::NoOp, ActionResult::empty())
                                 } else {
                                     (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
@@ -538,8 +542,9 @@ impl App {
                                 if *n < 32 {
                                     (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.invert_register(*n as u8))
                                 } else if *n < 64 {
-                                    let new = self.editors.clipboard_registers[*n - 32].iter().map(|x| !x).collect();
-                                    self.editors.clipboard_registers[*n - 32] = new;
+                                    // let new = self.editors.clipboard_registers[*n - 32].iter().map(|x| !x).collect();
+                                    // self.editors.clipboard_registers[*n - 32] = new;
+                                    self.editors.clipboard_registers[*n - 32] = !&self.editors.clipboard_registers[*n - 32];
                                     (CommandInstruction::NoOp, ActionResult::empty())
                                 } else {
                                     (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
@@ -552,12 +557,14 @@ impl App {
                                     (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.deflate_register(*n as u8, clevel))
                                 } else if *n < 64 {
                                     let mut e = DeflateEncoder::new(Vec::new(), Compression::new(self.editors.clevel as u32));
-                                    if let Err(msg) = e.write_all(&self.editors.clipboard_registers[*n - 32]) {
+                                    // TODO: Make this work for non byte-aligned registers
+                                    let buff = self.editors.clipboard_registers[*n - 32].clone().into_boxed_slice().unwrap().to_vec();
+                                    if let Err(msg) = e.write_all(&buff) {
                                         (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
                                     } else {
                                         match e.finish() {
                                             Ok(w) => {
-                                                self.editors.clipboard_registers[*n - 32] = w;
+                                                self.editors.clipboard_registers[*n - 32] = BitField::from_vec(w);
                                                 (CommandInstruction::NoOp, ActionResult::empty())
                                             },
                                             Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
@@ -572,12 +579,14 @@ impl App {
                                     (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.inflate_register(*n as u8)) // TODO: Make level variable
                                 } else if *n < 64 {
                                     let mut e = DeflateDecoder::new(Vec::new());
-                                    if let Err(msg) = e.write_all(&self.editors.clipboard_registers[*n - 32]) {
+                                    // TODO: Make this work for non byte-aligned registers
+                                    let buff = self.editors.clipboard_registers[*n - 32].clone().into_boxed_slice().unwrap().to_vec();
+                                    if let Err(msg) = e.write_all(&buff) {
                                         (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
                                     } else {
                                         match e.finish() {
                                             Ok(w) => {
-                                                self.editors.clipboard_registers[*n - 32] = w;
+                                                self.editors.clipboard_registers[*n - 32] = BitField::from_vec(w);
                                                 (CommandInstruction::NoOp, ActionResult::empty())
                                             },
                                             Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
@@ -589,9 +598,10 @@ impl App {
                             }
                             (CommandToken::Keyword(CommandKeyword::Clear), CommandToken::Register(n)) => {
                                 if *n < 32 {
-                                    (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.set_register(*n as u8, &Vec::<u8>::new()))
+                                    (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.set_register(*n as u8, &BitField::default()))
                                 } else if *n < 64 {
-                                    self.editors.clipboard_registers[*n - 32] = Vec::<u8>::new();
+                                    // self.editors.clipboard_registers[*n - 32] = Vec::<u8>::new();
+                                    self.editors.clipboard_registers[*n - 32] = BitField::default();
                                     (CommandInstruction::NoOp, ActionResult::empty())
                                 } else {
                                     (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
@@ -727,7 +737,7 @@ impl App {
                                     },
                                     (CommandToken::Keyword(CommandKeyword::Fill), CommandToken::Word(word)) => {
                                         match parse_bytes(word) {
-                                            Ok(v) => (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.set_fill(FillType::Bytes(v))),
+                                            Ok(v) => (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.set_fill(FillType::Bytes(BitField::from_vec(v)))),
                                             Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg))
                                         }
                                     },
@@ -741,19 +751,19 @@ impl App {
                                             if *n2 < 32 {
                                                 (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.concatenate_register(*n1 as u8, FillType::Register(*n2 as u8)))
                                             } else if *n2 < 64 { 
-                                                let fill = FillType::Bytes(self.editors.clipboard_registers[*n2 - 32].to_vec());
+                                                let fill = FillType::Bytes(self.editors.clipboard_registers[*n2 - 32].clone());
                                                 (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.concatenate_register(*n1 as u8, fill))
                                             } else {
                                                 (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
                                             }
                                         } else if *n1 < 64 {
                                             if *n2 < 32 {
-                                                let fill = self.editors.current().hex_edit.get_register(*n2 as u8).unwrap().to_vec();
-                                                self.editors.clipboard_registers[*n1 - 32].extend(fill);
+                                                let fill = self.editors.current().hex_edit.get_register(*n2 as u8).unwrap();
+                                                self.editors.clipboard_registers[*n1 - 32].extend(&fill);
                                                 (CommandInstruction::NoOp, ActionResult::empty())
                                             } else if *n2 < 64 { 
-                                                let fill = self.editors.clipboard_registers[*n2 - 32].to_vec();
-                                                self.editors.clipboard_registers[*n1 - 32].extend(fill);
+                                                let fill = self.editors.clipboard_registers[*n2 - 32].clone();
+                                                self.editors.clipboard_registers[*n1 - 32].extend(&fill);
                                                 (CommandInstruction::NoOp, ActionResult::empty())
                                             } else {
                                                 (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
@@ -767,9 +777,9 @@ impl App {
                                         match parse_bytes(word) {
                                             Ok(v) => {
                                                 if *n < 32 {
-                                                    (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.concatenate_register(*n as u8, FillType::Bytes(v)))
+                                                    (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.concatenate_register(*n as u8, FillType::Bytes(BitField::from_vec(v))))
                                                 } else if *n < 64 {
-                                                    self.editors.clipboard_registers[*n - 32].extend(v);
+                                                    self.editors.clipboard_registers[*n - 32].extend(&BitField::from_vec(v));
                                                     (CommandInstruction::NoOp, ActionResult::empty())
                                                 } else {
                                                     (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
@@ -797,32 +807,78 @@ impl App {
                                             if *n2 < 32 {
                                                 (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.manipulate_register(*n1 as u8, FillType::Register(*n2 as u8), op))
                                             } else if *n2 < 64 { 
-                                                let fill = FillType::Bytes(self.editors.clipboard_registers[*n2 - 32].to_vec());
+                                                let fill = FillType::Bytes(self.editors.clipboard_registers[*n2 - 32].clone());
                                                 (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.manipulate_register(*n1 as u8, fill, op))
                                             } else {
                                                 (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
                                             }
                                         } else if *n1 < 64 {
                                             if *n2 < 32 {
-                                                let fill = self.editors.current_mut().hex_edit.get_register(*n2 as u8).unwrap().to_vec();
+                                                let mut fill = self.editors.current_mut().hex_edit.get_register(*n2 as u8).unwrap();
+                                                // TODO: Use a bitfield method here
+                                                let len = fill.len();
+                                                let repetitions = (self.editors.clipboard_registers[*n1 - 32].len().total_bits() / len.total_bits()) as usize;
+                                                fill.repeat(repetitions + 1);
+                                                fill.truncate(&self.editors.clipboard_registers[*n1 - 32].len());
                                                 match op {
-                                                    ByteOperation::And => vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| a & b),
-                                                    ByteOperation::Or => vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| a | b),
-                                                    ByteOperation::Nand => vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| !(a & b)),
-                                                    ByteOperation::Nor => vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| !(a | b)),
-                                                    ByteOperation::Xor => vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| a ^ b),
-                                                    ByteOperation::Xnor => vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| !(a ^ b))
+                                                    // ByteOperation::And => vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| a & b),
+                                                    // ByteOperation::Or => vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| a | b),
+                                                    // ByteOperation::Nand => vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| !(a & b)),
+                                                    // ByteOperation::Nor => vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| !(a | b)),
+                                                    // ByteOperation::Xor => vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| a ^ b),
+                                                    // ByteOperation::Xnor => vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| !(a ^ b))
+                                                    ByteOperation::And => {
+                                                        self.editors.clipboard_registers[*n1 - 32] = &self.editors.clipboard_registers[*n1 - 32] & (&fill);
+                                                    },
+                                                    ByteOperation::Or => {
+                                                        self.editors.clipboard_registers[*n1 - 32] = &self.editors.clipboard_registers[*n1 - 32] | (&fill);
+                                                    },
+                                                    ByteOperation::Nand => {
+                                                        self.editors.clipboard_registers[*n1 - 32] = !&(&self.editors.clipboard_registers[*n1 - 32] & (&fill));
+                                                    },
+                                                    ByteOperation::Nor => {
+                                                        self.editors.clipboard_registers[*n1 - 32] = !&(&self.editors.clipboard_registers[*n1 - 32] | (&fill));
+                                                    },
+                                                    ByteOperation::Xor => {
+                                                        self.editors.clipboard_registers[*n1 - 32] = &self.editors.clipboard_registers[*n1 - 32]^ (&fill);
+                                                    },
+                                                    ByteOperation::Xnor => {
+                                                        self.editors.clipboard_registers[*n1 - 32] = !&(&self.editors.clipboard_registers[*n1 - 32] ^ (&fill));
+                                                    }
                                                 };
                                                 (CommandInstruction::NoOp, ActionResult::empty())
                                             } else if *n2 < 64 { 
-                                                let fill = self.editors.clipboard_registers[*n2 - 32].to_vec();
+                                                let mut fill = self.editors.clipboard_registers[*n2 - 32].clone();
+                                                // TODO: Use a bitfield method here
+                                                let len = fill.len();
+                                                let repetitions = (self.editors.clipboard_registers[*n1 - 32].len().total_bits() / len.total_bits()) as usize;
+                                                fill.repeat(repetitions + 1);
+                                                fill.truncate(&self.editors.clipboard_registers[*n1 - 32].len());
                                                 match op {
-                                                    ByteOperation::And => vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| a & b),
-                                                    ByteOperation::Or => vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| a | b),
-                                                    ByteOperation::Nand => vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| !(a & b)),
-                                                    ByteOperation::Nor => vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| !(a | b)),
-                                                    ByteOperation::Xor => vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| a ^ b),
-                                                    ByteOperation::Xnor => vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| !(a ^ b))
+                                                    // ByteOperation::And => vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| a & b),
+                                                    // ByteOperation::Or => vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| a | b),
+                                                    // ByteOperation::Nand => vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| !(a & b)),
+                                                    // ByteOperation::Nor => vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| !(a | b)),
+                                                    // ByteOperation::Xor => vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| a ^ b),
+                                                    // ByteOperation::Xnor => vector_op(&mut self.editors.clipboard_registers[*n1 - 32], &fill, |a, b| !(a ^ b))
+                                                    ByteOperation::And => {
+                                                        self.editors.clipboard_registers[*n1 - 32] = &self.editors.clipboard_registers[*n1 - 32] & (&fill);
+                                                    },
+                                                    ByteOperation::Or => {
+                                                        self.editors.clipboard_registers[*n1 - 32] = &self.editors.clipboard_registers[*n1 - 32] | (&fill);
+                                                    },
+                                                    ByteOperation::Nand => {
+                                                        self.editors.clipboard_registers[*n1 - 32] = !&(&self.editors.clipboard_registers[*n1 - 32] & (&fill));
+                                                    },
+                                                    ByteOperation::Nor => {
+                                                        self.editors.clipboard_registers[*n1 - 32] = !&(&self.editors.clipboard_registers[*n1 - 32] | (&fill));
+                                                    },
+                                                    ByteOperation::Xor => {
+                                                        self.editors.clipboard_registers[*n1 - 32] = &self.editors.clipboard_registers[*n1 - 32]^ (&fill);
+                                                    },
+                                                    ByteOperation::Xnor => {
+                                                        self.editors.clipboard_registers[*n1 - 32] = !&(&self.editors.clipboard_registers[*n1 - 32] ^ (&fill));
+                                                    }
                                                 };
                                                 (CommandInstruction::NoOp, ActionResult::empty())
                                             } else {
@@ -837,15 +893,39 @@ impl App {
                                         match parse_bytes(word) {
                                             Ok(v) => {
                                                 if *n < 32 {
-                                                    (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.manipulate_register(*n as u8, FillType::Bytes(v), op))
+                                                    (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.manipulate_register(*n as u8, FillType::Bytes(BitField::from_vec(v)), op))
                                                 } else if *n < 64 {
+                                                    let mut fill = BitField::from_vec(v);
+                                                    // TODO: Use a bitfield method here
+                                                    let len = fill.len();
+                                                    let repetitions = (self.editors.clipboard_registers[*n - 32].len().total_bits() / len.total_bits()) as usize;
+                                                    fill.repeat(repetitions + 1);
+                                                    fill.truncate(&self.editors.clipboard_registers[*n - 32].len());
                                                     match op {
-                                                        ByteOperation::And => vector_op(&mut self.editors.clipboard_registers[*n - 32], &v, |a, b| a & b),
-                                                        ByteOperation::Or => vector_op(&mut self.editors.clipboard_registers[*n - 32], &v, |a, b| a | b),
-                                                        ByteOperation::Nand => vector_op(&mut self.editors.clipboard_registers[*n - 32], &v, |a, b| !(a & b)),
-                                                        ByteOperation::Nor => vector_op(&mut self.editors.clipboard_registers[*n - 32], &v, |a, b| !(a | b)),
-                                                        ByteOperation::Xor => vector_op(&mut self.editors.clipboard_registers[*n - 32], &v, |a, b| a ^ b),
-                                                        ByteOperation::Xnor => vector_op(&mut self.editors.clipboard_registers[*n - 32], &v, |a, b| !(a ^ b))
+                                                        // ByteOperation::And => vector_op(&mut self.editors.clipboard_registers[*n - 32], &v, |a, b| a & b),
+                                                        // ByteOperation::Or => vector_op(&mut self.editors.clipboard_registers[*n - 32], &v, |a, b| a | b),
+                                                        // ByteOperation::Nand => vector_op(&mut self.editors.clipboard_registers[*n - 32], &v, |a, b| !(a & b)),
+                                                        // ByteOperation::Nor => vector_op(&mut self.editors.clipboard_registers[*n - 32], &v, |a, b| !(a | b)),
+                                                        // ByteOperation::Xor => vector_op(&mut self.editors.clipboard_registers[*n - 32], &v, |a, b| a ^ b),
+                                                        // ByteOperation::Xnor => vector_op(&mut self.editors.clipboard_registers[*n - 32], &v, |a, b| !(a ^ b))
+                                                        ByteOperation::And => {
+                                                            self.editors.clipboard_registers[*n - 32] = &self.editors.clipboard_registers[*n - 32] & (&fill);
+                                                        },
+                                                        ByteOperation::Or => {
+                                                            self.editors.clipboard_registers[*n - 32] = &self.editors.clipboard_registers[*n - 32] | (&fill);
+                                                        },
+                                                        ByteOperation::Nand => {
+                                                            self.editors.clipboard_registers[*n - 32] = !&(&self.editors.clipboard_registers[*n - 32] & (&fill));
+                                                        },
+                                                        ByteOperation::Nor => {
+                                                            self.editors.clipboard_registers[*n - 32] = !&(&self.editors.clipboard_registers[*n - 32] | (&fill));
+                                                        },
+                                                        ByteOperation::Xor => {
+                                                            self.editors.clipboard_registers[*n - 32] = &self.editors.clipboard_registers[*n - 32]^ (&fill);
+                                                        },
+                                                        ByteOperation::Xnor => {
+                                                            self.editors.clipboard_registers[*n - 32] = !&(&self.editors.clipboard_registers[*n - 32] ^ (&fill));
+                                                        }
                                                     };
                                                     (CommandInstruction::NoOp, ActionResult::empty())
                                                 } else {
@@ -901,10 +981,16 @@ impl App {
                                         if *register < 32 {
                                             (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.shift_register(*register as u8, shift))
                                         } else if *register < 64 {
-                                            match shift_vector(&mut self.editors.clipboard_registers[*register - 32], shift) {
-                                                Ok(()) => (CommandInstruction::NoOp, ActionResult::empty()),
-                                                Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
+                                            // match shift_vector(&mut self.editors.clipboard_registers[*register - 32], shift) {
+                                            //     Ok(()) => (CommandInstruction::NoOp, ActionResult::empty()),
+                                            //     Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
+                                            // }
+                                            if shift < 0 { // TODO: use 'take' here
+                                                self.editors.clipboard_registers[*register - 32] = self.editors.clipboard_registers[*register - 32].clone() << (shift.abs() as usize);
+                                            } else {
+                                                self.editors.clipboard_registers[*register - 32] = self.editors.clipboard_registers[*register - 32].clone() >> (shift as usize);
                                             }
+                                            (CommandInstruction::NoOp, ActionResult::empty())
                                             
                                         } else {
                                             (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
@@ -920,15 +1006,17 @@ impl App {
                         match (&tokens[0], &tokens[1], &tokens[2], &tokens[3]) {
                             (CommandToken::Keyword(CommandKeyword::Slice), CommandToken::Register(register), CommandToken::Integer(_, n1), CommandToken::Integer(_, n2)) => {
                                 if *register < 32 {
-                                    (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.slice_register(*register as u8, *n1, *n2))
+                                    (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.slice_register(*register as u8, BitIndex::bytes(*n1), BitIndex::bytes(*n2)))
                                 } else if *register < 64 {
-                                    if *n2 > self.editors.clipboard_registers[*register - 32].len() {
+                                    if BitIndex::bytes(*n2) > self.editors.clipboard_registers[*register - 32].len() {
                                         (CommandInstruction::NoOp, ActionResult::error("Slice index outside of register contents bounds".to_string()))
                                     } else if *n1 > *n2 {
                                         (CommandInstruction::NoOp, ActionResult::error("Slice start index greater than slice end index".to_string()))
                                     } else {
-                                        let temp = &self.editors.clipboard_registers[*register - 32][*n1..*n2];
-                                        self.editors.clipboard_registers[*register - 32] = temp.to_vec();
+                                        // let temp = &self.editors.clipboard_registers[*register - 32][*n1..*n2];
+                                        // self.editors.clipboard_registers[*register - 32] = temp.to_vec();
+                                        let temp = self.editors.clipboard_registers[*register - 32].slice_be(&BitIndex::bytes(*n1), &BitIndex::bytes(*n2));
+                                        self.editors.clipboard_registers[*register - 32] = temp;
                                         (CommandInstruction::NoOp, ActionResult::empty())
                                     }
                                 } else {
@@ -1042,7 +1130,7 @@ impl App {
                         if n < 32 {
                             self.editors.current_mut().hex_edit.insert(DataSource::Register(n as u8))
                         } else if n < 64 {
-                            let v = self.editors.clipboard_registers[n - 32].to_vec();
+                            let v = self.editors.clipboard_registers[n - 32].clone().into_boxed_slice().unwrap().to_vec(); // TODO: Make this work for non-byte aligned
                             self.editors.current_mut().hex_edit.insert(DataSource::Bytes(v))
                         } else {
                             ActionResult::error("Register indices must be less than 64".to_string())
@@ -1052,7 +1140,7 @@ impl App {
                         if n < 32 {
                             self.editors.current_mut().hex_edit.overwrite(DataSource::Register(n as u8))
                         } else if n < 64 {
-                            let v = self.editors.clipboard_registers[n - 32].to_vec();
+                            let v = self.editors.clipboard_registers[n - 32].clone().into_boxed_slice().unwrap().to_vec(); // TODO: Make this work for non-byte aligned
                             self.editors.current_mut().hex_edit.overwrite(DataSource::Bytes(v))
                         } else {
                             ActionResult::error("Register indices must be less than 64".to_string())
@@ -1097,7 +1185,7 @@ impl App {
                             let res = self.editors.current_mut().hex_edit.get_bytes(pos, &mut v);
                             match res {
                                 Ok(_) => { // TODO: Check if this is less han n2
-                                    self.editors.clipboard_registers[n1 - 32] = v.to_vec();
+                                    self.editors.clipboard_registers[n1 - 32] = BitField::from_vec(v.to_vec());
                                     ActionResult::empty()
                                 },
                                 Err(msg) => ActionResult::error(msg.to_string())
@@ -1433,27 +1521,27 @@ impl<'a> std::process::Termination for App {
 mod app_string_tests {
     use super::*;
 
-    #[test]
-    fn stack_size() {
-        // panic!("{}", std::mem::size_of::<crate::hex_edit::Structure>());
-        backtrace::trace(|frame| {
-            println!("Stack Pointer: {:?}", frame.sp());
-            let ip = frame.ip();
-            let symbol_address = frame.symbol_address();
+    // #[test]
+    // fn stack_size() {
+    //     // panic!("{}", std::mem::size_of::<crate::hex_edit::Structure>());
+    //     backtrace::trace(|frame| {
+    //         println!("Stack Pointer: {:?}", frame.sp());
+    //         let ip = frame.ip();
+    //         let symbol_address = frame.symbol_address();
 
-            // Resolve this instruction pointer to a symbol name
-            backtrace::resolve_frame(frame, |symbol| {
-                if let Some(name) = symbol.name() {
-                    println!("Symbol name: {}", name);
-                }
-                if let Some(filename) = symbol.filename() {
-                    // ...
-                }
-            });
-            true
-        });
-        panic!()
-    }
+    //         // Resolve this instruction pointer to a symbol name
+    //         backtrace::resolve_frame(frame, |symbol| {
+    //             if let Some(name) = symbol.name() {
+    //                 println!("Symbol name: {}", name);
+    //             }
+    //             if let Some(filename) = symbol.filename() {
+    //                 // ...
+    //             }
+    //         });
+    //         true
+    //     });
+    //     panic!()
+    // }
 
     fn test_driver(app: &mut App, inputs: &str) {
         for c in inputs.chars() {
@@ -1478,12 +1566,12 @@ mod app_string_tests {
         let mut window = None;
         app.init(&mut window, r"tests\exif2c08.png".to_string(), FileManagerType::RamOnly, false).unwrap();
         test_driver(&mut app, "4r16y↓4p-16g32y");
-        let r0_expected = vec![
+        let r0_expected = BitField::from_vec(vec![
             0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 
             0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
             0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00, 0x20, 
             0x08, 0x02, 0x00, 0x00, 0x00, 0xfc, 0x18, 0xed
-        ];
+        ]);
         let r0 = app.editors.current().hex_edit.get_register(0).unwrap();
         assert_eq!(r0_expected, r0)
     }
@@ -1759,10 +1847,10 @@ mod app_string_tests {
         // Copy 8 bytes at byte 12 (first 4 bytes are left of deleted span, 
         // last 4 are right of deleted span) and confirm their contents
         test_driver(&mut app, "12g8yG");
-        let r0_expected = vec![
+        let r0_expected = BitField::from_vec(vec![
             0x49, 0x48, 0x44, 0x52,
             0xa3, 0x00, 0x00, 0x03
-        ];
+        ]);
         let r0 = app.editors.current().hex_edit.get_register(0).unwrap();
         assert_eq!(r0_expected, r0);
         assert_eq!(app.current_cursor_pos(), file_length - 16);
@@ -1774,9 +1862,9 @@ mod app_string_tests {
 
         // Grab the first 8 bytes (left of deleted span) and confirm their contents
         test_driver(&mut app, "8yG");
-        let r0_expected = vec![
+        let r0_expected = BitField::from_vec(vec![
             0xff, 0x0c, 0xbe, 0x99, 0x00, 0x29, 0x47, 0x4b
-        ];
+        ]);
         let r0 = app.editors.current().hex_edit.get_register(0).unwrap();
         assert_eq!(r0_expected, r0);
         assert_eq!(app.current_cursor_pos(), file_length - 1216);
@@ -1876,9 +1964,9 @@ mod app_string_tests {
 
         // Grab the first 8 bytes (left of deleted span) and confirm their contents
         test_driver(&mut app, "8yG");
-        let r0_expected = vec![
+        let r0_expected = BitField::from_vec(vec![
             0xb6, 0xa0, 0x37, 0x26, 0xe1, 0xf1, 0xb1, 0x70
-        ];
+        ]);
         let r0 = app.editors.current().hex_edit.get_register(0).unwrap();
         assert_eq!(r0_expected, r0);
         assert_eq!(app.current_cursor_pos(), file_length - 1216 - 8);
@@ -1907,9 +1995,9 @@ mod app_string_tests {
 
         // Redo 1200 byte deletion and grab the first 8 bytes (left of deleted span) and confirm their contents
         test_driver(&mut app, "U8yG");
-        let r0_expected = vec![
+        let r0_expected = BitField::from_vec(vec![
             0xb6, 0xa0, 0x37, 0x26, 0xe1, 0xf1, 0xb1, 0x70
-        ];
+        ]);
         let r0 = app.editors.current().hex_edit.get_register(0).unwrap();
         assert_eq!(r0_expected, r0);
         assert_eq!(app.current_cursor_pos(), file_length - 1216 - 8);
@@ -2492,12 +2580,12 @@ mod app_string_tests {
             let next = op(&current);
             for n in 0..64 {
                 let mut rn = app.editors.get_current_register(n).unwrap();
-                assert_eq!(current, rn);
+                assert_eq!(BitField::from_vec(current.to_vec()), rn);
             
                 test_driver(&mut app, format!(":{} r{}\n", op_name, n).as_str()); 
                 assert_eq!(app.line_entry.get_alert(), None);
                 rn = app.editors.get_current_register(n).unwrap();
-                assert_eq!(next, rn);
+                assert_eq!(BitField::from_vec(next.to_vec()), rn);
                 
             }
             current = next;
@@ -2537,12 +2625,12 @@ mod app_string_tests {
         for i in 0..8 {
             for n in (0..32).rev() {
                 let mut rn = app.editors.get_current_register(n).unwrap();
-                assert_eq!(results[i], rn);
+                assert_eq!(BitField::from_vec(results[i].clone()), rn);
 
                 test_driver(&mut app, "u"); 
                 assert_eq!(app.line_entry.get_alert(), None);
                 rn = app.editors.get_current_register(n).unwrap();
-                assert_eq!(results[i + 1], rn);
+                assert_eq!(BitField::from_vec(results[i + 1].clone()), rn);
             }
         }
 
@@ -2582,12 +2670,12 @@ mod app_string_tests {
         for i in 0..8 {
             for n in 0..32 {
                 let mut rn = app.editors.get_current_register(n).unwrap();
-                assert_eq!(results[i], rn);
+                assert_eq!(BitField::from_vec(results[i].clone()), rn);
 
                 test_driver(&mut app, "U"); 
                 assert_eq!(app.line_entry.get_alert(), None);
                 rn = app.editors.get_current_register(n).unwrap();
-                assert_eq!(results[i + 1], rn);
+                assert_eq!(BitField::from_vec(results[i + 1].clone()), rn);
             }
         }
 
@@ -2626,47 +2714,47 @@ mod app_string_tests {
 
         for n in 0..64 {
             let mut rn = app.editors.get_current_register(n).unwrap();
-            assert_eq!(bytes_8_16, rn);
+            assert_eq!(BitField::from_vec(bytes_8_16.to_vec()), rn);
 
             test_driver(&mut app, format!(":slice r{} 0 8\n", n).as_str());
             assert_eq!(app.line_entry.get_alert(), None);
             rn = app.editors.get_current_register(n).unwrap();
-            assert_eq!(bytes_8_16, rn);
+            assert_eq!(BitField::from_vec(bytes_8_16.to_vec()), rn);
 
             test_driver(&mut app, format!(":slice r{} 0 6\n", n).as_str());
             assert_eq!(app.line_entry.get_alert(), None);
             rn = app.editors.get_current_register(n).unwrap();
-            assert_eq!(bytes_8_16[0..6], rn);
+            assert_eq!(BitField::from_vec(bytes_8_16[0..6].to_vec()), rn);
 
             test_driver(&mut app, format!(":slice r{} 2 6\n", n).as_str());
             assert_eq!(app.line_entry.get_alert(), None);
             rn = app.editors.get_current_register(n).unwrap();
-            assert_eq!(bytes_8_16[2..6], rn);
+            assert_eq!(BitField::from_vec(bytes_8_16[2..6].to_vec()), rn);
 
             test_driver(&mut app, format!(":slice r{} 1 4\n", n).as_str());
             assert_eq!(app.line_entry.get_alert(), None);
             rn = app.editors.get_current_register(n).unwrap();
-            assert_eq!(bytes_8_16[3..6], rn);
+            assert_eq!(BitField::from_vec(bytes_8_16[3..6].to_vec()), rn);
 
             test_driver(&mut app, format!(":slice r{} 0 4\n", n).as_str());
             assert_eq!(app.line_entry.get_alert(), Some("Slice index outside of register contents bounds".to_string()));
             rn = app.editors.get_current_register(n).unwrap();
-            assert_eq!(bytes_8_16[3..6], rn);
+            assert_eq!(BitField::from_vec(bytes_8_16[3..6].to_vec()), rn);
 
             test_driver(&mut app, format!(":slice r{} 2 1\n", n).as_str());
             assert_eq!(app.line_entry.get_alert(), Some("Slice start index greater than slice end index".to_string()));
             rn = app.editors.get_current_register(n).unwrap();
-            assert_eq!(bytes_8_16[3..6], rn);
+            assert_eq!(BitField::from_vec(bytes_8_16[3..6].to_vec()), rn);
 
             test_driver(&mut app, format!(":slice r{} 1 2\n", n).as_str());
             assert_eq!(app.line_entry.get_alert(), None);
             rn = app.editors.get_current_register(n).unwrap();
-            assert_eq!(bytes_8_16[4..5], rn);
+            assert_eq!(BitField::from_vec(bytes_8_16[4..5].to_vec()), rn);
 
             test_driver(&mut app, format!(":slice r{} 1 1\n", n).as_str());
             assert_eq!(app.line_entry.get_alert(), None);
             rn = app.editors.get_current_register(n).unwrap();
-            assert_eq!(bytes_8_16[5..5], rn);
+            assert_eq!(BitField::from_vec(bytes_8_16[5..5].to_vec()), rn);
         }
         app
     }
@@ -2682,37 +2770,37 @@ mod app_string_tests {
 
         for n in (0..32).rev() {
             let mut rn = app.editors.get_current_register(n).unwrap();
-            assert_eq!(bytes_8_16[5..5], rn);
+            assert_eq!(BitField::from_vec(bytes_8_16[5..5].to_vec()), rn);
 
             test_driver(&mut app, "u");
             assert_eq!(app.line_entry.get_alert(), None);
             rn = app.editors.get_current_register(n).unwrap();
-            assert_eq!(bytes_8_16[4..5], rn);
+            assert_eq!(BitField::from_vec(bytes_8_16[4..5].to_vec()), rn);
 
             test_driver(&mut app, "u");
             assert_eq!(app.line_entry.get_alert(), None);
             rn = app.editors.get_current_register(n).unwrap();
-            assert_eq!(bytes_8_16[3..6], rn);
+            assert_eq!(BitField::from_vec(bytes_8_16[3..6].to_vec()), rn);
 
             test_driver(&mut app, "u");
             assert_eq!(app.line_entry.get_alert(), None);
             rn = app.editors.get_current_register(n).unwrap();
-            assert_eq!(bytes_8_16[2..6], rn);
+            assert_eq!(BitField::from_vec(bytes_8_16[2..6].to_vec()), rn);
 
             test_driver(&mut app, "u");
             assert_eq!(app.line_entry.get_alert(), None);
             rn = app.editors.get_current_register(n).unwrap();
-            assert_eq!(bytes_8_16[0..6], rn);
+            assert_eq!(BitField::from_vec(bytes_8_16[0..6].to_vec()), rn);
 
             test_driver(&mut app, "u");
             assert_eq!(app.line_entry.get_alert(), None);
             rn = app.editors.get_current_register(n).unwrap();
-            assert_eq!(bytes_8_16, rn);
+            assert_eq!(BitField::from_vec(bytes_8_16.to_vec()), rn);
 
             test_driver(&mut app, "u");
             assert_eq!(app.line_entry.get_alert(), None);
             rn = app.editors.get_current_register(n).unwrap();
-            assert_eq!(bytes_8_16, rn);
+            assert_eq!(BitField::from_vec(bytes_8_16.to_vec()), rn);
         }
 
         app
@@ -2729,37 +2817,37 @@ mod app_string_tests {
 
         for n in 0..32 {
             let mut rn = app.editors.get_current_register(n).unwrap();
-            assert_eq!(bytes_8_16, rn);
+            assert_eq!(BitField::from_vec(bytes_8_16.to_vec()), rn);
 
             test_driver(&mut app, "U");
             assert_eq!(app.line_entry.get_alert(), None);
             rn = app.editors.get_current_register(n).unwrap();
-            assert_eq!(bytes_8_16, rn);
+            assert_eq!(BitField::from_vec(bytes_8_16.to_vec()), rn);
 
             test_driver(&mut app, "U");
             assert_eq!(app.line_entry.get_alert(), None);
             rn = app.editors.get_current_register(n).unwrap();
-            assert_eq!(bytes_8_16[0..6], rn);
+            assert_eq!(BitField::from_vec(bytes_8_16[0..6].to_vec()), rn);
 
             test_driver(&mut app, "U");
             assert_eq!(app.line_entry.get_alert(), None);
             rn = app.editors.get_current_register(n).unwrap();
-            assert_eq!(bytes_8_16[2..6], rn);
+            assert_eq!(BitField::from_vec(bytes_8_16[2..6].to_vec()), rn);
 
             test_driver(&mut app, "U");
             assert_eq!(app.line_entry.get_alert(), None);
             rn = app.editors.get_current_register(n).unwrap();
-            assert_eq!(bytes_8_16[3..6], rn);
+            assert_eq!(BitField::from_vec(bytes_8_16[3..6].to_vec()), rn);
 
             test_driver(&mut app, "U");
             assert_eq!(app.line_entry.get_alert(), None);
             rn = app.editors.get_current_register(n).unwrap();
-            assert_eq!(bytes_8_16[4..5], rn);
+            assert_eq!(BitField::from_vec(bytes_8_16[4..5].to_vec()), rn);
 
             test_driver(&mut app, "U");
             assert_eq!(app.line_entry.get_alert(), None);
             rn = app.editors.get_current_register(n).unwrap();
-            assert_eq!(bytes_8_16[5..5], rn);
+            assert_eq!(BitField::from_vec(bytes_8_16[5..5].to_vec()), rn);
         }
 
         app
@@ -2771,14 +2859,14 @@ mod app_string_tests {
         let mut window = None;
         app.init(&mut window, r"tests\exif2c08.png".to_string(), FileManagerType::RamOnly, false).unwrap();
 
-        let bytes_0_16 = vec![
+        let bytes_0_16 = BitField::from_vec(vec![
             0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
             0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52
-        ];
+        ]);
 
-        let bytes_8_16 = vec![
+        let bytes_8_16 = BitField::from_vec(vec![
             0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52
-        ];
+        ]);
 
         for n in 0..64 {
             // Yank the bytes 8-16 into register n
@@ -2793,7 +2881,7 @@ mod app_string_tests {
             test_driver(&mut app, format!(":clear r{}\n", n).as_str());
             assert_eq!(app.line_entry.get_alert(), None);
             rn = app.editors.get_current_register(n).unwrap();
-            assert_eq!(Vec::<u8>::new(), rn);
+            assert_eq!(BitField::default(), rn);
         }
 
         for n in 0..64 {
@@ -2809,7 +2897,7 @@ mod app_string_tests {
             test_driver(&mut app, format!(":clear r{}\n", n).as_str());
             assert_eq!(app.line_entry.get_alert(), None);
             rn = app.editors.get_current_register(n).unwrap();
-            assert_eq!(Vec::<u8>::new(), rn);
+            assert_eq!(BitField::default(), rn);
         }
 
         app
@@ -2819,19 +2907,19 @@ mod app_string_tests {
     fn register_clear_undo_test<'a>() -> App {
         let mut app = register_clear_test();
 
-        let bytes_0_16 = vec![
+        let bytes_0_16 = BitField::from_vec(vec![
             0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
             0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52
-        ];
+        ]);
 
-        let bytes_8_16 = vec![
+        let bytes_8_16 = BitField::from_vec(vec![
             0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52
-        ];
+        ]);
 
         // Undo clears
         for n in 0..64 {
             let mut rn = app.editors.get_current_register(n).unwrap();
-            assert_eq!(Vec::<u8>::new(), rn);
+            assert_eq!(BitField::default(), rn);
 
             if n < 32 {
                 test_driver(&mut app, "u");
@@ -2848,7 +2936,7 @@ mod app_string_tests {
         // Undo clears
         for n in (0..64).rev() {
             let mut rn = app.editors.get_current_register(n).unwrap();
-            assert_eq!(Vec::<u8>::new(), rn);
+            assert_eq!(BitField::default(), rn);
 
             if n < 32 {
                 test_driver(&mut app, "u");
@@ -2873,14 +2961,14 @@ mod app_string_tests {
     fn register_clear_redo_test<'a>() -> App {
         let mut app = register_clear_undo_test();
 
-        let bytes_0_16 = vec![
+        let bytes_0_16 = BitField::from_vec(vec![
             0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
             0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52
-        ];
+        ]);
 
-        let bytes_8_16 = vec![
+        let bytes_8_16 = BitField::from_vec(vec![
             0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52
-        ];
+        ]);
 
         // Redo yanks
         test_driver(&mut app, &"U".repeat(64 + 32)); 
@@ -2897,9 +2985,9 @@ mod app_string_tests {
                 test_driver(&mut app, "U");
                 assert_eq!(app.line_entry.get_alert(), None);
                 rn = app.editors.get_current_register(n).unwrap();
-                assert_eq!(Vec::<u8>::new(), rn);
+                assert_eq!(BitField::default(), rn);
             } else {
-                assert_eq!(Vec::<u8>::new(), rn);
+                assert_eq!(BitField::default(), rn);
             }
         }
 
@@ -2917,9 +3005,9 @@ mod app_string_tests {
                 test_driver(&mut app, "U");
                 assert_eq!(app.line_entry.get_alert(), None);
                 rn = app.editors.get_current_register(n).unwrap();
-                assert_eq!(Vec::<u8>::new(), rn);
+                assert_eq!(BitField::default(), rn);
             } else {
-                assert_eq!(Vec::<u8>::new(), rn);
+                assert_eq!(BitField::default(), rn);
             }
         }
 
@@ -2967,6 +3055,22 @@ mod app_string_tests {
         let bytes_8_16_and_aa0f: Vec<u8> = op(&bytes_8_16, &vec![0xaa, 0x0f]); 
         let bytes_0_8_and_aa0f_and_count: Vec<u8> = op(&bytes_0_8_and_aa0f, &count);
         let bytes_8_16_and_aa0f_and_count: Vec<u8> = op(&bytes_8_16_and_aa0f, &count);
+
+        let bytes_0_8 = BitField::from_vec(bytes_0_8);
+        let bytes_8_16 = BitField::from_vec(bytes_8_16);
+        let bytes_28_32 = BitField::from_vec(bytes_28_32);
+        let count = BitField::from_vec(count);
+        let bytes_0_8_and_8_16 = BitField::from_vec(bytes_0_8_and_8_16);
+        let bytes_8_16_and_0_8 = BitField::from_vec(bytes_8_16_and_0_8);
+        let bytes_8_16_and_0_8_and_8_16 = BitField::from_vec(bytes_8_16_and_0_8_and_8_16);
+        let bytes_8_16_and_0_8_and_8_16_and_28_32 = BitField::from_vec(bytes_8_16_and_0_8_and_8_16_and_28_32);
+        let bytes_28_32_and_8_16_and_0_8_and_8_16_and_28_32 = BitField::from_vec(bytes_28_32_and_8_16_and_0_8_and_8_16_and_28_32);
+        let bytes_8_16_and_0_8_and_28_32 = BitField::from_vec(bytes_8_16_and_0_8_and_28_32);
+        let bytes_28_32_and_8_16_and_0_8 = BitField::from_vec(bytes_28_32_and_8_16_and_0_8);
+        let bytes_0_8_and_aa0f = BitField::from_vec(bytes_0_8_and_aa0f);
+        let bytes_8_16_and_aa0f = BitField::from_vec(bytes_8_16_and_aa0f);
+        let bytes_0_8_and_aa0f_and_count = BitField::from_vec(bytes_0_8_and_aa0f_and_count);
+        let bytes_8_16_and_aa0f_and_count = BitField::from_vec(bytes_8_16_and_aa0f_and_count);
 
         // Needed in order to fully undo all of the and operations later
         test_driver(&mut app, ":set undo 272\n");
@@ -3136,6 +3240,22 @@ mod app_string_tests {
         let bytes_8_16_and_aa0f: Vec<u8> = op(&bytes_8_16, &vec![0xaa, 0x0f]); 
         let bytes_0_8_and_aa0f_and_count: Vec<u8> = op(&bytes_0_8_and_aa0f, &count);
         let bytes_8_16_and_aa0f_and_count: Vec<u8> = op(&bytes_8_16_and_aa0f, &count);
+
+        let bytes_0_8 = BitField::from_vec(bytes_0_8);
+        let bytes_8_16 = BitField::from_vec(bytes_8_16);
+        let bytes_28_32 = BitField::from_vec(bytes_28_32);
+        let count = BitField::from_vec(count);
+        let bytes_0_8_and_8_16 = BitField::from_vec(bytes_0_8_and_8_16);
+        let bytes_8_16_and_0_8 = BitField::from_vec(bytes_8_16_and_0_8);
+        let bytes_8_16_and_0_8_and_8_16 = BitField::from_vec(bytes_8_16_and_0_8_and_8_16);
+        let bytes_8_16_and_0_8_and_8_16_and_28_32 = BitField::from_vec(bytes_8_16_and_0_8_and_8_16_and_28_32);
+        let bytes_28_32_and_8_16_and_0_8_and_8_16_and_28_32 = BitField::from_vec(bytes_28_32_and_8_16_and_0_8_and_8_16_and_28_32);
+        let bytes_8_16_and_0_8_and_28_32 = BitField::from_vec(bytes_8_16_and_0_8_and_28_32);
+        let bytes_28_32_and_8_16_and_0_8 = BitField::from_vec(bytes_28_32_and_8_16_and_0_8);
+        let bytes_0_8_and_aa0f = BitField::from_vec(bytes_0_8_and_aa0f);
+        let bytes_8_16_and_aa0f = BitField::from_vec(bytes_8_16_and_aa0f);
+        let bytes_0_8_and_aa0f_and_count = BitField::from_vec(bytes_0_8_and_aa0f_and_count);
+        let bytes_8_16_and_aa0f_and_count = BitField::from_vec(bytes_8_16_and_aa0f_and_count);
 
         let mut app = register_op_test(op_name, op);
 
@@ -3316,6 +3436,22 @@ mod app_string_tests {
         let bytes_8_16_and_aa0f: Vec<u8> = op(&bytes_8_16, &vec![0xaa, 0x0f]); 
         let bytes_0_8_and_aa0f_and_count: Vec<u8> = op(&bytes_0_8_and_aa0f, &count);
         let bytes_8_16_and_aa0f_and_count: Vec<u8> = op(&bytes_8_16_and_aa0f, &count);
+
+        let bytes_0_8 = BitField::from_vec(bytes_0_8);
+        let bytes_8_16 = BitField::from_vec(bytes_8_16);
+        let bytes_28_32 = BitField::from_vec(bytes_28_32);
+        let count = BitField::from_vec(count);
+        let bytes_0_8_and_8_16 = BitField::from_vec(bytes_0_8_and_8_16);
+        let bytes_8_16_and_0_8 = BitField::from_vec(bytes_8_16_and_0_8);
+        let bytes_8_16_and_0_8_and_8_16 = BitField::from_vec(bytes_8_16_and_0_8_and_8_16);
+        let bytes_8_16_and_0_8_and_8_16_and_28_32 = BitField::from_vec(bytes_8_16_and_0_8_and_8_16_and_28_32);
+        let bytes_28_32_and_8_16_and_0_8_and_8_16_and_28_32 = BitField::from_vec(bytes_28_32_and_8_16_and_0_8_and_8_16_and_28_32);
+        let bytes_8_16_and_0_8_and_28_32 = BitField::from_vec(bytes_8_16_and_0_8_and_28_32);
+        let bytes_28_32_and_8_16_and_0_8 = BitField::from_vec(bytes_28_32_and_8_16_and_0_8);
+        let bytes_0_8_and_aa0f = BitField::from_vec(bytes_0_8_and_aa0f);
+        let bytes_8_16_and_aa0f = BitField::from_vec(bytes_8_16_and_aa0f);
+        let bytes_0_8_and_aa0f_and_count = BitField::from_vec(bytes_0_8_and_aa0f_and_count);
+        let bytes_8_16_and_aa0f_and_count = BitField::from_vec(bytes_8_16_and_aa0f_and_count);
 
         let mut app = register_op_undo_test(op_name, op);
 
@@ -3594,23 +3730,23 @@ mod app_string_tests {
             0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52
         ];
         let mut r0 = app.editors.current().hex_edit.get_register(0).unwrap();
-        assert_eq!(r0_expected, r0);
+        assert_eq!(BitField::from_vec(r0_expected), r0);
         let mut r1 = app.editors.current().hex_edit.get_register(1).unwrap();
-        assert_eq!(r1_expected, r1);
+        assert_eq!(BitField::from_vec(r1_expected), r1);
 
         test_driver(&mut app, ":not r1\n"); 
         r1_expected = vec![
             0xff, 0xff, 0xff, 0xf2, 0xb6, 0xb7, 0xbb, 0xad
         ];
         r1 = app.editors.current().hex_edit.get_register(1).unwrap();
-        assert_eq!(r1_expected, r1);
+        assert_eq!(BitField::from_vec(r1_expected), r1);
 
         test_driver(&mut app, ":and r0 r1\n"); 
         r0_expected = vec![
             0x89, 0x50, 0x4e, 0x42, 0x04, 0x02, 0x1a, 0x08
         ];
         r0 = app.editors.current().hex_edit.get_register(0).unwrap();
-        assert_eq!(r0_expected, r0);
+        assert_eq!(BitField::from_vec(r0_expected), r0);
         
     }
 }
