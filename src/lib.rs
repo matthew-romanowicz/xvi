@@ -3659,4 +3659,44 @@ mod app_string_tests {
         assert_eq!(BitField::from_vec(r0_expected), r0);
         
     }
+
+    #[test]
+    fn ascii_search_test() {
+        let mut app = App::new(50, 50);
+        let mut window = None;
+        app.init(&mut window, r"tests\oi4n2c16.png".to_string(), FileManagerType::RamOnly, false).unwrap();
+
+        // Search for IDAT
+        test_driver(&mut app, "/IDAT\n"); 
+        assert_eq!(app.current_cursor_pos(), 53);
+        assert_eq!(app.line_entry.get_alert(), Some("Result 1 of 4".to_string()));
+
+        test_driver(&mut app, "n"); 
+        assert_eq!(app.current_cursor_pos(), 164);
+        assert_eq!(app.line_entry.get_alert(), Some("Result 2 of 4".to_string()));
+
+        test_driver(&mut app, "n"); 
+        assert_eq!(app.current_cursor_pos(), 205);
+        assert_eq!(app.line_entry.get_alert(), Some("Result 3 of 4".to_string()));
+
+        test_driver(&mut app, "N"); 
+        assert_eq!(app.current_cursor_pos(), 164);
+        assert_eq!(app.line_entry.get_alert(), Some("Result 2 of 4".to_string()));
+
+        test_driver(&mut app, "n"); 
+        assert_eq!(app.current_cursor_pos(), 205);
+        assert_eq!(app.line_entry.get_alert(), Some("Result 3 of 4".to_string()));
+
+        test_driver(&mut app, "n"); 
+        assert_eq!(app.current_cursor_pos(), 316);
+        assert_eq!(app.line_entry.get_alert(), Some("Result 4 of 4".to_string()));
+
+        test_driver(&mut app, "n"); 
+        assert_eq!(app.current_cursor_pos(), 53);
+        assert_eq!(app.line_entry.get_alert(), Some("Wrapped to result 1 of 4".to_string()));
+
+        test_driver(&mut app, "N"); 
+        assert_eq!(app.current_cursor_pos(), 316);
+        assert_eq!(app.line_entry.get_alert(), Some("Wrapped to result 4 of 4".to_string()));
+    }
 }
