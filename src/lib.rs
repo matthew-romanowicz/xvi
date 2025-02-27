@@ -3661,7 +3661,7 @@ mod app_string_tests {
     }
 
     #[test]
-    fn ascii_search_test() {
+    fn ascii_search_test<'a>() -> App {
         let mut app = App::new(50, 50);
         let mut window = None;
         app.init(&mut window, r"tests\oi4n2c16.png".to_string(), FileManagerType::RamOnly, false).unwrap();
@@ -3671,6 +3671,7 @@ mod app_string_tests {
         assert_eq!(app.current_cursor_pos(), 53);
         assert_eq!(app.line_entry.get_alert(), Some("Result 1 of 4".to_string()));
 
+        // Go to second and third result without moving cursor
         test_driver(&mut app, "n"); 
         assert_eq!(app.current_cursor_pos(), 164);
         assert_eq!(app.line_entry.get_alert(), Some("Result 2 of 4".to_string()));
@@ -3679,10 +3680,46 @@ mod app_string_tests {
         assert_eq!(app.current_cursor_pos(), 205);
         assert_eq!(app.line_entry.get_alert(), Some("Result 3 of 4".to_string()));
 
+        // Move cursor to between 2nd and 3rd result then seek to 3rd result (2 trials)
+        test_driver(&mut app, "164g"); 
+        assert_eq!(app.current_cursor_pos(), 164);
+        assert_eq!(app.line_entry.get_alert(), None);
+
+        test_driver(&mut app, "n"); 
+        assert_eq!(app.current_cursor_pos(), 205);
+        assert_eq!(app.line_entry.get_alert(), Some("Result 3 of 4".to_string()));
+
+        test_driver(&mut app, "204g"); 
+        assert_eq!(app.current_cursor_pos(), 204);
+        assert_eq!(app.line_entry.get_alert(), None);
+
+        test_driver(&mut app, "n"); 
+        assert_eq!(app.current_cursor_pos(), 205);
+        assert_eq!(app.line_entry.get_alert(), Some("Result 3 of 4".to_string()));
+
+        // Seek to previous result
         test_driver(&mut app, "N"); 
         assert_eq!(app.current_cursor_pos(), 164);
         assert_eq!(app.line_entry.get_alert(), Some("Result 2 of 4".to_string()));
 
+        // Move cursor between 2nd and 3rd result then seek back to 2nd result (2 trials)
+        test_driver(&mut app, "205g"); 
+        assert_eq!(app.current_cursor_pos(), 205);
+        assert_eq!(app.line_entry.get_alert(), None);
+
+        test_driver(&mut app, "N"); 
+        assert_eq!(app.current_cursor_pos(), 164);
+        assert_eq!(app.line_entry.get_alert(), Some("Result 2 of 4".to_string()));
+
+        test_driver(&mut app, "165g"); 
+        assert_eq!(app.current_cursor_pos(), 165);
+        assert_eq!(app.line_entry.get_alert(), None);
+
+        test_driver(&mut app, "N"); 
+        assert_eq!(app.current_cursor_pos(), 164);
+        assert_eq!(app.line_entry.get_alert(), Some("Result 2 of 4".to_string()));
+
+        // Seek to 3rd and 4th result
         test_driver(&mut app, "n"); 
         assert_eq!(app.current_cursor_pos(), 205);
         assert_eq!(app.line_entry.get_alert(), Some("Result 3 of 4".to_string()));
@@ -3691,12 +3728,86 @@ mod app_string_tests {
         assert_eq!(app.current_cursor_pos(), 316);
         assert_eq!(app.line_entry.get_alert(), Some("Result 4 of 4".to_string()));
 
+        // Wrap to first result
         test_driver(&mut app, "n"); 
         assert_eq!(app.current_cursor_pos(), 53);
         assert_eq!(app.line_entry.get_alert(), Some("Wrapped to result 1 of 4".to_string()));
 
+        // Wrap to last result
         test_driver(&mut app, "N"); 
         assert_eq!(app.current_cursor_pos(), 316);
         assert_eq!(app.line_entry.get_alert(), Some("Wrapped to result 4 of 4".to_string()));
+
+        // Move cursor to after last result and wrap to first result
+        test_driver(&mut app, "320g"); 
+        assert_eq!(app.current_cursor_pos(), 320);
+        assert_eq!(app.line_entry.get_alert(), None);
+
+        test_driver(&mut app, "n"); 
+        assert_eq!(app.current_cursor_pos(), 53);
+        assert_eq!(app.line_entry.get_alert(), Some("Wrapped to result 1 of 4".to_string()));
+
+        // Move cursor to after last result and seek to last result
+        test_driver(&mut app, "320g"); 
+        assert_eq!(app.current_cursor_pos(), 320);
+        assert_eq!(app.line_entry.get_alert(), None);
+
+        test_driver(&mut app, "N"); 
+        assert_eq!(app.current_cursor_pos(), 316);
+        assert_eq!(app.line_entry.get_alert(), Some("Result 4 of 4".to_string()));
+
+        // Move cursor to before first result and seek to first result
+        test_driver(&mut app, "50g"); 
+        assert_eq!(app.current_cursor_pos(), 50);
+        assert_eq!(app.line_entry.get_alert(), None);
+
+        test_driver(&mut app, "n"); 
+        assert_eq!(app.current_cursor_pos(), 53);
+        assert_eq!(app.line_entry.get_alert(), Some("Result 1 of 4".to_string()));
+
+        // Move cursor to before first result result and wrap to last result
+        test_driver(&mut app, "50g"); 
+        assert_eq!(app.current_cursor_pos(), 50);
+        assert_eq!(app.line_entry.get_alert(), None);
+
+        test_driver(&mut app, "N"); 
+        assert_eq!(app.current_cursor_pos(), 316);
+        assert_eq!(app.line_entry.get_alert(), Some("Wrapped to result 4 of 4".to_string()));
+
+        app
+    }
+
+    #[test]
+    fn ascii_search_undo_test<'a>() -> App {
+        let mut app = ascii_search_test();
+
+        let positions = [
+            316, 50, 53, 50, 316, 320, 53, 320, 316, 53, 316, 205, 164, 165, 164, 205, 164, 205, 204, 205, 164, 205, 164, 53, 0
+        ];
+
+        for i in positions.iter().skip(1) {
+            test_driver(&mut app, "u"); 
+            assert_eq!(app.current_cursor_pos(), *i);
+            assert_eq!(app.line_entry.get_alert(), None);
+        }
+        
+        app
+    }
+
+    #[test]
+    fn ascii_search_redo_test<'a>() -> App {
+        let mut app = ascii_search_undo_test();
+
+        let positions = [
+            316, 50, 53, 50, 316, 320, 53, 320, 316, 53, 316, 205, 164, 165, 164, 205, 164, 205, 204, 205, 164, 205, 164, 53, 0
+        ];
+
+        for i in positions.iter().rev().skip(1) {
+            test_driver(&mut app, "U"); 
+            assert_eq!(app.current_cursor_pos(), *i);
+            assert_eq!(app.line_entry.get_alert(), None);
+        }
+        
+        app
     }
 }
