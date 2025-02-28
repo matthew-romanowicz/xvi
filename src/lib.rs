@@ -22,7 +22,7 @@ use crate::large_text_view::LargeTextView;
 
 mod hex_edit;
 use crate::hex_edit::{FileManager, Action, CompoundAction, ActionStack, UpdateDescription, 
-        EditMode, ActionResult, ShowType, ByteOperation, FillType, shift_vector, 
+        EditMode, ActionResult, ShowType, ByteOperation, FillType, FindDirection, shift_vector, 
         vector_op, HexEdit, DataSource, Structure, FileMap};
 pub use crate::hex_edit::FileManagerType;
 
@@ -942,15 +942,15 @@ impl App {
             // FIND IN FILE
             '/' => {
                 // let hm = &mut editor_stack.editors[editor_stack.current];
-                self.editors.current_mut().hex_edit.clear_find();
-                self.editors.current_mut().hex_edit.find(&command[1..].to_vec());
-                (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.seek_next())
+                let mut res = self.editors.current_mut().hex_edit.clear_find();
+                res = res.combine(self.editors.current_mut().hex_edit.find(&command[1..].to_vec(), FindDirection::Forward));
+                (CommandInstruction::NoOp, res.combine(self.editors.current_mut().hex_edit.seek_find_result(false)))
             },
             '?' => {
                 // let hm = &mut editor_stack.editors[editor_stack.current];
-                self.editors.current_mut().hex_edit.clear_find();
-                self.editors.current_mut().hex_edit.find(&command[1..].to_vec());
-                (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.seek_prev())
+                let mut res = self.editors.current_mut().hex_edit.clear_find();
+                res = res.combine(self.editors.current_mut().hex_edit.find(&command[1..].to_vec(), FindDirection::Backward));
+                (CommandInstruction::NoOp, res.combine(self.editors.current_mut().hex_edit.seek_find_result(false)))
             },
             '\\' => {
                 let mut word = command[1..].to_vec();
@@ -958,9 +958,9 @@ impl App {
                 match parse_bytes(&word) {
                     Ok(v) => {
                         // let hm = &mut editor_stack.editors[editor_stack.current];
-                        self.editors.current_mut().hex_edit.clear_find();
-                        self.editors.current_mut().hex_edit.find_bytes(&v);
-                        (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.seek_next())
+                        let mut res = self.editors.current_mut().hex_edit.clear_find();
+                        res = res.combine(self.editors.current_mut().hex_edit.find_bytes(&v, FindDirection::Forward));
+                        (CommandInstruction::NoOp, res.combine(self.editors.current_mut().hex_edit.seek_find_result(false)))
                     },
                     Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg))
                 }
@@ -986,10 +986,10 @@ impl App {
                         self.editors.current_mut().hex_edit.seek(SeekFrom::End(0))
                     },
                     KeystrokeToken::Character('n') => {
-                        self.editors.current_mut().hex_edit.seek_next()
+                        self.editors.current_mut().hex_edit.seek_find_result(false)
                     },
                     KeystrokeToken::Character('N') => {
-                        self.editors.current_mut().hex_edit.seek_prev()
+                        self.editors.current_mut().hex_edit.seek_find_result(true)
                     },
                     KeystrokeToken::Character('u') => {
                         self.editors.current_mut().undo()
@@ -3670,6 +3670,15 @@ mod app_string_tests {
         test_driver(&mut app, "/IDAT\n"); 
         assert_eq!(app.current_cursor_pos(), 53);
         assert_eq!(app.line_entry.get_alert(), Some("Result 1 of 4".to_string()));
+        assert_eq!(app.current_editor().highlights.len(), 4);
+        assert_eq!(app.current_editor().highlights[0].start, 53);
+        assert_eq!(app.current_editor().highlights[0].span, 4);
+        assert_eq!(app.current_editor().highlights[1].start, 164);
+        assert_eq!(app.current_editor().highlights[1].span, 4);
+        assert_eq!(app.current_editor().highlights[2].start, 205);
+        assert_eq!(app.current_editor().highlights[2].span, 4);
+        assert_eq!(app.current_editor().highlights[3].start, 316);
+        assert_eq!(app.current_editor().highlights[3].span, 4);
 
         // Go to second and third result without moving cursor
         test_driver(&mut app, "n"); 
@@ -3786,10 +3795,23 @@ mod app_string_tests {
         ];
 
         for i in positions.iter().skip(1) {
+
+            assert_eq!(app.current_editor().highlights.len(), 4);
+            assert_eq!(app.current_editor().highlights[0].start, 53);
+            assert_eq!(app.current_editor().highlights[0].span, 4);
+            assert_eq!(app.current_editor().highlights[1].start, 164);
+            assert_eq!(app.current_editor().highlights[1].span, 4);
+            assert_eq!(app.current_editor().highlights[2].start, 205);
+            assert_eq!(app.current_editor().highlights[2].span, 4);
+            assert_eq!(app.current_editor().highlights[3].start, 316);
+            assert_eq!(app.current_editor().highlights[3].span, 4);
+
             test_driver(&mut app, "u"); 
             assert_eq!(app.current_cursor_pos(), *i);
             assert_eq!(app.line_entry.get_alert(), None);
         }
+
+        assert_eq!(app.current_editor().highlights.len(), 0);
         
         app
     }
@@ -3802,10 +3824,22 @@ mod app_string_tests {
             316, 50, 53, 50, 316, 320, 53, 320, 316, 53, 316, 205, 164, 165, 164, 205, 164, 205, 204, 205, 164, 205, 164, 53, 0
         ];
 
+        assert_eq!(app.current_editor().highlights.len(), 0);
+
         for i in positions.iter().rev().skip(1) {
             test_driver(&mut app, "U"); 
             assert_eq!(app.current_cursor_pos(), *i);
-            assert_eq!(app.line_entry.get_alert(), None);
+            // assert_eq!(app.line_entry.get_alert(), None);
+
+            assert_eq!(app.current_editor().highlights.len(), 4);
+            assert_eq!(app.current_editor().highlights[0].start, 53);
+            assert_eq!(app.current_editor().highlights[0].span, 4);
+            assert_eq!(app.current_editor().highlights[1].start, 164);
+            assert_eq!(app.current_editor().highlights[1].span, 4);
+            assert_eq!(app.current_editor().highlights[2].start, 205);
+            assert_eq!(app.current_editor().highlights[2].span, 4);
+            assert_eq!(app.current_editor().highlights[3].start, 316);
+            assert_eq!(app.current_editor().highlights[3].span, 4);
         }
         
         app

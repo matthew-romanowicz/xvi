@@ -615,6 +615,86 @@ impl Action for SeekAction {
     }
 }
 
+pub struct ClearFindAction {
+    find_info: FindInfo
+}
+
+impl ClearFindAction {
+    pub fn new(find_info: FindInfo) -> ClearFindAction {
+        ClearFindAction {
+            find_info
+        }
+    }
+}
+
+impl Action for ClearFindAction {
+    fn undo(&self, hex_edit: &mut HexEdit) -> ActionResult {
+        hex_edit.initiate_find(self.find_info.clone())
+    }
+
+    fn redo(&self, hex_edit: &mut HexEdit) -> ActionResult {
+        hex_edit.clear_find()
+    }
+
+    fn size(&self) -> usize{
+        16 // TODO make this right
+    }
+}
+
+pub struct InitiateFindAction {
+    find_info: FindInfo
+}
+
+impl InitiateFindAction {
+    pub fn new(find_info: FindInfo) -> InitiateFindAction {
+        InitiateFindAction {
+            find_info
+        }
+    }
+}
+
+impl Action for InitiateFindAction {
+    fn undo(&self, hex_edit: &mut HexEdit) -> ActionResult {
+        hex_edit.clear_find()
+    }
+
+    fn redo(&self, hex_edit: &mut HexEdit) -> ActionResult {
+        hex_edit.initiate_find(self.find_info.clone())
+    }
+
+    fn size(&self) -> usize{
+        16 // TODO make this right
+    }
+}
+
+pub struct SeekFindResultAction {
+    original_index: usize,
+    reversed: bool
+}
+
+impl SeekFindResultAction {
+    pub fn new(original_index: usize, reversed: bool) -> SeekFindResultAction {
+        SeekFindResultAction {
+            original_index,
+            reversed
+        }
+    }
+}
+
+impl Action for SeekFindResultAction {
+    fn undo(&self, hex_edit: &mut HexEdit) -> ActionResult {
+        hex_edit.set_cursor_pos(self.original_index)
+    }
+
+    fn redo(&self, hex_edit: &mut HexEdit) -> ActionResult {
+        hex_edit.seek_find_result(self.reversed)
+    }
+
+    fn size(&self) -> usize{
+        std::mem::size_of::<SeekFindResultAction>()
+    }
+}
+
 pub struct CompoundAction {
     actions: Vec<Rc<dyn Action>>
 }
@@ -870,6 +950,27 @@ struct FormatSummary {
     format: CharacterFormat
 }
 
+#[derive(Clone)]
+enum FindType {
+    Ascii,
+    Binary
+}
+
+#[derive(Clone)]
+pub enum FindDirection {
+    Forward,
+    Backward
+}
+
+#[derive(Clone)]
+struct FindInfo {
+    find_type: FindType,
+    direction: FindDirection,
+    ignore_case: bool,
+    use_regex: bool,
+    expr: Vec<u8>
+}
+
 pub struct HexEdit {
     file_manager: FileManager,
     x: usize,
@@ -893,7 +994,8 @@ pub struct HexEdit {
     nibble: Nibble,
     start_line: usize,
     edit_mode: EditMode,
-    highlights: Vec::<Highlight>,
+    pub highlights: Vec::<Highlight>, // Needed for tests
+    current_find: Option<FindInfo>,
     display_data: Vec::<u8>,
     valid_bytes: usize,
     clipboard_registers: [BitField; 32], //Needs to be 32 or less for Default::default() to work
@@ -971,6 +1073,7 @@ impl HexEdit {
             start_line: 0,
             edit_mode: EditMode::AsciiOverwrite,
             highlights: vec![],
+            current_find: None,
             display_data: Vec::<u8>::new(),
             valid_bytes: 0,
             clipboard_registers: Default::default(),
@@ -1143,22 +1246,135 @@ impl HexEdit {
 
     pub fn clear_find(&mut self) -> ActionResult {
         self.highlights = Vec::<Highlight>::new();
-        ActionResult::no_error(UpdateDescription::AttrsOnly)
+        let mut res = ActionResult::no_error(UpdateDescription::AttrsOnly);
+        if let Some(find_info) = self.current_find.take() {
+            res.set_action(Some(Rc::new(ClearFindAction::new(find_info))));
+        }
+        
+        res
     }
 
-    pub fn find(&mut self, expr: &Vec<char>) -> ActionResult {
+    fn initiate_find(&mut self, info: FindInfo) -> ActionResult {
+        // let expr: Vec<u8> = info.expr.iter().map(|c| *c as u8).collect();
+        match info.find_type {
+            FindType::Ascii => {
+                for res in self.file_manager.find(&info.expr, info.ignore_case, info.use_regex) {
+                    self.highlights.push(Highlight {start: res.start, span: res.span})
+                }
+            },
+            FindType::Binary => {
+                for res in self.file_manager.find_bytes(&info.expr) {
+                    self.highlights.push(Highlight {start: res.start, span: res.span})
+                }
+            }
+        }
+
+        self.current_find = Some(info.clone());
+
+        let mut res = ActionResult::no_error(UpdateDescription::AttrsOnly);
+        res.set_action(Some(Rc::new(InitiateFindAction::new(info))));
+        res
+        
+    }
+
+    pub fn find(&mut self, expr: &Vec<char>, direction: FindDirection) -> ActionResult {
         let expr: Vec<u8> = expr.iter().map(|c| *c as u8).collect();
-        for res in self.file_manager.find(&expr, self.ignore_case, self.use_regex) {
-            self.highlights.push(Highlight {start: res.start, span: res.span})
-        }
-        ActionResult::no_error(UpdateDescription::AttrsOnly)
+        // for res in self.file_manager.find(&expr, self.ignore_case, self.use_regex) {
+        //     self.highlights.push(Highlight {start: res.start, span: res.span})
+        // }
+        let find_info = FindInfo {
+            find_type: FindType::Ascii, 
+            direction, 
+            ignore_case: self.ignore_case, 
+            use_regex: self.use_regex,
+            expr: expr.clone()
+        };
+        self.initiate_find(find_info)
+        // self.current_find = Some(find_info.clone());
+        // let mut res = ActionResult::no_error(UpdateDescription::AttrsOnly);
+        // res.set_action(InitiateFindAction::new(find_info));
+        // res
     }
 
-    pub fn find_bytes(&mut self, bytes: &Vec<u8>) -> ActionResult {
-        for res in self.file_manager.find_bytes(&bytes) {
-            self.highlights.push(Highlight {start: res.start, span: res.span})
+    pub fn find_bytes(&mut self, bytes: &Vec<u8>, direction: FindDirection) -> ActionResult {
+        // for res in self.file_manager.find_bytes(&bytes) {
+        //     self.highlights.push(Highlight {start: res.start, span: res.span})
+        // }
+        // ActionResult::no_error(UpdateDescription::AttrsOnly)
+        let find_info = FindInfo {
+            find_type: FindType::Binary, 
+            direction, 
+            ignore_case: self.ignore_case, 
+            use_regex: self.use_regex,
+            expr: bytes.clone()
+        };
+        self.initiate_find(find_info)
+    }
+
+    pub fn seek_find_result(&mut self, reverse: bool) -> ActionResult {
+        if let Some(find_info) = &self.current_find {
+
+            let action = SeekFindResultAction::new(self.cursor_pos, reverse);
+
+            let direction = if reverse {
+                match find_info.direction {
+                    FindDirection::Forward => FindDirection::Backward,
+                    FindDirection::Backward => FindDirection::Forward
+                }
+            } else {
+                find_info.direction.clone()
+            };
+
+            let num_highlights = self.highlights.len();
+
+            match direction {
+                FindDirection::Forward => {
+                    for (i, h) in self.highlights.iter().enumerate() {
+                        if h.start > self.cursor_pos {
+                            let info_result = ActionResult::info(format!("Result {} of {}", i + 1, num_highlights));
+                            let mut res = self.set_cursor_pos(h.start);
+                            res.set_action(Some(Rc::new(action)));
+                            return info_result.combine(res)
+                        }
+                    }
+            
+                    if num_highlights > 0 {
+                        let warn_result = ActionResult::warn(format!("Wrapped to result {} of {}", 1, num_highlights));
+                        let mut res = self.set_cursor_pos(self.highlights[0].start);
+                        res.set_action(Some(Rc::new(action)));
+                        warn_result.combine(res)
+                    } else {
+                        // NOTE that an action is performed even if there are no results. This is to enable macros to be recorded
+                        let mut res = ActionResult::error("No results".to_string());
+                        res.set_action(Some(Rc::new(action)));
+                        res
+                    }
+                },
+                FindDirection::Backward => {
+                    for (i, h) in self.highlights.iter().enumerate().rev() {
+                        if h.start < self.cursor_pos {
+                            let info_result = ActionResult::info(format!("Result {} of {}", i + 1, num_highlights));
+                            let mut res = self.set_cursor_pos(h.start);
+                            res.set_action(Some(Rc::new(action)));
+                            return info_result.combine(res)
+                        }
+                    }
+            
+                    if num_highlights > 0 {
+                        let warn_result = ActionResult::warn(format!("Wrapped to result {} of {}", num_highlights, num_highlights));
+                        let mut res = self.set_cursor_pos(self.highlights[self.highlights.len() - 1].start);
+                        res.set_action(Some(Rc::new(action)));
+                        warn_result.combine(res)
+                    } else {
+                        let mut res = ActionResult::error("No results".to_string());
+                        res.set_action(Some(Rc::new(action)));
+                        res
+                    }
+                }
+            }
+        } else {
+            return ActionResult::error("No active search".to_string())
         }
-        ActionResult::no_error(UpdateDescription::AttrsOnly)
     }
 
     pub fn seek_next(&mut self) -> ActionResult {
