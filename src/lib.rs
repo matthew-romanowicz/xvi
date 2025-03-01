@@ -1148,7 +1148,7 @@ impl App {
                     Some(Input::Character('I')) => {
                         self.transition_to_edit(&mut window, EditMode::AsciiInsert);
                     },
-                    Some(Input::Character(':')) | Some(Input::Character('/')) | Some(Input::Character('\\')) => {
+                    Some(Input::Character(':')) | Some(Input::Character('/'))  | Some(Input::Character('?')) | Some(Input::Character('\\')) => {
                         self.edit_state = EditState::Command;
                         self.line_entry.addch(ch_input.unwrap()); 
                         if let Some(window) = &mut window {
@@ -3783,6 +3783,25 @@ mod app_string_tests {
         assert_eq!(app.current_cursor_pos(), 316);
         assert_eq!(app.line_entry.get_alert(), Some("Wrapped to result 4 of 4".to_string()));
 
+        // Search for IEND
+        test_driver(&mut app, "/IEND\n");
+        assert_eq!(app.current_cursor_pos(), 330);
+        assert_eq!(app.line_entry.get_alert(), Some("Result 1 of 1".to_string()));
+
+        // Try forward and reverse search with the single result
+        test_driver(&mut app, "n"); 
+        assert_eq!(app.current_cursor_pos(), 330);
+        assert_eq!(app.line_entry.get_alert(), Some("Wrapped to result 1 of 1".to_string()));
+
+        test_driver(&mut app, "N"); 
+        assert_eq!(app.current_cursor_pos(), 330);
+        assert_eq!(app.line_entry.get_alert(), Some("Wrapped to result 1 of 1".to_string()));
+
+        // Search for fizz (no results)
+        test_driver(&mut app, "/fizz\n");
+        assert_eq!(app.current_cursor_pos(), 330);
+        assert_eq!(app.line_entry.get_alert(), Some("No results".to_string()));
+
         app
     }
 
@@ -3790,10 +3809,29 @@ mod app_string_tests {
     fn ascii_search_undo_test<'a>() -> App {
         let mut app = ascii_search_test();
 
+        // Undo search that had no results
+        assert_eq!(app.current_editor().highlights.len(), 0);
+        assert_eq!(app.current_cursor_pos(), 330);
+        test_driver(&mut app, "u"); 
+
+        // Undo wrap around seeks and search with one result (IEND)
+        for i in 0..3 {
+            assert_eq!(app.current_editor().highlights.len(), 1);
+            assert_eq!(app.current_editor().highlights[0].start, 330);
+            assert_eq!(app.current_editor().highlights[0].span, 4);
+            assert_eq!(app.current_cursor_pos(), 330);
+            test_driver(&mut app, "u"); 
+            assert_eq!(app.line_entry.get_alert(), None);
+            
+        }
+
+        assert_eq!(app.current_cursor_pos(), 316);
+
         let positions = [
             316, 50, 53, 50, 316, 320, 53, 320, 316, 53, 316, 205, 164, 165, 164, 205, 164, 205, 204, 205, 164, 205, 164, 53, 0
         ];
 
+        // Undo seeks with four results (IDAT)
         for i in positions.iter().skip(1) {
 
             assert_eq!(app.current_editor().highlights.len(), 4);
@@ -3821,15 +3859,50 @@ mod app_string_tests {
         let mut app = ascii_search_undo_test();
 
         let positions = [
-            316, 50, 53, 50, 316, 320, 53, 320, 316, 53, 316, 205, 164, 165, 164, 205, 164, 205, 204, 205, 164, 205, 164, 53, 0
+            316, 50, 53, 50, 
+            316, 320, 53, 320,
+            316, 53, 316, 205, 
+            164, 165, 164, 205, 
+            164, 205, 204, 205, 
+            164, 205, 164, 53, 
+            0
+        ];
+
+        let result_indices = [
+            4, 0, 1, 0, 
+            4, 0, 1, 0, 
+            4, 1, 4, 3, 
+            2, 0, 2, 0, 
+            2, 3, 0, 3, 
+            0, 3, 2, 1, 
+            0
+        ];
+        let wrapped = [
+            true, false, false, false, 
+            false, false, true, false, 
+            true, true, false, false, 
+            false, false, false, false, 
+            false, false, false, false, 
+            false, false, false, false,
+            false
         ];
 
         assert_eq!(app.current_editor().highlights.len(), 0);
 
-        for i in positions.iter().rev().skip(1) {
+        for (i, pos) in positions.iter().enumerate().rev().skip(1) {
             test_driver(&mut app, "U"); 
-            assert_eq!(app.current_cursor_pos(), *i);
-            // assert_eq!(app.line_entry.get_alert(), None);
+            assert_eq!(app.current_cursor_pos(), *pos);
+            if result_indices[i] == 0 {
+                assert_eq!(app.line_entry.get_alert(), None);
+            } else {
+                let alert = if wrapped[i] {
+                    format!("Wrapped to result {} of 4", result_indices[i])
+                } else {
+                    format!("Result {} of 4", result_indices[i])
+                };
+                assert_eq!(app.line_entry.get_alert(), Some(alert.to_string()));
+            }
+            // 
 
             assert_eq!(app.current_editor().highlights.len(), 4);
             assert_eq!(app.current_editor().highlights[0].start, 53);
@@ -3840,6 +3913,287 @@ mod app_string_tests {
             assert_eq!(app.current_editor().highlights[2].span, 4);
             assert_eq!(app.current_editor().highlights[3].start, 316);
             assert_eq!(app.current_editor().highlights[3].span, 4);
+        }
+
+        for i in 0..3 {
+            test_driver(&mut app, "U"); 
+            assert_eq!(app.current_editor().highlights.len(), 1);
+            assert_eq!(app.current_editor().highlights[0].start, 330);
+            assert_eq!(app.current_editor().highlights[0].span, 4);
+            assert_eq!(app.current_cursor_pos(), 330);
+            if i == 0 {
+                assert_eq!(app.line_entry.get_alert(), Some("Result 1 of 1".to_string()));
+            } else {
+                assert_eq!(app.line_entry.get_alert(), Some("Wrapped to result 1 of 1".to_string()));
+            }
+        }
+        
+        app
+    }
+
+    #[test]
+    fn ascii_search_reverse_test<'a>() -> App {
+        let mut app = App::new(50, 50);
+        let mut window = None;
+        app.init(&mut window, r"tests\oi4n2c16.png".to_string(), FileManagerType::RamOnly, false).unwrap();
+
+        // Search for IDAT
+        test_driver(&mut app, "?IDAT\n"); 
+        assert_eq!(app.current_cursor_pos(), 316);
+        assert_eq!(app.line_entry.get_alert(), Some("Wrapped to result 4 of 4".to_string()));
+        assert_eq!(app.current_editor().highlights.len(), 4);
+        assert_eq!(app.current_editor().highlights[0].start, 53);
+        assert_eq!(app.current_editor().highlights[0].span, 4);
+        assert_eq!(app.current_editor().highlights[1].start, 164);
+        assert_eq!(app.current_editor().highlights[1].span, 4);
+        assert_eq!(app.current_editor().highlights[2].start, 205);
+        assert_eq!(app.current_editor().highlights[2].span, 4);
+        assert_eq!(app.current_editor().highlights[3].start, 316);
+        assert_eq!(app.current_editor().highlights[3].span, 4);
+
+        // Go to 3rd and 2nd result without moving cursor
+        test_driver(&mut app, "n"); 
+        assert_eq!(app.current_cursor_pos(), 205);
+        assert_eq!(app.line_entry.get_alert(), Some("Result 3 of 4".to_string()));
+
+        test_driver(&mut app, "n"); 
+        assert_eq!(app.current_cursor_pos(), 164);
+        assert_eq!(app.line_entry.get_alert(), Some("Result 2 of 4".to_string()));
+
+        // Move cursor to between 2nd and 3rd result then seek to 2nd result (2 trials)
+        test_driver(&mut app, "205g"); 
+        assert_eq!(app.current_cursor_pos(), 205);
+        assert_eq!(app.line_entry.get_alert(), None);
+
+        test_driver(&mut app, "n"); 
+        assert_eq!(app.current_cursor_pos(), 164);
+        assert_eq!(app.line_entry.get_alert(), Some("Result 2 of 4".to_string()));
+
+        test_driver(&mut app, "165g"); 
+        assert_eq!(app.current_cursor_pos(), 165);
+        assert_eq!(app.line_entry.get_alert(), None);
+
+        test_driver(&mut app, "n"); 
+        assert_eq!(app.current_cursor_pos(), 164);
+        assert_eq!(app.line_entry.get_alert(), Some("Result 2 of 4".to_string()));
+
+        // Seek to previous result
+        test_driver(&mut app, "N"); 
+        assert_eq!(app.current_cursor_pos(), 205);
+        assert_eq!(app.line_entry.get_alert(), Some("Result 3 of 4".to_string()));
+
+        // Move cursor between 2nd and 3rd result then seek back to 3rd result (2 trials)
+        test_driver(&mut app, "204g"); 
+        assert_eq!(app.current_cursor_pos(), 204);
+        assert_eq!(app.line_entry.get_alert(), None);
+
+        test_driver(&mut app, "N"); 
+        assert_eq!(app.current_cursor_pos(), 205);
+        assert_eq!(app.line_entry.get_alert(), Some("Result 3 of 4".to_string()));
+
+        test_driver(&mut app, "164g"); 
+        assert_eq!(app.current_cursor_pos(), 164);
+        assert_eq!(app.line_entry.get_alert(), None);
+
+        test_driver(&mut app, "N"); 
+        assert_eq!(app.current_cursor_pos(), 205);
+        assert_eq!(app.line_entry.get_alert(), Some("Result 3 of 4".to_string()));
+
+        // Seek to 2nd and 1st result
+        test_driver(&mut app, "n"); 
+        assert_eq!(app.current_cursor_pos(), 164);
+        assert_eq!(app.line_entry.get_alert(), Some("Result 2 of 4".to_string()));
+
+        test_driver(&mut app, "n"); 
+        assert_eq!(app.current_cursor_pos(), 53);
+        assert_eq!(app.line_entry.get_alert(), Some("Result 1 of 4".to_string()));
+
+        // Wrap to last result
+        test_driver(&mut app, "n"); 
+        assert_eq!(app.current_cursor_pos(), 316);
+        assert_eq!(app.line_entry.get_alert(), Some("Wrapped to result 4 of 4".to_string()));
+
+        // Wrap to first result
+        test_driver(&mut app, "N"); 
+        assert_eq!(app.current_cursor_pos(), 53);
+        assert_eq!(app.line_entry.get_alert(), Some("Wrapped to result 1 of 4".to_string()));
+
+        // Move cursor to after last result and wrap to first result
+        test_driver(&mut app, "320g"); 
+        assert_eq!(app.current_cursor_pos(), 320);
+        assert_eq!(app.line_entry.get_alert(), None);
+
+        test_driver(&mut app, "N"); 
+        assert_eq!(app.current_cursor_pos(), 53);
+        assert_eq!(app.line_entry.get_alert(), Some("Wrapped to result 1 of 4".to_string()));
+
+        // Move cursor to after last result and seek to last result
+        test_driver(&mut app, "320g"); 
+        assert_eq!(app.current_cursor_pos(), 320);
+        assert_eq!(app.line_entry.get_alert(), None);
+
+        test_driver(&mut app, "n"); 
+        assert_eq!(app.current_cursor_pos(), 316);
+        assert_eq!(app.line_entry.get_alert(), Some("Result 4 of 4".to_string()));
+
+        // Move cursor to before first result and seek to first result
+        test_driver(&mut app, "50g"); 
+        assert_eq!(app.current_cursor_pos(), 50);
+        assert_eq!(app.line_entry.get_alert(), None);
+
+        test_driver(&mut app, "N"); 
+        assert_eq!(app.current_cursor_pos(), 53);
+        assert_eq!(app.line_entry.get_alert(), Some("Result 1 of 4".to_string()));
+
+        // Move cursor to before first result result and wrap to last result
+        test_driver(&mut app, "50g"); 
+        assert_eq!(app.current_cursor_pos(), 50);
+        assert_eq!(app.line_entry.get_alert(), None);
+
+        test_driver(&mut app, "n"); 
+        assert_eq!(app.current_cursor_pos(), 316);
+        assert_eq!(app.line_entry.get_alert(), Some("Wrapped to result 4 of 4".to_string()));
+
+        // Search for IEND
+        test_driver(&mut app, "?IEND\n");
+        assert_eq!(app.current_cursor_pos(), 330);
+        assert_eq!(app.line_entry.get_alert(), Some("Wrapped to result 1 of 1".to_string()));
+
+        // Try forward and reverse search with the single result
+        test_driver(&mut app, "n"); 
+        assert_eq!(app.current_cursor_pos(), 330);
+        assert_eq!(app.line_entry.get_alert(), Some("Wrapped to result 1 of 1".to_string()));
+
+        test_driver(&mut app, "N"); 
+        assert_eq!(app.current_cursor_pos(), 330);
+        assert_eq!(app.line_entry.get_alert(), Some("Wrapped to result 1 of 1".to_string()));
+
+        // Search for fizz (no results)
+        test_driver(&mut app, "?fizz\n");
+        assert_eq!(app.current_cursor_pos(), 330);
+        assert_eq!(app.line_entry.get_alert(), Some("No results".to_string()));
+
+        app
+    }
+
+    #[test]
+    fn ascii_search_reverse_undo_test<'a>() -> App {
+        let mut app = ascii_search_reverse_test();
+
+        // Undo search that had no results
+        assert_eq!(app.current_editor().highlights.len(), 0);
+        assert_eq!(app.current_cursor_pos(), 330);
+        test_driver(&mut app, "u"); 
+
+        // Undo wrap around seeks and search with one result (IEND)
+        for i in 0..3 {
+            assert_eq!(app.current_editor().highlights.len(), 1);
+            assert_eq!(app.current_editor().highlights[0].start, 330);
+            assert_eq!(app.current_editor().highlights[0].span, 4);
+            assert_eq!(app.current_cursor_pos(), 330);
+            test_driver(&mut app, "u"); 
+            assert_eq!(app.line_entry.get_alert(), None);
+            
+        }
+
+        assert_eq!(app.current_cursor_pos(), 316);
+
+        let positions = [
+            316, 50, 53, 50, 316, 320, 53, 320, 53, 316, 53, 164, 205, 164, 205, 204, 205, 164, 165, 164, 205, 164, 205, 316, 0
+        ];
+
+        // Undo seeks with four results (IDAT)
+        for i in positions.iter().skip(1) {
+
+            assert_eq!(app.current_editor().highlights.len(), 4);
+            assert_eq!(app.current_editor().highlights[0].start, 53);
+            assert_eq!(app.current_editor().highlights[0].span, 4);
+            assert_eq!(app.current_editor().highlights[1].start, 164);
+            assert_eq!(app.current_editor().highlights[1].span, 4);
+            assert_eq!(app.current_editor().highlights[2].start, 205);
+            assert_eq!(app.current_editor().highlights[2].span, 4);
+            assert_eq!(app.current_editor().highlights[3].start, 316);
+            assert_eq!(app.current_editor().highlights[3].span, 4);
+
+            test_driver(&mut app, "u"); 
+            assert_eq!(app.current_cursor_pos(), *i);
+            assert_eq!(app.line_entry.get_alert(), None);
+        }
+
+        assert_eq!(app.current_editor().highlights.len(), 0);
+        
+        app
+    }
+
+    #[test]
+    fn ascii_search_reverse_redo_test<'a>() -> App {
+        let mut app = ascii_search_reverse_undo_test();
+
+        let positions = [
+            316, 50, 53, 50, 
+            316, 320, 53, 320, 
+            53, 316, 53, 164, 
+            205, 164, 205, 204, 
+            205, 164, 165, 164, 
+            205, 164, 205, 316, 
+            0
+        ];
+
+        let result_indices = [
+            4, 0, 1, 0, 
+            4, 0, 1, 0, 
+            1, 4, 1, 2, 
+            3, 0, 3, 0, 
+            3, 2, 0, 2, 
+            0, 2, 3, 4, 
+            0
+        ];
+        let wrapped = [
+            true, false, false, false, 
+            false, false, true, false, 
+            true, true, false, false, 
+            false, false, false, false, 
+            false, false, false, false, 
+            false, false, false, true,
+            false
+        ];
+
+        assert_eq!(app.current_editor().highlights.len(), 0);
+
+        for (i, pos) in positions.iter().enumerate().rev().skip(1) {
+            test_driver(&mut app, "U"); 
+            assert_eq!(app.current_cursor_pos(), *pos);
+            if result_indices[i] == 0 {
+                assert_eq!(app.line_entry.get_alert(), None);
+            } else {
+                let alert = if wrapped[i] {
+                    format!("Wrapped to result {} of 4", result_indices[i])
+                } else {
+                    format!("Result {} of 4", result_indices[i])
+                };
+                assert_eq!(app.line_entry.get_alert(), Some(alert.to_string()));
+            }
+            // 
+
+            assert_eq!(app.current_editor().highlights.len(), 4);
+            assert_eq!(app.current_editor().highlights[0].start, 53);
+            assert_eq!(app.current_editor().highlights[0].span, 4);
+            assert_eq!(app.current_editor().highlights[1].start, 164);
+            assert_eq!(app.current_editor().highlights[1].span, 4);
+            assert_eq!(app.current_editor().highlights[2].start, 205);
+            assert_eq!(app.current_editor().highlights[2].span, 4);
+            assert_eq!(app.current_editor().highlights[3].start, 316);
+            assert_eq!(app.current_editor().highlights[3].span, 4);
+        }
+
+        for i in 0..3 {
+            test_driver(&mut app, "U"); 
+            assert_eq!(app.current_editor().highlights.len(), 1);
+            assert_eq!(app.current_editor().highlights[0].start, 330);
+            assert_eq!(app.current_editor().highlights[0].span, 4);
+            assert_eq!(app.current_cursor_pos(), 330);
+            assert_eq!(app.line_entry.get_alert(), Some("Wrapped to result 1 of 1".to_string()));
+            
         }
         
         app

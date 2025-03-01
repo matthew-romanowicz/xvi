@@ -708,17 +708,24 @@ impl Action for CompoundAction {
     }
 
     fn redo(&self, hex_edit: &mut HexEdit) -> ActionResult {
-        let mut res = Vec::<Rc<dyn Action>>::new();
+        let mut actions = Vec::<Rc<dyn Action>>::new();
+        let mut alert_type = AlertType::None;
+        let mut alert = None;
         for action in self.actions.iter() {
-            if let Some(a) = (*action).redo(hex_edit).action {
-                res.push(Rc::clone(&a));
+            let mut res = (*action).redo(hex_edit);
+            if res.alert_type >= alert_type {
+                alert_type = res.alert_type.clone();
+                alert = res.alert.take();
+            }
+            if let Some(a) = res.action {
+                actions.push(Rc::clone(&a));
             }
         }
         ActionResult {
-            alert: None,
-            alert_type: AlertType::None,
+            alert,
+            alert_type,
             update: UpdateDescription::All, // TODO make this more specific
-            action: Some(Rc::new(CompoundAction{actions: res}))
+            action: Some(Rc::new(CompoundAction{actions}))
         }
     }
 
