@@ -1,4 +1,5 @@
 use std::rc::Rc;
+use std::cell::RefCell;
 use std::io::SeekFrom;
 use std::io::Write;
 use std::collections::HashMap;
@@ -1006,6 +1007,7 @@ pub struct HexEdit {
     display_data: Vec::<u8>,
     valid_bytes: usize,
     clipboard_registers: [BitField; 32], //Needs to be 32 or less for Default::default() to work
+    external_clipboard_registers: Rc<RefCell<[BitField; 32]>>,
     file_spec: Option<FileMap>,
     current_field: Option<(std::ops::Range<BitIndex>, bool)>, // (range, is_valid)
     related_fields: Vec<std::ops::Range<BitIndex>>
@@ -1049,8 +1051,8 @@ pub fn vector_op<F>(buffer1: &mut Vec<u8>, buffer2: &Vec<u8>, op: F) where F: Fn
 
 impl HexEdit {
 
-    pub fn new(mut file_manager: FileManager, x: usize, y: usize, width: usize, height: usize, line_length: u8, show_filename: bool, 
-                show_hex: bool, show_ascii: bool, invalid_ascii_char: char, separator: String, capitalize_hex: bool) -> HexEdit {
+    pub fn new(mut file_manager: FileManager, x: usize, y: usize, width: usize, height: usize, clipboard_registers: Rc<RefCell<[BitField; 32]>>,
+        line_length: u8, show_filename: bool, show_hex: bool, show_ascii: bool, invalid_ascii_char: char, separator: String, capitalize_hex: bool) -> HexEdit {
 
         // let fs = PngFileSpec::new(&mut file_manager);
         // let png_struct = make_png();
@@ -1084,6 +1086,7 @@ impl HexEdit {
             display_data: Vec::<u8>::new(),
             valid_bytes: 0,
             clipboard_registers: Default::default(),
+            external_clipboard_registers: clipboard_registers,
             file_spec: None,
             current_field: None,
             related_fields: Vec::new()
