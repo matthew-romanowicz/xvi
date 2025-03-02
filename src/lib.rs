@@ -1,5 +1,4 @@
 use std::rc::Rc;
-use std::cell::RefCell;
 use std::io::SeekFrom;
 use std::io::Write;
 
@@ -188,7 +187,7 @@ struct EditorStack {
     y: usize,
     width: usize,
     height: usize,
-    clipboard_registers: Rc<RefCell<[BitField; 32]>>,
+    clipboard_registers: [BitField; 32],
     endianness: Endianness,
     cnum: ShowType,
     show_hex: bool,
@@ -207,7 +206,7 @@ impl EditorStack {
             y,
             width,
             height,
-            clipboard_registers: Rc::new(RefCell::new(Default::default())),
+            clipboard_registers: Default::default(),
             endianness: Endianness::Network,
             cnum: ShowType::Hex,
             show_hex: true,
@@ -220,7 +219,7 @@ impl EditorStack {
 
     fn push(&mut self, filename: String, file_manager_type: FileManagerType, extract: bool, file_spec: Option<Rc<Structure>>) -> std::io::Result<usize> {
         let fm = FileManager::new(filename, file_manager_type, extract)?;
-        let mut hex_edit = HexEdit::new(fm, self.x, self.y, self.width, self.height, self.clipboard_registers.clone(),
+        let mut hex_edit = HexEdit::new(fm, self.x, self.y, self.width, self.height,
             16, self.show_filename, self.show_hex, self.show_ascii, // Line Length, Show filename, Show Hex, Show ASCII
             '.', "  ".to_string(), self.caps);
         if let Some(s) = file_spec {
@@ -237,7 +236,7 @@ impl EditorStack {
 
     fn push_no_file(&mut self, fm: FileManager, file_map: Option<FileMap>) -> usize {
         // let fm = FileManager::from_buffer(buffer);
-        let mut hex_edit = HexEdit::new(fm, self.x, self.y, self.width, self.height, self.clipboard_registers.clone(),
+        let mut hex_edit = HexEdit::new(fm, self.x, self.y, self.width, self.height,
             16, self.show_filename, self.show_hex, self.show_ascii, // Line Length, Show filename, Show Hex, Show ASCII
             '.', "  ".to_string(), self.caps);
         if let Some(f) = file_map {
@@ -297,7 +296,7 @@ impl EditorStack {
         if index < 32 {
             self.current().hex_edit.get_register(index as u8)
         } else if index < 64 {
-            Ok(self.clipboard_registers.borrow()[index - 32].clone())
+            Ok(self.clipboard_registers[index - 32].clone())
         } else {
             Err("Clipboard register must be less than 64".to_string())
         }
@@ -532,7 +531,7 @@ impl App {
                                 } else if *n < 64 {
                                     // self.editors.clipboard_registers[*n - 32].reverse();
                                     // TODO: Consider swap_le_to_be
-                                    self.editors.clipboard_registers.borrow_mut()[*n - 32].swap_be_to_le();
+                                    self.editors.clipboard_registers[*n - 32].swap_be_to_le();
                                     (CommandInstruction::NoOp, ActionResult::empty())
                                 } else {
                                     (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
@@ -545,8 +544,7 @@ impl App {
                                 } else if *n < 64 {
                                     // let new = self.editors.clipboard_registers[*n - 32].iter().map(|x| !x).collect();
                                     // self.editors.clipboard_registers[*n - 32] = new;
-                                    let new_bf = !&self.editors.clipboard_registers.borrow()[*n - 32];
-                                    self.editors.clipboard_registers.borrow_mut()[*n - 32] = new_bf;
+                                    self.editors.clipboard_registers[*n - 32] = !&self.editors.clipboard_registers[*n - 32];
                                     (CommandInstruction::NoOp, ActionResult::empty())
                                 } else {
                                     (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
@@ -560,13 +558,13 @@ impl App {
                                 } else if *n < 64 {
                                     let mut e = DeflateEncoder::new(Vec::new(), Compression::new(self.editors.clevel as u32));
                                     // TODO: Make this work for non byte-aligned registers
-                                    let buff = self.editors.clipboard_registers.borrow()[*n - 32].clone().into_boxed_slice().unwrap().to_vec();
+                                    let buff = self.editors.clipboard_registers[*n - 32].clone().into_boxed_slice().unwrap().to_vec();
                                     if let Err(msg) = e.write_all(&buff) {
                                         (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
                                     } else {
                                         match e.finish() {
                                             Ok(w) => {
-                                                self.editors.clipboard_registers.borrow_mut()[*n - 32] = BitField::from_vec(w);
+                                                self.editors.clipboard_registers[*n - 32] = BitField::from_vec(w);
                                                 (CommandInstruction::NoOp, ActionResult::empty())
                                             },
                                             Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
@@ -582,13 +580,13 @@ impl App {
                                 } else if *n < 64 {
                                     let mut e = DeflateDecoder::new(Vec::new());
                                     // TODO: Make this work for non byte-aligned registers
-                                    let buff = self.editors.clipboard_registers.borrow()[*n - 32].clone().into_boxed_slice().unwrap().to_vec();
+                                    let buff = self.editors.clipboard_registers[*n - 32].clone().into_boxed_slice().unwrap().to_vec();
                                     if let Err(msg) = e.write_all(&buff) {
                                         (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
                                     } else {
                                         match e.finish() {
                                             Ok(w) => {
-                                                self.editors.clipboard_registers.borrow_mut()[*n - 32] = BitField::from_vec(w);
+                                                self.editors.clipboard_registers[*n - 32] = BitField::from_vec(w);
                                                 (CommandInstruction::NoOp, ActionResult::empty())
                                             },
                                             Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
@@ -603,7 +601,7 @@ impl App {
                                     (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.set_register(*n as u8, &BitField::default()))
                                 } else if *n < 64 {
                                     // self.editors.clipboard_registers[*n - 32] = Vec::<u8>::new();
-                                    self.editors.clipboard_registers.borrow_mut()[*n - 32] = BitField::default();
+                                    self.editors.clipboard_registers[*n - 32] = BitField::default();
                                     (CommandInstruction::NoOp, ActionResult::empty())
                                 } else {
                                     (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
@@ -753,7 +751,7 @@ impl App {
                                             if *n2 < 32 {
                                                 (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.concatenate_register(*n1 as u8, FillType::Register(*n2 as u8)))
                                             } else if *n2 < 64 { 
-                                                let fill = FillType::Bytes(self.editors.clipboard_registers.borrow()[*n2 - 32].clone());
+                                                let fill = FillType::Bytes(self.editors.clipboard_registers[*n2 - 32].clone());
                                                 (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.concatenate_register(*n1 as u8, fill))
                                             } else {
                                                 (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
@@ -761,11 +759,11 @@ impl App {
                                         } else if *n1 < 64 {
                                             if *n2 < 32 {
                                                 let fill = self.editors.current().hex_edit.get_register(*n2 as u8).unwrap();
-                                                self.editors.clipboard_registers.borrow_mut()[*n1 - 32].extend(&fill);
+                                                self.editors.clipboard_registers[*n1 - 32].extend(&fill);
                                                 (CommandInstruction::NoOp, ActionResult::empty())
                                             } else if *n2 < 64 { 
-                                                let fill = self.editors.clipboard_registers.borrow()[*n2 - 32].clone();
-                                                self.editors.clipboard_registers.borrow_mut()[*n1 - 32].extend(&fill);
+                                                let fill = self.editors.clipboard_registers[*n2 - 32].clone();
+                                                self.editors.clipboard_registers[*n1 - 32].extend(&fill);
                                                 (CommandInstruction::NoOp, ActionResult::empty())
                                             } else {
                                                 (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
@@ -781,7 +779,7 @@ impl App {
                                                 if *n < 32 {
                                                     (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.concatenate_register(*n as u8, FillType::Bytes(BitField::from_vec(v))))
                                                 } else if *n < 64 {
-                                                    self.editors.clipboard_registers.borrow_mut()[*n - 32].extend(&BitField::from_vec(v));
+                                                    self.editors.clipboard_registers[*n - 32].extend(&BitField::from_vec(v));
                                                     (CommandInstruction::NoOp, ActionResult::empty())
                                                 } else {
                                                     (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
@@ -809,7 +807,7 @@ impl App {
                                             if *n2 < 32 {
                                                 (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.manipulate_register(*n1 as u8, FillType::Register(*n2 as u8), op))
                                             } else if *n2 < 64 { 
-                                                let fill = FillType::Bytes(self.editors.clipboard_registers.borrow()[*n2 - 32].clone());
+                                                let fill = FillType::Bytes(self.editors.clipboard_registers[*n2 - 32].clone());
                                                 (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.manipulate_register(*n1 as u8, fill, op))
                                             } else {
                                                 (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
@@ -817,13 +815,11 @@ impl App {
                                         } else if *n1 < 64 {
                                             if *n2 < 32 {
                                                 let mut fill = self.editors.current_mut().hex_edit.get_register(*n2 as u8).unwrap();
-                                                let new_bf = op.apply(&self.editors.clipboard_registers.borrow()[*n1 - 32], &fill);
-                                                self.editors.clipboard_registers.borrow_mut()[*n1 - 32] = new_bf;
+                                                self.editors.clipboard_registers[*n1 - 32] = op.apply(&self.editors.clipboard_registers[*n1 - 32], &fill);
                                                 (CommandInstruction::NoOp, ActionResult::empty())
                                             } else if *n2 < 64 { 
-                                                let mut fill = self.editors.clipboard_registers.borrow()[*n2 - 32].clone();
-                                                let new_bf = op.apply(&self.editors.clipboard_registers.borrow()[*n1 - 32], &fill);
-                                                self.editors.clipboard_registers.borrow_mut()[*n1 - 32] = new_bf;
+                                                let mut fill = self.editors.clipboard_registers[*n2 - 32].clone();
+                                                self.editors.clipboard_registers[*n1 - 32] = op.apply(&self.editors.clipboard_registers[*n1 - 32], &fill);
                                                 (CommandInstruction::NoOp, ActionResult::empty())
                                             } else {
                                                 (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
@@ -840,8 +836,7 @@ impl App {
                                                     (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.manipulate_register(*n as u8, FillType::Bytes(BitField::from_vec(v)), op))
                                                 } else if *n < 64 {
                                                     let mut fill = BitField::from_vec(v);
-                                                    let new_bf = op.apply(&self.editors.clipboard_registers.borrow()[*n - 32], &fill);
-                                                    self.editors.clipboard_registers.borrow_mut()[*n - 32] = new_bf;
+                                                    self.editors.clipboard_registers[*n - 32] = op.apply(&self.editors.clipboard_registers[*n - 32], &fill);
                                                     (CommandInstruction::NoOp, ActionResult::empty())
                                                 } else {
                                                     (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
@@ -900,12 +895,11 @@ impl App {
                                             //     Ok(()) => (CommandInstruction::NoOp, ActionResult::empty()),
                                             //     Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
                                             // }
-                                            let new_bf = if shift < 0 { // TODO: use 'take' here
-                                                self.editors.clipboard_registers.borrow()[*register - 32].clone() << (shift.abs() as usize)
+                                            if shift < 0 { // TODO: use 'take' here
+                                                self.editors.clipboard_registers[*register - 32] = self.editors.clipboard_registers[*register - 32].clone() << (shift.abs() as usize);
                                             } else {
-                                                self.editors.clipboard_registers.borrow()[*register - 32].clone() >> (shift as usize)
-                                            };
-                                            self.editors.clipboard_registers.borrow_mut()[*register - 32] = new_bf;
+                                                self.editors.clipboard_registers[*register - 32] = self.editors.clipboard_registers[*register - 32].clone() >> (shift as usize);
+                                            }
                                             (CommandInstruction::NoOp, ActionResult::empty())
                                             
                                         } else {
@@ -924,15 +918,15 @@ impl App {
                                 if *register < 32 {
                                     (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.slice_register(*register as u8, BitIndex::bytes(*n1), BitIndex::bytes(*n2)))
                                 } else if *register < 64 {
-                                    if BitIndex::bytes(*n2) > self.editors.clipboard_registers.borrow()[*register - 32].len() {
+                                    if BitIndex::bytes(*n2) > self.editors.clipboard_registers[*register - 32].len() {
                                         (CommandInstruction::NoOp, ActionResult::error("Slice index outside of register contents bounds".to_string()))
                                     } else if *n1 > *n2 {
                                         (CommandInstruction::NoOp, ActionResult::error("Slice start index greater than slice end index".to_string()))
                                     } else {
                                         // let temp = &self.editors.clipboard_registers[*register - 32][*n1..*n2];
                                         // self.editors.clipboard_registers[*register - 32] = temp.to_vec();
-                                        let temp = self.editors.clipboard_registers.borrow()[*register - 32].slice_be(&BitIndex::bytes(*n1), &BitIndex::bytes(*n2));
-                                        self.editors.clipboard_registers.borrow_mut()[*register - 32] = temp;
+                                        let temp = self.editors.clipboard_registers[*register - 32].slice_be(&BitIndex::bytes(*n1), &BitIndex::bytes(*n2));
+                                        self.editors.clipboard_registers[*register - 32] = temp;
                                         (CommandInstruction::NoOp, ActionResult::empty())
                                     }
                                 } else {
@@ -1046,7 +1040,7 @@ impl App {
                         if n < 32 {
                             self.editors.current_mut().hex_edit.insert(DataSource::Register(n as u8))
                         } else if n < 64 {
-                            let v = self.editors.clipboard_registers.borrow()[n - 32].clone().into_boxed_slice().unwrap().to_vec(); // TODO: Make this work for non-byte aligned
+                            let v = self.editors.clipboard_registers[n - 32].clone().into_boxed_slice().unwrap().to_vec(); // TODO: Make this work for non-byte aligned
                             self.editors.current_mut().hex_edit.insert(DataSource::Bytes(v))
                         } else {
                             ActionResult::error("Register indices must be less than 64".to_string())
@@ -1056,7 +1050,7 @@ impl App {
                         if n < 32 {
                             self.editors.current_mut().hex_edit.overwrite(DataSource::Register(n as u8))
                         } else if n < 64 {
-                            let v = self.editors.clipboard_registers.borrow()[n - 32].clone().into_boxed_slice().unwrap().to_vec(); // TODO: Make this work for non-byte aligned
+                            let v = self.editors.clipboard_registers[n - 32].clone().into_boxed_slice().unwrap().to_vec(); // TODO: Make this work for non-byte aligned
                             self.editors.current_mut().hex_edit.overwrite(DataSource::Bytes(v))
                         } else {
                             ActionResult::error("Register indices must be less than 64".to_string())
@@ -1101,7 +1095,7 @@ impl App {
                             let res = self.editors.current_mut().hex_edit.get_bytes(pos, &mut v);
                             match res {
                                 Ok(_) => { // TODO: Check if this is less han n2
-                                    self.editors.clipboard_registers.borrow_mut()[n1 - 32] = BitField::from_vec(v.to_vec());
+                                    self.editors.clipboard_registers[n1 - 32] = BitField::from_vec(v.to_vec());
                                     ActionResult::empty()
                                 },
                                 Err(msg) => ActionResult::error(msg.to_string())
