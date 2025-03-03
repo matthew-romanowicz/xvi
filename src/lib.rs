@@ -28,7 +28,7 @@ pub use crate::hex_edit::FileManagerType;
 
 
 mod parsers;
-use crate::parsers::{CommandToken, CommandKeyword, parse_command, parse_bytes, KeystrokeToken, parse_keystroke};
+use crate::parsers::{CommandToken, CommandKeyword, parse_command, parse_bytes, KeystrokeToken, KeystrokeCommand, parse_keystroke};
 
 mod bin_format;
 use crate::bin_format::{Endianness, UIntFormat, IIntFormat, FloatFormat, BinaryFormat, DataType, fmt_length, from_bytes, to_bytes};
@@ -157,9 +157,9 @@ const MANUAL_TEXT: &str = r"\c<b>COMMANDS</b>
 
     u       =>  <u>U</u>ndo last action
     U       =>  Redo last action
-    #M      =>  Start recording #th <u>m</u>acro
-    M       =>  Stop recording <u>m</u>acro
-    #m      =>  Run #th <u>m</u>acro";
+    #Q      =>  Start recording #th macro
+    Q       =>  Stop recording macro
+    #q      =>  Run #th macro";
 
 const BUGS: &str = "Inputting numbers greater than usize maximum in commands/keystrokes causes panic
 Setting line length to value greater than width of terminal causes panic
@@ -971,150 +971,78 @@ impl App {
         //Ok(())
     }
 
-    fn execute_keystroke(&mut self, keystroke: Vec<char>) -> ActionResult {
+    fn execute_keystroke(&mut self, keystroke: KeystrokeCommand) -> ActionResult {
 
-        let tokens = parse_keystroke(&keystroke);
-        match tokens.len() {
-    
-            1 => {
-                // let hm = &mut self.editors.editors[self.editors.current];
-                match tokens[0] {
-                    KeystrokeToken::Character('g') => {
-                        self.editors.current_mut().hex_edit.seek(SeekFrom::Start(0))
-                    },
-                    KeystrokeToken::Character('G') => {
-                        self.editors.current_mut().hex_edit.seek(SeekFrom::End(0))
-                    },
-                    KeystrokeToken::Character('n') => {
-                        self.editors.current_mut().hex_edit.seek_find_result(false)
-                    },
-                    KeystrokeToken::Character('N') => {
-                        self.editors.current_mut().hex_edit.seek_find_result(true)
-                    },
-                    KeystrokeToken::Character('u') => {
-                        self.editors.current_mut().undo()
-                    },
-                    KeystrokeToken::Character('U') => {
-                        self.editors.current_mut().redo()
-                    },
-                    KeystrokeToken::Character('p') => {
-                        self.editors.current_mut().hex_edit.insert(DataSource::Register(0))
-                    },
-                    KeystrokeToken::Character('P') => {
-                        self.editors.current_mut().hex_edit.overwrite(DataSource::Register(0))
-                    },
-                    KeystrokeToken::Character('M') => {
-                        self.macro_manager.finish(&self.editors.current().action_stack)
-                    },
-                    _ => {
-                        let s: String = keystroke.iter().collect();
-                        ActionResult::error(format!("Command not recognized: '{}'", s))
-                    }
+        match keystroke {
+            KeystrokeCommand::Seek{from} => {
+                self.editors.current_mut().hex_edit.seek(from)
+            },
+            KeystrokeCommand::SeekFindResult{reversed} => {
+                self.editors.current_mut().hex_edit.seek_find_result(reversed)
+            },
+            KeystrokeCommand::Yank{register, bytes} => {
+                if register < 32 {
+                    self.editors.current_mut().hex_edit.yank(register, bytes)
+                } else if register < 64 {
+                    let pos = self.editors.current().hex_edit.get_cursor_pos();
+                    let mut v: Vec<u8> = vec![0;bytes];
+                    let res = self.editors.current_mut().hex_edit.get_bytes(pos, &mut v);
+                    match res {
+                        Ok(_) => { // TODO: Check if this is less han n2
+                            self.editors.clipboard_registers[register as usize - 32] = BitField::from_vec(v.to_vec());
+                            ActionResult::empty()
+                        },
+                        Err(msg) => ActionResult::error(msg.to_string())
+                    } 
+                } else {
+                    unreachable!()
                 }
             },
-    
-            2 => {
-                match (tokens[0], tokens[1]) {
-                    (KeystrokeToken::Integer(n), KeystrokeToken::Character('g')) => {
-                        self.editors.current_mut().hex_edit.seek(SeekFrom::Start(n as u64))
-                    },
-                    (KeystrokeToken::Integer(n), KeystrokeToken::Character('G')) => {
-                        self.editors.current_mut().hex_edit.seek(SeekFrom::End(n as i64))
-                    },
-                    (KeystrokeToken::Integer(n), KeystrokeToken::Character('f')) => {
-                        self.editors.current_mut().hex_edit.insert(DataSource::Fill(n))
-                    },
-                    (KeystrokeToken::Integer(n), KeystrokeToken::Character('F')) => {
-                        self.editors.current_mut().hex_edit.overwrite(DataSource::Fill(n))
-                    },
-                    (KeystrokeToken::Integer(n), KeystrokeToken::Character('d')) => {
-                        self.editors.current_mut().hex_edit.delete_bytes(n)
-                    },
-                    (KeystrokeToken::Integer(n), KeystrokeToken::Character('s')) => {
-                        self.editors.current_mut().hex_edit.swap_bytes(n)
-                    },
-                    (KeystrokeToken::Integer(n), KeystrokeToken::Character('y')) => {
-                        self.editors.current_mut().hex_edit.yank(0, n)
-                    },
-                    (KeystrokeToken::Integer(n), KeystrokeToken::Character('p')) => {
-                        if n < 32 {
-                            self.editors.current_mut().hex_edit.insert(DataSource::Register(n as u8))
-                        } else if n < 64 {
-                            let v = self.editors.clipboard_registers[n - 32].clone().into_boxed_slice().unwrap().to_vec(); // TODO: Make this work for non-byte aligned
-                            self.editors.current_mut().hex_edit.insert(DataSource::Bytes(v))
-                        } else {
-                            ActionResult::error("Register indices must be less than 64".to_string())
-                        }
-                    },
-                    (KeystrokeToken::Integer(n), KeystrokeToken::Character('P')) => {
-                        if n < 32 {
-                            self.editors.current_mut().hex_edit.overwrite(DataSource::Register(n as u8))
-                        } else if n < 64 {
-                            let v = self.editors.clipboard_registers[n - 32].clone().into_boxed_slice().unwrap().to_vec(); // TODO: Make this work for non-byte aligned
-                            self.editors.current_mut().hex_edit.overwrite(DataSource::Bytes(v))
-                        } else {
-                            ActionResult::error("Register indices must be less than 64".to_string())
-                        }
-                    },
-                    (KeystrokeToken::Integer(n), KeystrokeToken::Character('m')) => {
-                        self.macro_manager.run(n as u8, &mut self.editors.current_mut().hex_edit)
-                    },
-                    (KeystrokeToken::Integer(n), KeystrokeToken::Character('M')) => {
-                        self.macro_manager.start(n as u8, &self.editors.current_mut().action_stack)
-                    },
-                    _ => {
-                        let s: String = keystroke.iter().collect();
-                        ActionResult::error(format!("Command not recognized: '{}'", s))
-                    }
+            KeystrokeCommand::Insert{source: DataSource::Register(register)} if register >= 32 => {
+                if register < 64 {
+                    let v = self.editors.clipboard_registers[register as usize - 32].clone().into_boxed_slice().unwrap().to_vec(); // TODO: Make this work for non-byte aligned
+                    self.editors.current_mut().hex_edit.insert(DataSource::Bytes(v))
+                } else {
+                    unreachable!()
                 }
             },
-    
-            3 => {
-                match (tokens[0], tokens[1], tokens[2]) {
-                    (KeystrokeToken::Character('+'), KeystrokeToken::Integer(n), KeystrokeToken::Character('g')) => {
-                        self.editors.current_mut().hex_edit.seek(SeekFrom::Current(n as i64))
-                    },
-                    (KeystrokeToken::Character('-'), KeystrokeToken::Integer(n), KeystrokeToken::Character('g')) => {
-                        self.editors.current_mut().hex_edit.seek(SeekFrom::Current(-(n as i64)))
-                    },
-                    _ => {
-                        let s: String = keystroke.iter().collect();
-                        ActionResult::error(format!("Command not recognized: '{}'", s))
-                    }
+            KeystrokeCommand::Insert{source} => {
+                self.editors.current_mut().hex_edit.insert(source)
+            },
+            KeystrokeCommand::Overwrite{source: DataSource::Register(register)} if register >= 32 => {
+                if register < 64 {
+                    let v = self.editors.clipboard_registers[register as usize - 32].clone().into_boxed_slice().unwrap().to_vec(); // TODO: Make this work for non-byte aligned
+                    self.editors.current_mut().hex_edit.overwrite(DataSource::Bytes(v))
+                } else {
+                    unreachable!()
                 }
-            }
-    
-            4 => {
-                match (tokens[0], tokens[1], tokens[2], tokens[3]) {
-                    (KeystrokeToken::Integer(n1), KeystrokeToken::Character('r'), KeystrokeToken::Integer(n2), KeystrokeToken::Character('y')) => {
-                        if n1 < 32 {
-                            self.editors.current_mut().hex_edit.yank(n1 as u8, n2)
-                        } else if n1 < 64 {
-                            let pos = self.editors.current().hex_edit.get_cursor_pos();
-                            let mut v: Vec<u8> = vec![0;n2];
-                            let res = self.editors.current_mut().hex_edit.get_bytes(pos, &mut v);
-                            match res {
-                                Ok(_) => { // TODO: Check if this is less han n2
-                                    self.editors.clipboard_registers[n1 - 32] = BitField::from_vec(v.to_vec());
-                                    ActionResult::empty()
-                                },
-                                Err(msg) => ActionResult::error(msg.to_string())
-                            } 
-                        } else {
-                            ActionResult::error("Register indices must be less than 64".to_string())
-                        }
-                    },
-                    _ => {
-                        let s: String = keystroke.iter().collect();
-                        ActionResult::error(format!("Command not recognized: '{}'", s))
-                    }
-                }
-            }
-            _ => {
-                let s: String = keystroke.iter().collect();
-                ActionResult::error(format!("Command not recognized: '{}'", s))
+            },
+            KeystrokeCommand::Overwrite{source} =>{
+                self.editors.current_mut().hex_edit.overwrite(source)
+            },
+            KeystrokeCommand::Delete{bytes} => {
+                self.editors.current_mut().hex_edit.delete_bytes(bytes)
+            },
+            KeystrokeCommand::Swap{bytes} => {
+                self.editors.current_mut().hex_edit.swap_bytes(bytes)
+            },
+            KeystrokeCommand::Undo => {
+                self.editors.current_mut().undo()
+            },
+            KeystrokeCommand::Redo => {
+                self.editors.current_mut().redo()
+            },
+            KeystrokeCommand::FinishRecordingMacro => {
+                self.macro_manager.finish(&self.editors.current().action_stack)
+            },
+            KeystrokeCommand::StartRecordingMacro{macro_id} => {
+                self.macro_manager.start(macro_id, &self.editors.current_mut().action_stack)
+            },
+            KeystrokeCommand::RunMacro{macro_id} => {
+                self.macro_manager.run(macro_id, &mut self.editors.current_mut().hex_edit)
             }
         }
+
     }
 
     fn addch(&mut self, mut window: Option<Window>, ch_input: Option<Input>) -> std::io::Result<Option<Window>> {
@@ -1165,10 +1093,16 @@ impl App {
                     }
                     Some(Input::Character(c)) => {
                         self.current_keystroke.push(c);
-                        if matches!(c, 'g' | 'G' | 'f' | 'F' | 'd' | 'y' | 'p' | 'P' | 'u' | 'U' | 'n' | 'N' | 's' | 'm' | 'M') {
-                            let result = self.execute_keystroke(self.current_keystroke.clone());
-                            self.handle_action_result(&mut window, result);
-                            self.current_keystroke = Vec::<char>::new();
+                        match parse_keystroke(&self.current_keystroke) {
+                            Ok(Some(keystroke)) => {
+                                let result = self.execute_keystroke(keystroke);
+                                self.handle_action_result(&mut window, result);
+                                self.current_keystroke = Vec::<char>::new();
+                            },
+                            Ok(None) => {
+                                // Do nothing
+                            },
+                            Err(msg) => self.alert(msg, AlertType::Error, &mut window)
                         }
                     },
                     Some(ch) if matches!(ch, Input::KeyRight | Input::KeyLeft | Input::KeyUp | Input::KeyDown | Input::KeyNPage | Input::KeyPPage | Input::KeyHome | Input::KeyEnd) => {
@@ -3552,7 +3486,7 @@ mod app_string_tests {
 
         test_driver(&mut app, "8g");
         // Create a macro that swaps the next two pairs of bytes
-        test_driver(&mut app, "3M");
+        test_driver(&mut app, "3Q");
         assert_eq!(app.line_entry.get_alert(), None);
         test_driver(&mut app, "4r2y");
         assert_eq!(app.line_entry.get_alert(), None);
@@ -3564,7 +3498,7 @@ mod app_string_tests {
         assert_eq!(app.line_entry.get_alert(), None);
         test_driver(&mut app, "-4g");
         assert_eq!(app.line_entry.get_alert(), None);
-        test_driver(&mut app, "M");
+        test_driver(&mut app, "Q");
         assert_eq!(app.line_entry.get_alert(), None);
         assert_eq!(app.current_cursor_pos(), 8);
         assert_eq!(app.editors.current_mut().hex_edit.get_bytes(8, &mut buff).unwrap(), 8);
@@ -3576,15 +3510,15 @@ mod app_string_tests {
         assert_eq!(app.current_cursor_pos(), 8);
         assert_eq!(bytes_8_16, buff);
         // Create a new macro that swaps each pair of pairs of bytes in an 8-byte word
-        test_driver(&mut app, "4M");
+        test_driver(&mut app, "4Q");
         assert_eq!(app.line_entry.get_alert(), None);
-        test_driver(&mut app, "3m");
+        test_driver(&mut app, "3q");
         assert_eq!(app.line_entry.get_alert(), None);
         test_driver(&mut app, "+4g");
         assert_eq!(app.line_entry.get_alert(), None);
-        test_driver(&mut app, "3m");
+        test_driver(&mut app, "3q");
         assert_eq!(app.line_entry.get_alert(), None);
-        test_driver(&mut app, "M");
+        test_driver(&mut app, "Q");
         assert_eq!(app.line_entry.get_alert(), None);
         assert_eq!(app.current_cursor_pos(), 12);
         assert_eq!(app.editors.current_mut().hex_edit.get_bytes(8, &mut buff).unwrap(), 8);
@@ -3595,25 +3529,25 @@ mod app_string_tests {
         assert_eq!(app.editors.current_mut().hex_edit.get_bytes(1712, &mut buff).unwrap(), 16);
         assert_eq!(bytes_1712_1728, buff);
 
-        test_driver(&mut app, "1712g4m");
+        test_driver(&mut app, "1712g4q");
         assert_eq!(app.line_entry.get_alert(), None);
         assert_eq!(app.current_cursor_pos(), 1716);
         assert_eq!(app.editors.current_mut().hex_edit.get_bytes(1712, &mut buff).unwrap(), 16);
         assert_eq!(bytes_1712_1728_4m, buff);
 
-        test_driver(&mut app, "+4g4m");
+        test_driver(&mut app, "+4g4q");
         assert_eq!(app.line_entry.get_alert(), None);
         assert_eq!(app.current_cursor_pos(), 1724);
         assert_eq!(app.editors.current_mut().hex_edit.get_bytes(1712, &mut buff).unwrap(), 16);
         assert_eq!(bytes_1712_1728_4m_4m, buff);
 
-        test_driver(&mut app, "-4g4m");
+        test_driver(&mut app, "-4g4q");
         assert_eq!(app.line_entry.get_alert(), None);
         assert_eq!(app.current_cursor_pos(), 1724);
         assert_eq!(app.editors.current_mut().hex_edit.get_bytes(1712, &mut buff).unwrap(), 16);
         assert_eq!(bytes_1712_1728_4m, buff);
 
-        test_driver(&mut app, "-12g4m");
+        test_driver(&mut app, "-12g4q");
         assert_eq!(app.line_entry.get_alert(), None);
         assert_eq!(app.current_cursor_pos(), 1716);
         assert_eq!(app.editors.current_mut().hex_edit.get_bytes(1712, &mut buff).unwrap(), 16);

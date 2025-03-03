@@ -1,3 +1,7 @@
+use std::io::SeekFrom;
+
+use crate::DataSource;
+
 pub enum CommandKeyword {
     Set,
     Caps,
@@ -228,8 +232,34 @@ pub enum KeystrokeToken {
     Integer(usize)
 }
 
-pub fn parse_keystroke(keystroke: &Vec<char>) -> Vec<KeystrokeToken> {
-    let mut result = Vec::<KeystrokeToken>::new();
+pub enum KeystrokeCommand {
+    Seek{from: SeekFrom},
+    SeekFindResult{reversed: bool},
+    Yank{register: u8, bytes: usize},
+    Insert{source: DataSource},
+    Overwrite{source: DataSource},
+    Delete{bytes: usize},
+    Swap{bytes: usize},
+    Undo,
+    Redo,
+    FinishRecordingMacro,
+    StartRecordingMacro{macro_id: u8},
+    RunMacro{macro_id: u8},
+}
+
+pub fn parse_keystroke(keystroke: &Vec<char>) -> Result<Option<KeystrokeCommand>, String> {
+
+    if let Some(c) = keystroke.iter().last() {
+        if !matches!(c, 'g' | 'G' | 'f' | 'F' | 'd' | 'y' | 'p' | 'P' | 'u' | 'U' | 'n' | 'N' | 's' | 'q' | 'Q') {
+            return Ok(None)
+        }
+    } else {
+        return Ok(None)
+    }
+
+    
+
+    let mut tokens = Vec::<KeystrokeToken>::new();
     let mut current_int: usize = 0;
     let mut building_int: bool = false;
     for c in keystroke {
@@ -241,14 +271,139 @@ pub fn parse_keystroke(keystroke: &Vec<char>) -> Vec<KeystrokeToken> {
             },
             _ => {
                 if building_int {
-                    result.push(KeystrokeToken::Integer(current_int));
+                    tokens.push(KeystrokeToken::Integer(current_int));
                     current_int = 0;
                     building_int = false;
                 } 
-                result.push(KeystrokeToken::Character(*c));
+                tokens.push(KeystrokeToken::Character(*c));
             }
         }
     }
 
-    result
+    match tokens.len() {
+    
+        1 => {
+            // let hm = &mut self.editors.editors[self.editors.current];
+            match tokens[0] {
+                KeystrokeToken::Character('g') => {
+                    Ok(Some(KeystrokeCommand::Seek{from: SeekFrom::Start(0)}))
+                },
+                KeystrokeToken::Character('G') => {
+                    Ok(Some(KeystrokeCommand::Seek{from: SeekFrom::End(0)}))
+                },
+                KeystrokeToken::Character('n') => {
+                    Ok(Some(KeystrokeCommand::SeekFindResult{reversed: false}))
+                },
+                KeystrokeToken::Character('N') => {
+                    Ok(Some(KeystrokeCommand::SeekFindResult{reversed: true}))
+                },
+                KeystrokeToken::Character('u') => {
+                    Ok(Some(KeystrokeCommand::Undo))
+                },
+                KeystrokeToken::Character('U') => {
+                    Ok(Some(KeystrokeCommand::Redo))
+                },
+                KeystrokeToken::Character('p') => {
+                    Ok(Some(KeystrokeCommand::Insert{source: DataSource::Register(0)}))
+                },
+                KeystrokeToken::Character('P') => {
+                    Ok(Some(KeystrokeCommand::Overwrite{source: DataSource::Register(0)}))
+                },
+                KeystrokeToken::Character('Q') => {
+                    Ok(Some(KeystrokeCommand::FinishRecordingMacro))
+                },
+                _ => {
+                    let s: String = keystroke.iter().collect();
+                    Err(format!("Command not recognized: '{}'", s))
+                }
+            }
+        },
+
+        2 => {
+            match (tokens[0], tokens[1]) {
+                (KeystrokeToken::Integer(n), KeystrokeToken::Character('g')) => {
+                    Ok(Some(KeystrokeCommand::Seek{from: SeekFrom::Start(n as u64)}))
+                },
+                (KeystrokeToken::Integer(n), KeystrokeToken::Character('G')) => {
+                    Ok(Some(KeystrokeCommand::Seek{from: SeekFrom::End(n as i64)}))
+                },
+                (KeystrokeToken::Integer(n), KeystrokeToken::Character('f')) => {
+                    Ok(Some(KeystrokeCommand::Insert{source: DataSource::Fill(n)}))
+                },
+                (KeystrokeToken::Integer(n), KeystrokeToken::Character('F')) => {
+                    Ok(Some(KeystrokeCommand::Overwrite{source: DataSource::Fill(n)}))
+                },
+                (KeystrokeToken::Integer(n), KeystrokeToken::Character('d')) => {
+                    Ok(Some(KeystrokeCommand::Delete{bytes: n}))
+                },
+                (KeystrokeToken::Integer(n), KeystrokeToken::Character('s')) => {
+                    Ok(Some(KeystrokeCommand::Swap{bytes: n}))
+                },
+                (KeystrokeToken::Integer(n), KeystrokeToken::Character('y')) => {
+                    Ok(Some(KeystrokeCommand::Yank{register: 0, bytes: n}))
+                },
+                (KeystrokeToken::Integer(n), KeystrokeToken::Character('p')) => {
+                    if n >= 64 {
+                        Err("Register indices must be less than 64".to_string())
+                    } else {
+                        Ok(Some(KeystrokeCommand::Insert{source: DataSource::Register(n as u8)}))
+                    }
+                    
+                },
+                (KeystrokeToken::Integer(n), KeystrokeToken::Character('P')) => {
+                    if n >= 64 {
+                        Err("Register indices must be less than 64".to_string())
+                    } else {
+                        Ok(Some(KeystrokeCommand::Overwrite{source: DataSource::Register(n as u8)}))
+                    }
+                    
+                },
+                (KeystrokeToken::Integer(n), KeystrokeToken::Character('q')) => {
+                    Ok(Some(KeystrokeCommand::RunMacro{macro_id: n as u8}))
+                },
+                (KeystrokeToken::Integer(n), KeystrokeToken::Character('Q')) => {
+                    Ok(Some(KeystrokeCommand::StartRecordingMacro{macro_id: n as u8}))
+                },
+                _ => {
+                    let s: String = keystroke.iter().collect();
+                    Err(format!("Command not recognized: '{}'", s))
+                }
+            }
+        },
+
+        3 => {
+            match (tokens[0], tokens[1], tokens[2]) {
+                (KeystrokeToken::Character('+'), KeystrokeToken::Integer(n), KeystrokeToken::Character('g')) => {
+                    Ok(Some(KeystrokeCommand::Seek{from: SeekFrom::Current(n as i64)}))
+                },
+                (KeystrokeToken::Character('-'), KeystrokeToken::Integer(n), KeystrokeToken::Character('g')) => {
+                    Ok(Some(KeystrokeCommand::Seek{from: SeekFrom::Current(-(n as i64))}))
+                },
+                _ => {
+                    let s: String = keystroke.iter().collect();
+                    Err(format!("Command not recognized: '{}'", s))
+                }
+            }
+        }
+
+        4 => {
+            match (tokens[0], tokens[1], tokens[2], tokens[3]) {
+                (KeystrokeToken::Integer(n1), KeystrokeToken::Character('r'), KeystrokeToken::Integer(n2), KeystrokeToken::Character('y')) => {
+                    if n1 >= 64 {
+                        Err("Register indices must be less than 64".to_string())
+                    } else {
+                        Ok(Some(KeystrokeCommand::Yank{register: n1 as u8, bytes: n2}))
+                    }
+                },
+                _ => {
+                    let s: String = keystroke.iter().collect();
+                    Err(format!("Command not recognized: '{}'", s))
+                }
+            }
+        }
+        _ => {
+            let s: String = keystroke.iter().collect();
+            Err(format!("Command not recognized: '{}'", s))
+        }
+    }
 }
