@@ -1,6 +1,6 @@
 use std::io::SeekFrom;
 
-use crate::DataSource;
+use crate::{DataSource, Seek};
 
 pub enum CommandKeyword {
     Set,
@@ -233,9 +233,10 @@ pub enum KeystrokeToken {
 }
 
 pub enum KeystrokeCommand {
-    Seek{from: SeekFrom},
+    Seek{from: Seek},
     SeekFindResult{reversed: bool},
     Yank{register: u8, bytes: usize},
+    Mark{mark_id: u8},
     Insert{source: DataSource},
     Overwrite{source: DataSource},
     Delete{bytes: usize},
@@ -250,7 +251,7 @@ pub enum KeystrokeCommand {
 pub fn parse_keystroke(keystroke: &Vec<char>) -> Result<Option<KeystrokeCommand>, String> {
 
     if let Some(c) = keystroke.iter().last() {
-        if !matches!(c, 'g' | 'G' | 'f' | 'F' | 'd' | 'y' | 'p' | 'P' | 'u' | 'U' | 'n' | 'N' | 's' | 'q' | 'Q') {
+        if !matches!(c, 'g' | 'G' | 'm' | 'f' | 'F' | 'd' | 'y' | 'p' | 'P' | 'u' | 'U' | 'n' | 'N' | 's' | 'q' | 'Q') {
             return Ok(None)
         }
     } else {
@@ -286,16 +287,19 @@ pub fn parse_keystroke(keystroke: &Vec<char>) -> Result<Option<KeystrokeCommand>
             // let hm = &mut self.editors.editors[self.editors.current];
             match tokens[0] {
                 KeystrokeToken::Character('g') => {
-                    Ok(Some(KeystrokeCommand::Seek{from: SeekFrom::Start(0)}))
+                    Ok(Some(KeystrokeCommand::Seek{from: Seek::FromStart(0)}))
                 },
                 KeystrokeToken::Character('G') => {
-                    Ok(Some(KeystrokeCommand::Seek{from: SeekFrom::End(0)}))
+                    Ok(Some(KeystrokeCommand::Seek{from: Seek::FromEnd(0)}))
                 },
                 KeystrokeToken::Character('n') => {
                     Ok(Some(KeystrokeCommand::SeekFindResult{reversed: false}))
                 },
                 KeystrokeToken::Character('N') => {
                     Ok(Some(KeystrokeCommand::SeekFindResult{reversed: true}))
+                },
+                KeystrokeToken::Character('m') => {
+                    Ok(Some(KeystrokeCommand::Mark{mark_id: 0}))
                 },
                 KeystrokeToken::Character('u') => {
                     Ok(Some(KeystrokeCommand::Undo))
@@ -322,10 +326,17 @@ pub fn parse_keystroke(keystroke: &Vec<char>) -> Result<Option<KeystrokeCommand>
         2 => {
             match (tokens[0], tokens[1]) {
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('g')) => {
-                    Ok(Some(KeystrokeCommand::Seek{from: SeekFrom::Start(n as u64)}))
+                    Ok(Some(KeystrokeCommand::Seek{from: Seek::FromStart(n as u64)}))
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('G')) => {
-                    Ok(Some(KeystrokeCommand::Seek{from: SeekFrom::End(n as i64)}))
+                    Ok(Some(KeystrokeCommand::Seek{from: Seek::FromEnd(n as i64)}))
+                },
+                (KeystrokeToken::Integer(n), KeystrokeToken::Character('m')) => {
+                    if n >= 64 {
+                        Err("Mark indices must be less than 64".to_string())
+                    } else {
+                        Ok(Some(KeystrokeCommand::Mark{mark_id: n as u8}))
+                    }
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('f')) => {
                     Ok(Some(KeystrokeCommand::Insert{source: DataSource::Fill(n)}))
@@ -374,10 +385,13 @@ pub fn parse_keystroke(keystroke: &Vec<char>) -> Result<Option<KeystrokeCommand>
         3 => {
             match (tokens[0], tokens[1], tokens[2]) {
                 (KeystrokeToken::Character('+'), KeystrokeToken::Integer(n), KeystrokeToken::Character('g')) => {
-                    Ok(Some(KeystrokeCommand::Seek{from: SeekFrom::Current(n as i64)}))
+                    Ok(Some(KeystrokeCommand::Seek{from: Seek::FromCurrent(n as i64)}))
                 },
                 (KeystrokeToken::Character('-'), KeystrokeToken::Integer(n), KeystrokeToken::Character('g')) => {
-                    Ok(Some(KeystrokeCommand::Seek{from: SeekFrom::Current(-(n as i64))}))
+                    Ok(Some(KeystrokeCommand::Seek{from: Seek::FromCurrent(-(n as i64))}))
+                },
+                (KeystrokeToken::Character('`'), KeystrokeToken::Integer(n), KeystrokeToken::Character('g')) => {
+                    Ok(Some(KeystrokeCommand::Seek{from: Seek::Mark(n as u8)}))
                 },
                 _ => {
                     let s: String = keystroke.iter().collect();

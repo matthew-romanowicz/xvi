@@ -138,7 +138,7 @@ impl Action for InsertAction {
             DataSource::Fill(n) => *n,
             DataSource::Register(n) => hex_edit.register_len(*n).byte() // TODO: Make this work for non byte-a;igned
         };
-        let seek_res = hex_edit.seek(SeekFrom::Current(-(n_bytes as i64)));
+        let seek_res = hex_edit.seek(Seek::FromCurrent(-(n_bytes as i64)));
         let mut delete_res = hex_edit.delete_bytes(n_bytes); // TODO: Process error
         delete_res.update = combine_update(&seek_res.update, &delete_res.update);
         if self.file_end < hex_edit.len() {
@@ -184,9 +184,9 @@ impl Action for OverwriteAction {
             DataSource::Fill(n) => *n,
             DataSource::Register(n) => hex_edit.register_len(*n).byte() // TODO: Make this work for non byte-aligned
         };
-        let seek_res = hex_edit.seek(SeekFrom::Current(-(n_bytes as i64)));
+        let seek_res = hex_edit.seek(Seek::FromCurrent(-(n_bytes as i64)));
         let mut overwrite_res = hex_edit.overwrite(DataSource::Bytes(self.original_bytes.to_vec())) ; // TODO: Process error
-        let seek_res_2 = hex_edit.seek(SeekFrom::Current(-(n_bytes as i64)));
+        let seek_res_2 = hex_edit.seek(Seek::FromCurrent(-(n_bytes as i64)));
         overwrite_res.update = combine_update(&seek_res.update, &overwrite_res.update);
         overwrite_res.update = combine_update(&overwrite_res.update, &seek_res_2.update);
         if self.file_end < hex_edit.len() {
@@ -224,7 +224,7 @@ impl DeleteAction {
 impl Action for DeleteAction {
     fn undo(&self, hex_edit: &mut HexEdit) -> ActionResult {
         let mut insert_res = hex_edit.insert(DataSource::Bytes(self.bytes.to_vec()));
-        let seek_res = hex_edit.seek(SeekFrom::Current(-(self.bytes.len() as i64)));
+        let seek_res = hex_edit.seek(Seek::FromCurrent(-(self.bytes.len() as i64)));
         insert_res.update = combine_update(&seek_res.update, &insert_res.update);
         insert_res
     }
@@ -586,14 +586,22 @@ impl Action for SliceRegisterAction {
     }
 }
 
+#[derive(Clone, Copy)]
+pub enum Seek {
+    FromStart(u64),
+    FromCurrent(i64),
+    FromEnd(i64),
+    Mark(u8)
+}
+
 
 pub struct SeekAction {
     original_index: usize,
-    seek: SeekFrom
+    seek: Seek
 }
 
 impl SeekAction {
-    pub fn new(original_index: usize, seek: SeekFrom) -> SeekAction {
+    pub fn new(original_index: usize, seek: Seek) -> SeekAction {
         SeekAction {
             original_index,
             seek
@@ -608,6 +616,34 @@ impl Action for SeekAction {
 
     fn redo(&self, hex_edit: &mut HexEdit) -> ActionResult {
         hex_edit.seek(self.seek)
+    }
+
+    fn size(&self) -> usize{
+        16 // TODO confirm this is correct
+    }
+}
+
+pub struct MarkAction {
+    mark_id: u8,
+    original: BitIndex
+}
+
+impl MarkAction {
+    pub fn new(mark_id: u8, original: BitIndex) -> MarkAction {
+        MarkAction {
+            mark_id,
+            original
+        }
+    }
+}
+
+impl Action for MarkAction {
+    fn undo(&self, hex_edit: &mut HexEdit) -> ActionResult {
+        hex_edit.set_mark(self.mark_id, self.original)
+    }
+
+    fn redo(&self, hex_edit: &mut HexEdit) -> ActionResult {
+        hex_edit.mark(self.mark_id)
     }
 
     fn size(&self) -> usize{
@@ -1006,6 +1042,7 @@ pub struct HexEdit {
     display_data: Vec::<u8>,
     valid_bytes: usize,
     clipboard_registers: [BitField; 32], //Needs to be 32 or less for Default::default() to work
+    marks: [BitIndex; 32],
     file_spec: Option<FileMap>,
     current_field: Option<(std::ops::Range<BitIndex>, bool)>, // (range, is_valid)
     related_fields: Vec<std::ops::Range<BitIndex>>
@@ -1084,6 +1121,8 @@ impl HexEdit {
             display_data: Vec::<u8>::new(),
             valid_bytes: 0,
             clipboard_registers: Default::default(),
+            // TODO: clean this up once BitIndex gets Default implemented
+            marks: std::iter::repeat(BitIndex::zero()).take(32).collect::<Vec<BitIndex>>().try_into().unwrap(),
             file_spec: None,
             current_field: None,
             related_fields: Vec::new()
@@ -1660,7 +1699,7 @@ impl HexEdit {
         };
         match self.file_manager.insert_bytes(self.cursor_pos, &bytes) {
             Ok(_) => {
-                let seek_res = self.seek(SeekFrom::Current(bytes.len() as i64));
+                let seek_res = self.seek(Seek::FromCurrent(bytes.len() as i64));
                 ActionResult {
                     alert: None,
                     alert_type: AlertType::None,
@@ -1693,7 +1732,7 @@ impl HexEdit {
         }
         match self.file_manager.overwrite_bytes(self.cursor_pos, &bytes) {
             Ok(_) => {
-                let seek_res = self.seek(SeekFrom::Current(bytes.len() as i64));
+                let seek_res = self.seek(Seek::FromCurrent(bytes.len() as i64));
                 ActionResult {
                     alert: None,
                     alert_type: AlertType::None,
@@ -1985,29 +2024,63 @@ impl HexEdit {
         //TODO: Add action record
     }
 
-    pub fn seek(&mut self, seek: SeekFrom) -> ActionResult {
+    pub fn seek(&mut self, seek: Seek) -> ActionResult {
         let current_pos = self.cursor_pos;
         let mut res = match seek {
-            SeekFrom::Start(index) => {
+            Seek::FromStart(index) => {
                 self.set_cursor_pos(index as usize)
             },
-            SeekFrom::End(index) => {
+            Seek::FromEnd(index) => {
                 if index as usize > self.len() {
                     return ActionResult::error("Cannot seek to negative index".to_string());
                 }
                 self.set_cursor_pos(self.len() - (index as usize))
             },
-            SeekFrom::Current(index) => {
+            Seek::FromCurrent(index) => {
                 let new_pos = current_pos as isize + (index as isize);
                 if new_pos < 0 {
                     return ActionResult::error("Cannot seek to negative index".to_string());
                 }
                 self.set_cursor_pos(new_pos as usize)
+            },
+            Seek::Mark(mark_id) => {
+                if mark_id >= 32 {
+                    return ActionResult::error("Mark indices must be less than 64".to_string());
+                }
+                let new_pos = self.marks[mark_id as usize].byte();
+                self.set_cursor_pos(new_pos)
             }
         };
         
         res.set_action(Some(Rc::new(SeekAction::new(current_pos, seek))));
         res
+    }
+
+    pub fn set_mark(&mut self, mark_id: u8, position: BitIndex) -> ActionResult {
+        if mark_id >= 32 {
+            ActionResult::error("Mark indices must be less than 64".to_string())
+        } else {
+            self.marks[mark_id as usize] = position;
+            ActionResult::no_error(UpdateDescription::NoUpdate)
+        }
+    }
+
+    pub fn mark(&mut self, mark_id: u8) -> ActionResult {
+        let current_pos = self.cursor_pos;
+        if mark_id >= 32 {
+            // TODO: Make this fail gracefully in non-test mode
+            unreachable!()
+        } 
+
+        let mut res = ActionResult::no_error(UpdateDescription::NoUpdate);
+
+        res.set_action(Some(Rc::new(MarkAction::new(mark_id, self.marks[mark_id as usize]))));
+
+        self.marks[mark_id as usize] = BitIndex::bytes(current_pos);
+
+        res
+
+
     }
 
     fn update_syntax_highlight(&mut self) -> Option<String> {
@@ -2082,7 +2155,7 @@ impl HexEdit {
 
     pub fn set_cursor_pos(&mut self, index: usize) -> ActionResult {
         let line = index / (self.line_length as usize);
-        let action = SeekAction::new(self.cursor_pos, SeekFrom::Start(index as u64));
+        let action = SeekAction::new(self.cursor_pos, Seek::FromStart(index as u64));
         self.cursor_pos = index;
 
         //println!("line={} start_line={} content_height={} height={}", line, self.start_line, self.content_height(), self.height);
@@ -2208,13 +2281,13 @@ impl HexEdit {
             },
             Input::KeyUp => {
                 if self.cursor_pos >= self.line_length as usize {
-                    self.seek(SeekFrom::Current(-(self.line_length as i64)))
+                    self.seek(Seek::FromCurrent(-(self.line_length as i64)))
                 } else {
                     ActionResult::empty()
                 }
             },
             Input::KeyDown => {
-                self.seek(SeekFrom::Current(self.line_length as i64))
+                self.seek(Seek::FromCurrent(self.line_length as i64))
             },
             Input::KeyNPage => { // TODO: Return action for this
                 let row = self.start_line;
@@ -2241,10 +2314,10 @@ impl HexEdit {
                 ActionResult::no_error(UpdateDescription::All)
             },
             Input::KeyHome => { 
-                self.seek(SeekFrom::Start(0))
+                self.seek(Seek::FromStart(0))
             },
             Input::KeyEnd => {
-                self.seek(SeekFrom::End(0))
+                self.seek(Seek::FromEnd(0))
             },
             Input::Character(ch) => { // TODO: Return action for this
                 match self.edit_mode {

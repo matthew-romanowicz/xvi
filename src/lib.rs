@@ -21,7 +21,7 @@ mod large_text_view;
 use crate::large_text_view::LargeTextView;
 
 mod hex_edit;
-use crate::hex_edit::{FileManager, Action, CompoundAction, ActionStack, UpdateDescription, 
+use crate::hex_edit::{FileManager, Action, CompoundAction, ActionStack, UpdateDescription, Seek,
         EditMode, ActionResult, ShowType, ByteOperation, FillType, FindDirection, shift_vector, 
         vector_op, HexEdit, DataSource, Structure, FileMap};
 pub use crate::hex_edit::FileManagerType;
@@ -188,6 +188,7 @@ struct EditorStack {
     width: usize,
     height: usize,
     clipboard_registers: [BitField; 32],
+    marks: [BitIndex; 32],
     endianness: Endianness,
     cnum: ShowType,
     show_hex: bool,
@@ -207,6 +208,8 @@ impl EditorStack {
             width,
             height,
             clipboard_registers: Default::default(),
+            // TODO: clean this up once BitIndex gets Default implemented
+            marks: std::iter::repeat(BitIndex::zero()).take(32).collect::<Vec<BitIndex>>().try_into().unwrap(),
             endianness: Endianness::Network,
             cnum: ShowType::Hex,
             show_hex: true,
@@ -639,7 +642,7 @@ impl App {
                                             Ok(s) => {
                                                 let mut res = match kwrd {
                                                     CommandKeyword::Print => ActionResult::empty(),
-                                                    CommandKeyword::PrintSeek => self.editors.current_mut().hex_edit.seek(SeekFrom::Current(n_bytes as i64)),
+                                                    CommandKeyword::PrintSeek => self.editors.current_mut().hex_edit.seek(Seek::FromCurrent(n_bytes as i64)),
                                                     _ => return (CommandInstruction::NoOp, ActionResult::error("Impossible state".to_string()))
                                                 };
                                                 res.set_info(s);
@@ -974,11 +977,31 @@ impl App {
     fn execute_keystroke(&mut self, keystroke: KeystrokeCommand) -> ActionResult {
 
         match keystroke {
+            KeystrokeCommand::Seek{from: Seek::Mark(mark_id)} if mark_id > 32 => {
+                if mark_id < 64 {
+                    let pos = self.editors.current().hex_edit.get_cursor_pos();
+                    self.editors.marks[mark_id as usize - 32] = BitIndex::bytes(pos);
+                    ActionResult::empty()
+                } else {
+                    unreachable!()
+                }
+            },
             KeystrokeCommand::Seek{from} => {
                 self.editors.current_mut().hex_edit.seek(from)
             },
             KeystrokeCommand::SeekFindResult{reversed} => {
                 self.editors.current_mut().hex_edit.seek_find_result(reversed)
+            },
+            KeystrokeCommand::Mark{mark_id} => {
+                if mark_id < 32 {
+                    self.editors.current_mut().hex_edit.mark(mark_id)
+                } else if mark_id < 64 {
+                    let pos = self.editors.current().hex_edit.get_cursor_pos();
+                    self.editors.marks[mark_id as usize - 32] = BitIndex::bytes(pos);
+                    ActionResult::empty()
+                } else {
+                    unreachable!()
+                }
             },
             KeystrokeCommand::Yank{register, bytes} => {
                 if register < 32 {
