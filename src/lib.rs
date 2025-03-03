@@ -977,11 +977,10 @@ impl App {
     fn execute_keystroke(&mut self, keystroke: KeystrokeCommand) -> ActionResult {
 
         match keystroke {
-            KeystrokeCommand::Seek{from: Seek::Mark(mark_id)} if mark_id > 32 => {
+            KeystrokeCommand::Seek{from: Seek::Mark(mark_id)} if mark_id >= 32 => {
                 if mark_id < 64 {
-                    let pos = self.editors.current().hex_edit.get_cursor_pos();
-                    self.editors.marks[mark_id as usize - 32] = BitIndex::bytes(pos);
-                    ActionResult::empty()
+                    let pos = self.editors.marks[mark_id as usize - 32];
+                    self.editors.current_mut().hex_edit.seek(Seek::FromStart(pos.byte() as u64))
                 } else {
                     unreachable!()
                 }
@@ -1697,6 +1696,39 @@ mod app_string_tests {
         assert_eq!(app.current_cursor_pos(), std::isize::MAX as usize);
         pos_history.push(std::isize::MAX as usize);
         verify_cursor_history(&mut app, &pos_history);
+    }
+
+    #[test]
+    fn mark_test() {
+        let mut app = App::new(50, 50);
+        let mut window = None;
+        app.init(&mut window, r"tests\exif2c08.png".to_string(), FileManagerType::RamOnly, false).unwrap();
+        let file_length = 1788;
+
+        for i in 0..64 {
+            test_driver(&mut app, &format!("{}g{}m", i * 4, i));
+            assert_eq!(app.current_cursor_pos(), i * 4);
+            assert_eq!(app.line_entry.get_alert(), None);
+        }
+
+        for i in 0..64 {
+            test_driver(&mut app, &format!("`{}g", i));
+            assert_eq!(app.current_cursor_pos(), i * 4);
+            assert_eq!(app.line_entry.get_alert(), None);
+        }
+
+        for i in (0..64).rev() {
+            test_driver(&mut app, &format!("{}g{}m", (64 - i) * 100, i));
+            assert_eq!(app.current_cursor_pos(), (64 - i) * 100);
+            assert_eq!(app.line_entry.get_alert(), None);
+        }
+
+        for i in (0..64).rev() {
+            test_driver(&mut app, &format!("`{}g", i));
+            assert_eq!(app.current_cursor_pos(), (64 - i) * 100);
+            assert_eq!(app.line_entry.get_alert(), None);
+        }
+        
     }
 
     #[test]
