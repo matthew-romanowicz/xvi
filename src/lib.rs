@@ -1883,6 +1883,48 @@ mod app_string_tests {
     }
 
     #[test]
+    fn mark_macro_test<'a>() -> App {
+        let mut app = App::new(50, 50);
+        let mut window = None;
+        app.init(&mut window, r"tests\exif2c08.png".to_string(), FileManagerType::RamOnly, false).unwrap();
+        let file_length = 1788;
+
+        // Record a macro that marks the current position, seeks 10 bytes forward,
+        // marks that position, then returns to the original position
+        test_driver(&mut app, "0Q");
+        for i in 0..63 {
+            test_driver(&mut app, &format!("{}m+1g", i));
+            assert_eq!(app.current_cursor_pos(), i + 1);
+            assert_eq!(app.line_entry.get_alert(), None);
+        }
+        test_driver(&mut app, "`0gQ");
+
+        // Keep track of the position at which the macro is run since the marks are going
+        // to be relative to that
+        let mut macro_pos = 0;
+        for i in 0..32 {
+            for j in 0..63 {
+                test_driver(&mut app, &format!("`{}g", j));
+                if j < 32 {
+                    // Marks 0-31 are overwritten by the macro each time it's run
+                    assert_eq!(app.current_cursor_pos(), macro_pos + j);
+                    assert_eq!(app.line_entry.get_alert(), None);
+                } else {
+                    // Marks 32-63 are unaffected by macro
+                    assert_eq!(app.current_cursor_pos(), j);
+                    assert_eq!(app.line_entry.get_alert(), None);
+                }
+            }
+
+            test_driver(&mut app, &format!("`{}g0q", i));
+            macro_pos += i;
+        }
+
+        app
+
+    }
+
+    #[test]
     fn delete_test() {
         let mut app = App::new(50, 50);
         let mut window = None;
