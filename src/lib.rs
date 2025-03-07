@@ -23,7 +23,7 @@ use crate::large_text_view::LargeTextView;
 mod hex_edit;
 use crate::hex_edit::{FileManager, Action, CompoundAction, ActionStack, UpdateDescription, Seek,
         EditMode, ActionResult, ShowType, ByteOperation, FillType, FindDirection, shift_vector, 
-        vector_op, HexEdit, DataSource, Structure, FileMap};
+        vector_op, HexEdit, DataSource, RangeSize, Structure, FileMap};
 pub use crate::hex_edit::FileManagerType;
 
 
@@ -139,6 +139,9 @@ const MANUAL_TEXT: &str = r"\c<b>COMMANDS</b>
     -#g     =>  Move cursor (<u>g</u>o) # bytes backward
     n       =>  Seek to <u>n</u>ext find result
     N       =>  Seek to previous find result
+
+    #m      =>  Save current cursor location to #th <u>m</u>ark
+    `#g     =>  Move cursor (<u>g</u>o) to location of #th mark
 
     #f      =>  Insert # <u>f</u>ill bytes from the cursor location
     #F      =>  Overwrite # <u>f</u>ill bytes from the cursor location
@@ -1002,9 +1005,9 @@ impl App {
                     unreachable!()
                 }
             },
-            KeystrokeCommand::Yank{register, bytes} => {
+            KeystrokeCommand::Yank{register, size: RangeSize::Bytes(bytes)} => {
                 if register < 32 {
-                    self.editors.current_mut().hex_edit.yank(register, bytes)
+                    self.editors.current_mut().hex_edit.yank(register, RangeSize::Bytes(bytes))
                 } else if register < 64 {
                     let pos = self.editors.current().hex_edit.get_cursor_pos();
                     let mut v: Vec<u8> = vec![0;bytes];
@@ -1019,6 +1022,9 @@ impl App {
                 } else {
                     unreachable!()
                 }
+            },
+            KeystrokeCommand::Yank{register, size: RangeSize::UntilMark(mark_id)} => {
+                todo!()
             },
             KeystrokeCommand::Insert{source: DataSource::Register(register)} if register >= 32 => {
                 if register < 64 {

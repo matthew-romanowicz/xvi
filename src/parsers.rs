@@ -1,6 +1,6 @@
 use std::io::SeekFrom;
 
-use crate::{DataSource, Seek};
+use crate::{DataSource, RangeSize, Seek};
 
 pub enum CommandKeyword {
     Set,
@@ -235,7 +235,7 @@ pub enum KeystrokeToken {
 pub enum KeystrokeCommand {
     Seek{from: Seek},
     SeekFindResult{reversed: bool},
-    Yank{register: u8, bytes: usize},
+    Yank{register: u8, size: RangeSize},
     Mark{mark_id: u8},
     Insert{source: DataSource},
     Overwrite{source: DataSource},
@@ -351,7 +351,7 @@ pub fn parse_keystroke(keystroke: &Vec<char>) -> Result<Option<KeystrokeCommand>
                     Ok(Some(KeystrokeCommand::Swap{bytes: n}))
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('y')) => {
-                    Ok(Some(KeystrokeCommand::Yank{register: 0, bytes: n}))
+                    Ok(Some(KeystrokeCommand::Yank{register: 0, size: RangeSize::Bytes(n)}))
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('p')) => {
                     if n >= 64 {
@@ -406,7 +406,7 @@ pub fn parse_keystroke(keystroke: &Vec<char>) -> Result<Option<KeystrokeCommand>
                     if n1 >= 64 {
                         Err("Register indices must be less than 64".to_string())
                     } else {
-                        Ok(Some(KeystrokeCommand::Yank{register: n1 as u8, bytes: n2}))
+                        Ok(Some(KeystrokeCommand::Yank{register: n1 as u8, size: RangeSize::Bytes(n2)}))
                     }
                 },
                 _ => {

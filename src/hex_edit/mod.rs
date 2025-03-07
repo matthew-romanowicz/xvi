@@ -110,6 +110,12 @@ pub enum DataSource {
     Register(u8)
 }
 
+#[derive(Clone)]
+pub enum RangeSize {
+    Bytes(usize),
+    UntilMark(u8)
+}
+
 
 pub trait Action {
     fn undo(&self, hex_edit: &mut HexEdit) -> ActionResult;
@@ -296,15 +302,15 @@ impl Action for SwapAction {
 
 pub struct YankAction {
     register: u8,
-    n_bytes: usize,
+    size: RangeSize,
     original_bytes: BitField
 }
 
 impl YankAction {
-    pub fn new(register: u8, n_bytes: usize, original_bytes: BitField) -> YankAction {
+    pub fn new(register: u8, size: RangeSize, original_bytes: BitField) -> YankAction {
         YankAction {
             register,
-            n_bytes,
+            size,
             original_bytes
         }
     }
@@ -316,7 +322,7 @@ impl Action for YankAction {
     }
 
     fn redo(&self, hex_edit: &mut HexEdit) -> ActionResult {
-        hex_edit.yank(self.register, self.n_bytes)
+        hex_edit.yank(self.register, self.size.clone())
     }
 
     fn size(&self) -> usize{
@@ -1770,29 +1776,36 @@ impl HexEdit {
         }
     }
 
-    pub fn yank(&mut self, register: u8, n_bytes: usize) -> ActionResult {
+    pub fn yank(&mut self, register: u8, size: RangeSize) -> ActionResult {
         let index = self.cursor_pos;
         if register < 32 {
-            if index + n_bytes <= self.file_manager.len() {
-                let mut buffer = vec![0; n_bytes];
-                match self.file_manager.get_bytes(index, &mut buffer) {
-                    Ok(_) => {
-                        let original_bytes = self.clipboard_registers[register as usize].clone();
-                        self.clipboard_registers[register as usize] = BitField::from_vec(buffer);
-                        ActionResult {
-                            alert: None,
-                            alert_type: AlertType::None,
-                            update: UpdateDescription::NoUpdate,
-                            action: Some(Rc::new(YankAction::new(register, n_bytes, original_bytes)))
+            match size {
+                RangeSize::Bytes(n_bytes) if index + n_bytes <= self.file_manager.len() => {
+                    let mut buffer = vec![0; n_bytes];
+                    match self.file_manager.get_bytes(index, &mut buffer) {
+                        Ok(_) => {
+                            let original_bytes = self.clipboard_registers[register as usize].clone();
+                            self.clipboard_registers[register as usize] = BitField::from_vec(buffer);
+                            ActionResult {
+                                alert: None,
+                                alert_type: AlertType::None,
+                                update: UpdateDescription::NoUpdate,
+                                action: Some(Rc::new(YankAction::new(register, size, original_bytes)))
+                            }
+                        },
+                        Err(msg) => {
+                            ActionResult::error(msg.to_string())
                         }
-                    },
-                    Err(msg) => {
-                        ActionResult::error(msg.to_string())
                     }
+                },
+                RangeSize::Bytes(_) => {
+                    ActionResult::error("Cannot yank past EOF".to_string())
+                },
+                RangeSize::UntilMark(mark_id) => {
+                    todo!()
                 }
-            } else {
-                ActionResult::error("Cannot yank past EOF".to_string())
             }
+            
         } else {
             ActionResult::error("Registers must be less than 32".to_string())
         }
