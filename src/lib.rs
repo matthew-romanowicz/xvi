@@ -1005,27 +1005,76 @@ impl App {
                     unreachable!()
                 }
             },
-            KeystrokeCommand::Yank{register, size: RangeSize::Bytes(bytes)} => {
-                if register < 32 {
-                    self.editors.current_mut().hex_edit.yank(register, RangeSize::Bytes(bytes))
-                } else if register < 64 {
-                    let pos = self.editors.current().hex_edit.get_cursor_pos();
-                    let mut v: Vec<u8> = vec![0;bytes];
-                    let res = self.editors.current_mut().hex_edit.get_bytes(pos, &mut v);
-                    match res {
-                        Ok(_) => { // TODO: Check if this is less han n2
-                            self.editors.clipboard_registers[register as usize - 32] = BitField::from_vec(v.to_vec());
-                            ActionResult::empty()
-                        },
-                        Err(msg) => ActionResult::error(msg.to_string())
-                    } 
-                } else {
-                    unreachable!()
+            // KeystrokeCommand::Yank{register, size: RangeSize::UntilMark(mark_id)} if register >= 32 && mark_id >= 32 => {
+            //     let size = RangeSize::UntilAddr(self.editors.marks[mark_id as usize - 32]);
+            //     match self.editors.current_mut().hex_edit.get_range(size) {
+            //         Ok((bf, truncated)) => {
+            //             self.editors.clipboard_registers[register as usize - 32] = bf;
+            //             ActionResult::no_error(UpdateDescription::NoUpdate)
+            //         },
+            //         Err(msg) => ActionResult::error(msg.to_string())
+            //     }
+            // },
+            KeystrokeCommand::Yank{register, size} if register >= 64 => {
+                unreachable!()
+            },
+            KeystrokeCommand::Yank{register, size} if register >= 32 => {
+                let size = size.convert_for_hexedit(&self.editors.marks);
+                match self.editors.current_mut().hex_edit.get_range(size) {
+                    Ok((bf, truncated)) => {
+                        self.editors.clipboard_registers[register as usize - 32] = bf;
+                        ActionResult::no_error(UpdateDescription::NoUpdate)
+                    },
+                    Err(msg) => ActionResult::error(msg.to_string())
                 }
+                
             },
-            KeystrokeCommand::Yank{register, size: RangeSize::UntilMark(mark_id)} => {
-                todo!()
-            },
+            KeystrokeCommand::Yank{register, size} => {
+                let size = size.convert_for_hexedit(&self.editors.marks);
+                self.editors.current_mut().hex_edit.yank(register, size)
+            }
+            // KeystrokeCommand::Yank{register, size: RangeSize::Bytes(bytes)} => {
+            //     if register < 32 {
+            //         self.editors.current_mut().hex_edit.yank(register, RangeSize::Bytes(bytes))
+            //     } else if register < 64 {
+            //         let pos = self.editors.current().hex_edit.get_cursor_pos();
+            //         let mut v: Vec<u8> = vec![0;bytes];
+            //         let res = self.editors.current_mut().hex_edit.get_bytes(pos, &mut v);
+            //         match res {
+            //             Ok(_) => { // TODO: Check if this is less than n2
+            //                 self.editors.clipboard_registers[register as usize - 32] = BitField::from_vec(v.to_vec());
+            //                 ActionResult::empty()
+            //             },
+            //             Err(msg) => ActionResult::error(msg.to_string())
+            //         } 
+            //     } else {
+            //         unreachable!()
+            //     }
+            // },
+            // KeystrokeCommand::Yank{register, size: RangeSize::UntilMark(mark_id)} if mark_id >= 32 => {
+            //     let addr = self.editors.marks[mark_id as usize - 32];
+            //     if register < 32 {
+            //         self.editors.current_mut().hex_edit.yank(register, RangeSize::UntilAddr(addr))
+            //     } else if register < 64 {
+            //         todo!()
+            //     } else {
+            //         unreachable!()
+            //     }
+                
+
+            // },
+            // KeystrokeCommand::Yank{register, size: RangeSize::UntilMark(mark_id)} => {
+            //     if register < 32 {
+            //         self.editors.current_mut().hex_edit.yank(register, RangeSize::UntilMark(mark_id))
+            //     } else if register < 64 {
+            //         todo!()
+            //     } else {
+            //         unreachable!()
+            //     }
+            // },
+            // KeystrokeCommand::Yank{register, size: RangeSize::UntilAddr(_)} => {
+            //     unreachable!()
+            // },
             KeystrokeCommand::Insert{source: DataSource::Register(register)} if register >= 32 => {
                 if register < 64 {
                     let v = self.editors.clipboard_registers[register as usize - 32].clone().into_boxed_slice().unwrap().to_vec(); // TODO: Make this work for non-byte aligned

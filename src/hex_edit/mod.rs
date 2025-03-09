@@ -113,9 +113,20 @@ pub enum DataSource {
 #[derive(Clone)]
 pub enum RangeSize {
     Bytes(usize),
+    UntilAddr(BitIndex),
     UntilMark(u8)
 }
 
+impl RangeSize {
+    pub fn convert_for_hexedit(self, marks: &[BitIndex; 32]) -> RangeSize {
+        match self {
+            RangeSize::UntilMark(mark_id) if mark_id >= 32 => {
+                RangeSize::UntilAddr(marks[mark_id as usize - 32])
+            },
+            rs => rs
+        }
+    }
+}
 
 pub trait Action {
     fn undo(&self, hex_edit: &mut HexEdit) -> ActionResult;
@@ -1776,38 +1787,105 @@ impl HexEdit {
         }
     }
 
-    pub fn yank(&mut self, register: u8, size: RangeSize) -> ActionResult {
-        let index = self.cursor_pos;
-        if register < 32 {
-            match size {
-                RangeSize::Bytes(n_bytes) if index + n_bytes <= self.file_manager.len() => {
-                    let mut buffer = vec![0; n_bytes];
-                    match self.file_manager.get_bytes(index, &mut buffer) {
-                        Ok(_) => {
-                            let original_bytes = self.clipboard_registers[register as usize].clone();
-                            self.clipboard_registers[register as usize] = BitField::from_vec(buffer);
-                            ActionResult {
-                                alert: None,
-                                alert_type: AlertType::None,
-                                update: UpdateDescription::NoUpdate,
-                                action: Some(Rc::new(YankAction::new(register, size, original_bytes)))
-                            }
-                        },
-                        Err(msg) => {
-                            ActionResult::error(msg.to_string())
-                        }
-                    }
-                },
-                RangeSize::Bytes(_) => {
-                    ActionResult::error("Cannot yank past EOF".to_string())
-                },
-                RangeSize::UntilMark(mark_id) => {
-                    todo!()
-                }
-            }
-            
+    pub fn get_bitfield(&mut self, bound1: BitIndex, bound2: BitIndex) -> std::io::Result<(BitField, bool)> {
+        let min_bi: BitIndex;
+        let max_bi: BitIndex;
+        if bound1 < bound2 {
+            min_bi = bound1;
+            max_bi = bound2;
         } else {
-            ActionResult::error("Registers must be less than 32".to_string())
+            min_bi = bound2;
+            max_bi = bound1;
+        }
+        let n_bytes = (max_bi - min_bi).ceil().byte();
+        let mut buffer = vec![0; n_bytes];
+        let index = BitIndex::bytes(min_bi.byte());
+        let n = self.file_manager.get_bytes(index.byte(), &mut buffer)?;
+
+        // Determine if the proper number of bytes were read. If fewer bytes than requested were read, then
+        // the result was truncated due to EOF. If more were read, then panic during tests since that should
+        // be impossible
+        let truncated: bool;
+        if n == n_bytes {
+            truncated = false;
+        } else {
+            truncated = true;
+            #[cfg(test)]
+            if n > n_bytes {
+                panic!("More bytes read than expected")
+            }
+        }
+        Ok((BitField::from_vec(buffer).bit_slice(&(min_bi - index), &(max_bi - index)), truncated))
+
+    }
+
+    pub fn get_range(&mut self, size: RangeSize) -> std::io::Result<(BitField, bool)> {
+        let start = BitIndex::bytes(self.cursor_pos);
+
+        let end = match size {
+            RangeSize::Bytes(n_bytes) => {
+                BitIndex::bytes(self.cursor_pos + n_bytes)
+            },
+            RangeSize::UntilAddr(bi) => {
+                bi
+            },
+            RangeSize::UntilMark(mark_id) if mark_id < 32 => {
+                self.marks[mark_id as usize]
+            },
+            RangeSize::UntilMark(mark_id) => {
+                panic!("Mark IDs must be less than 32")
+            }
+        };
+
+        self.get_bitfield(start, end)
+    }
+
+    // Helper function for HexEdit::yank
+    fn yank_until(&mut self, size: RangeSize, register: u8, addr: BitIndex) -> ActionResult {
+        // TODO: Make this work with cursor positions that are not byte-aligned
+        let cursor_pos: BitIndex = BitIndex::bytes(self.cursor_pos);
+
+        match self.get_bitfield(cursor_pos, addr) {
+            Ok((bf, truncated)) => {
+                let original_bytes = self.clipboard_registers[register as usize].clone();
+                
+                self.clipboard_registers[register as usize] = bf;
+
+                // TODO: figure out what should be done in this case
+                let mut res = if truncated {
+                    ActionResult::warn("Yank truncated due to EOF".to_string())
+                } else {
+                    ActionResult::no_error(UpdateDescription::NoUpdate)
+                };
+
+                res.set_action(Some(Rc::new(YankAction::new(register, size, original_bytes))));
+
+                res
+            },
+            Err(msg) => {
+                ActionResult::error(msg.to_string())
+            }
+        }
+    }
+
+    pub fn yank(&mut self, register: u8, size: RangeSize) -> ActionResult {
+        if register >= 32 {
+            return ActionResult::error("Registers must be less than 32".to_string())
+        }
+
+        match size {
+            RangeSize::Bytes(n_bytes) => {
+                self.yank_until(size, register, BitIndex::bytes(self.cursor_pos + n_bytes))
+            },
+            RangeSize::UntilAddr(bi) => {
+                self.yank_until(size, register, bi)
+            },
+            RangeSize::UntilMark(mark_id) if mark_id < 32 => {
+                self.yank_until(size, register, self.marks[mark_id as usize])
+            },
+            RangeSize::UntilMark(mark_id) => {
+                ActionResult::error("Mark IDs must be less than 32".to_string())
+            }
         }
     }
 
