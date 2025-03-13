@@ -11,6 +11,9 @@ use pancurses::{initscr, endwin, Input, noecho, Window, resize_term, start_color
 
 use bitutils2::{BitIndex, BitField, BitIndexable};
 
+mod utils;
+use crate::utils::{BoundedIndex, BoundedVec};
+
 mod expr;
 use crate::expr::*;
 
@@ -168,6 +171,8 @@ const BUGS: &str = "Inputting numbers greater than usize maximum in commands/key
 Setting line length to value greater than width of terminal causes panic
 ";
 
+
+
 struct HexEditManager {
     hex_edit: HexEdit,
     action_stack: ActionStack
@@ -319,11 +324,14 @@ enum CommandInstruction {
 }
 
 
+type MacroArray = BoundedVec<32, Option<Rc<CompoundAction>>>;
+type MacroId = BoundedIndex<32>;
 
 struct MacroManager {
-    macros: [Option<Rc<CompoundAction>>; 32], //Needs to be 32 or less for Default::default() to work
+    // macros: [Option<Rc<CompoundAction>>; 32], //Needs to be 32 or less for Default::default() to work
+    macros: MacroArray,
     start_index: usize,
-    current_macro: Option<u8>
+    current_macro: Option<MacroId>
 }
 
 impl MacroManager {
@@ -336,27 +344,23 @@ impl MacroManager {
         }
     }
 
-    fn get(&self, n: u8) -> Option<Rc<CompoundAction>> {
-        if n < 32 {
-            match &self.macros[n as usize] {
-                Some(m) => Some(Rc::clone(&m)),
-                None => None
-            }
-        } else {
-            None
+    fn get(&self, n: MacroId) -> Option<Rc<CompoundAction>> {
+        match &self.macros[n] {
+            Some(m) => Some(Rc::clone(&m)),
+            None => None
         }
     }
 
-    fn start(&mut self, n: u8, action_stack: &ActionStack) -> ActionResult {
+    fn start(&mut self, n: MacroId, action_stack: &ActionStack) -> ActionResult {
         self.start_index = action_stack.current_index();
         self.current_macro = Some(n);
         ActionResult::empty()
     }
 
     fn finish(&mut self, action_stack: &ActionStack) -> ActionResult {
-        match self.current_macro {
+        match &self.current_macro {
             Some(n) => {
-                self.macros[n as usize] = Some(Rc::new(action_stack.combine(self.start_index, action_stack.current_index())));
+                self.macros[*n] = Some(Rc::new(action_stack.combine(self.start_index, action_stack.current_index())));
                 self.current_macro = None;
                 ActionResult::empty()
             },
@@ -364,9 +368,9 @@ impl MacroManager {
         }
     }
 
-    fn run(&self, n: u8, hex_edit: &mut HexEdit) -> ActionResult {
+    fn run(&self, n: MacroId, hex_edit: &mut HexEdit) -> ActionResult {
         println!("Running macro {}", n);
-        match &self.macros[n as usize] {
+        match &self.macros[n] {
             Some(m) => m.redo(hex_edit),
             None => ActionResult::error(format!("Macro {} not defined", n))
         }

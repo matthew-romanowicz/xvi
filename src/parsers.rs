@@ -1,6 +1,6 @@
 use std::io::SeekFrom;
 
-use crate::{DataSource, RangeSize, Seek};
+use crate::{DataSource, RangeSize, Seek, MacroId};
 
 pub enum CommandKeyword {
     Set,
@@ -244,8 +244,8 @@ pub enum KeystrokeCommand {
     Undo,
     Redo,
     FinishRecordingMacro,
-    StartRecordingMacro{macro_id: u8},
-    RunMacro{macro_id: u8},
+    StartRecordingMacro{macro_id: MacroId},
+    RunMacro{macro_id: MacroId},
 }
 
 pub fn parse_keystroke(keystroke: &Vec<char>) -> Result<Option<KeystrokeCommand>, String> {
@@ -370,10 +370,18 @@ pub fn parse_keystroke(keystroke: &Vec<char>) -> Result<Option<KeystrokeCommand>
                     
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('q')) => {
-                    Ok(Some(KeystrokeCommand::RunMacro{macro_id: n as u8}))
+                    match MacroId::new(n) {
+                        Ok(macro_id) => Ok(Some(KeystrokeCommand::RunMacro{macro_id})),
+                        Err(max) => Err(format!("Macro indices must be less than {}", max))
+                    }
+                    
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('Q')) => {
-                    Ok(Some(KeystrokeCommand::StartRecordingMacro{macro_id: n as u8}))
+                    match MacroId::new(n) {
+                        Ok(macro_id) => Ok(Some(KeystrokeCommand::StartRecordingMacro{macro_id})),
+                        Err(max) => Err(format!("Macro indices must be less than {}", max))
+                    }
+                    
                 },
                 _ => {
                     let s: String = keystroke.iter().collect();
