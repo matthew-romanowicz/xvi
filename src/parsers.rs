@@ -393,12 +393,19 @@ pub fn parse_keystroke(keystroke: &Vec<char>) -> Result<Option<KeystrokeCommand>
                 (KeystrokeToken::Character('`'), KeystrokeToken::Integer(n), KeystrokeToken::Character('g')) => {
                     Ok(Some(KeystrokeCommand::Seek{from: Seek::Mark(n as u8)}))
                 },
+                (KeystrokeToken::Character('`'), KeystrokeToken::Integer(n), KeystrokeToken::Character('y')) => {
+                    if n >= 64 {
+                        Err("Mark IDs must be less than 64".to_string())
+                    } else {
+                        Ok(Some(KeystrokeCommand::Yank{register: 0, size: RangeSize::UntilMark(n as u8)}))
+                    }
+                },
                 _ => {
                     let s: String = keystroke.iter().collect();
                     Err(format!("Command not recognized: '{}'", s))
                 }
             }
-        }
+        },
 
         4 => {
             match (tokens[0], tokens[1], tokens[2], tokens[3]) {
@@ -414,7 +421,25 @@ pub fn parse_keystroke(keystroke: &Vec<char>) -> Result<Option<KeystrokeCommand>
                     Err(format!("Command not recognized: '{}'", s))
                 }
             }
-        }
+        },
+
+        5 => {
+            match (tokens[0], tokens[1], tokens[2], tokens[3], tokens[4]) {
+                (KeystrokeToken::Integer(n1), KeystrokeToken::Character('r'), KeystrokeToken::Character('`'), KeystrokeToken::Integer(n2), KeystrokeToken::Character('y')) => {
+                    if n1 >= 64 {
+                        Err("Register indices must be less than 64".to_string())
+                    } else if n2 >= 64 {
+                        Err("Mark IDs must be less than 64".to_string())
+                    } else {
+                        Ok(Some(KeystrokeCommand::Yank{register: n1 as u8, size: RangeSize::UntilMark(n2 as u8)}))
+                    }
+                },
+                _ => {
+                    let s: String = keystroke.iter().collect();
+                    Err(format!("Command not recognized: '{}'", s))
+                }
+            }
+        },
         _ => {
             let s: String = keystroke.iter().collect();
             Err(format!("Command not recognized: '{}'", s))

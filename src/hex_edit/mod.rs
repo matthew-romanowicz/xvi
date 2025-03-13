@@ -791,9 +791,11 @@ impl Action for CompoundAction {
     }
 }
 
+// TODO: Add functionality to record a macro greater than length
 pub struct ActionStack {
     length: usize,
     index: usize,
+    offset: usize,
     actions: Vec<Rc<dyn Action>>
 }
 
@@ -802,6 +804,7 @@ impl ActionStack {
         ActionStack {
             length,
             index: 0,
+            offset: 0,
             actions: Vec::new()
         }
     }
@@ -820,7 +823,7 @@ impl ActionStack {
     }
 
     pub fn current_index(&self) -> usize {
-        self.index
+        self.index + self.offset
     }
 
     pub fn add(&mut self, action: Rc<dyn Action>){
@@ -830,6 +833,7 @@ impl ActionStack {
         while self.actions.len() > self.length && self.index > 0 {
             self.actions.remove(0);
             self.index -= 1;
+            self.offset += 1;
         }
     }
 
@@ -857,7 +861,9 @@ impl ActionStack {
 
     pub fn combine(&self, start_index: usize, stop_index: usize) -> CompoundAction {
         let mut res = Vec::<Rc<dyn Action>>::new();
-        for i in start_index..stop_index {
+        // TODO: This is dangerous since it can be outside the valid range if the macro is larger
+        // than the length
+        for i in (start_index - self.offset)..(stop_index - self.offset) {
             res.push(Rc::clone(&self.actions[i]));
         }
         CompoundAction{actions:res}
@@ -1712,10 +1718,14 @@ impl HexEdit {
             DataSource::Bytes(b) => b.to_vec(),
             DataSource::Fill(n) => self.get_fill_bytes(*n),
             // TODO: make this work for non-byte-aligned
-            DataSource::Register(n) => self.clipboard_registers[*n as usize].clone().into_boxed_slice().unwrap().to_vec()
+            DataSource::Register(n) => {
+                // println!("Register length: {:?}", self.clipboard_registers[*n as usize].len());
+                self.clipboard_registers[*n as usize].clone().into_boxed_slice().unwrap().to_vec()
+            }
         };
         match self.file_manager.insert_bytes(self.cursor_pos, &bytes) {
             Ok(_) => {
+                // println!("Bytes: {}", bytes.len());
                 let seek_res = self.seek(Seek::FromCurrent(bytes.len() as i64));
                 ActionResult {
                     alert: None,
@@ -1798,6 +1808,7 @@ impl HexEdit {
             max_bi = bound1;
         }
         let n_bytes = (max_bi - min_bi).ceil().byte();
+        println!("n_bytes={}", n_bytes);
         let mut buffer = vec![0; n_bytes];
         let index = BitIndex::bytes(min_bi.byte());
         let n = self.file_manager.get_bytes(index.byte(), &mut buffer)?;
@@ -1844,6 +1855,7 @@ impl HexEdit {
     fn yank_until(&mut self, size: RangeSize, register: u8, addr: BitIndex) -> ActionResult {
         // TODO: Make this work with cursor positions that are not byte-aligned
         let cursor_pos: BitIndex = BitIndex::bytes(self.cursor_pos);
+
 
         match self.get_bitfield(cursor_pos, addr) {
             Ok((bf, truncated)) => {

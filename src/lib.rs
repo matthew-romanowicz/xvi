@@ -365,6 +365,7 @@ impl MacroManager {
     }
 
     fn run(&self, n: u8, hex_edit: &mut HexEdit) -> ActionResult {
+        println!("Running macro {}", n);
         match &self.macros[n as usize] {
             Some(m) => m.redo(hex_edit),
             None => ActionResult::error(format!("Macro {} not defined", n))
@@ -1005,16 +1006,6 @@ impl App {
                     unreachable!()
                 }
             },
-            // KeystrokeCommand::Yank{register, size: RangeSize::UntilMark(mark_id)} if register >= 32 && mark_id >= 32 => {
-            //     let size = RangeSize::UntilAddr(self.editors.marks[mark_id as usize - 32]);
-            //     match self.editors.current_mut().hex_edit.get_range(size) {
-            //         Ok((bf, truncated)) => {
-            //             self.editors.clipboard_registers[register as usize - 32] = bf;
-            //             ActionResult::no_error(UpdateDescription::NoUpdate)
-            //         },
-            //         Err(msg) => ActionResult::error(msg.to_string())
-            //     }
-            // },
             KeystrokeCommand::Yank{register, size} if register >= 64 => {
                 unreachable!()
             },
@@ -1033,48 +1024,6 @@ impl App {
                 let size = size.convert_for_hexedit(&self.editors.marks);
                 self.editors.current_mut().hex_edit.yank(register, size)
             }
-            // KeystrokeCommand::Yank{register, size: RangeSize::Bytes(bytes)} => {
-            //     if register < 32 {
-            //         self.editors.current_mut().hex_edit.yank(register, RangeSize::Bytes(bytes))
-            //     } else if register < 64 {
-            //         let pos = self.editors.current().hex_edit.get_cursor_pos();
-            //         let mut v: Vec<u8> = vec![0;bytes];
-            //         let res = self.editors.current_mut().hex_edit.get_bytes(pos, &mut v);
-            //         match res {
-            //             Ok(_) => { // TODO: Check if this is less than n2
-            //                 self.editors.clipboard_registers[register as usize - 32] = BitField::from_vec(v.to_vec());
-            //                 ActionResult::empty()
-            //             },
-            //             Err(msg) => ActionResult::error(msg.to_string())
-            //         } 
-            //     } else {
-            //         unreachable!()
-            //     }
-            // },
-            // KeystrokeCommand::Yank{register, size: RangeSize::UntilMark(mark_id)} if mark_id >= 32 => {
-            //     let addr = self.editors.marks[mark_id as usize - 32];
-            //     if register < 32 {
-            //         self.editors.current_mut().hex_edit.yank(register, RangeSize::UntilAddr(addr))
-            //     } else if register < 64 {
-            //         todo!()
-            //     } else {
-            //         unreachable!()
-            //     }
-                
-
-            // },
-            // KeystrokeCommand::Yank{register, size: RangeSize::UntilMark(mark_id)} => {
-            //     if register < 32 {
-            //         self.editors.current_mut().hex_edit.yank(register, RangeSize::UntilMark(mark_id))
-            //     } else if register < 64 {
-            //         todo!()
-            //     } else {
-            //         unreachable!()
-            //     }
-            // },
-            // KeystrokeCommand::Yank{register, size: RangeSize::UntilAddr(_)} => {
-            //     unreachable!()
-            // },
             KeystrokeCommand::Insert{source: DataSource::Register(register)} if register >= 32 => {
                 if register < 64 {
                     let v = self.editors.clipboard_registers[register as usize - 32].clone().into_boxed_slice().unwrap().to_vec(); // TODO: Make this work for non-byte aligned
@@ -2502,6 +2451,226 @@ mod app_string_tests {
         assert_eq!(buff_expected, buff);
         assert_eq!(app.editors.current_mut().hex_edit.get_bytes(1104, &mut buff).unwrap(), 64);
         assert_eq!(buff_expected, buff);
+    }
+
+    #[test]
+    fn yank_to_mark_test() {
+        let mut app = App::new(50, 50);
+        let mut window = None;
+        app.init(&mut window, r"tests\exif2c08.png".to_string(), FileManagerType::RamOnly, false).unwrap();
+        let file_length = 1788;
+
+        // Put something into each register
+        for i in 0..64 {
+            test_driver(&mut app, &format!(":cat r{} x00\n", i)); 
+        }
+
+        for i in 0..64 {
+            // Yank 16 bytes starting at 1712
+            test_driver(&mut app, &format!("1712g+16g{}m-16g{}r`{}y", i, i, i)); 
+            assert_eq!(app.line_entry.get_alert(), None);
+            assert_eq!(app.current_cursor_pos(), 1712);
+
+            // Paste them at byte 1728 and confirm their contents
+            test_driver(&mut app, &format!("1728g{}p", i)); 
+            assert_eq!(app.line_entry.get_alert(), None);
+            assert_eq!(app.current_cursor_pos(), 1728 + 16);
+
+            let buff_expected = vec![
+                0x74, 0x98, 0xb2, 0x8e, 
+                0x72, 0x95, 0x1a, 0xfc, 
+                0xb7, 0xb5, 0x00, 0xb8, 
+                0x21, 0x2c, 0x64, 0x64
+            ];
+            let mut buff = vec![0; 16];
+            assert_eq!(app.editors.current_mut().hex_edit.get_bytes(1728, &mut buff).unwrap(), 16);
+            assert_eq!(buff_expected, buff);
+
+            // Undo paste and seek
+            test_driver(&mut app, "uu"); 
+            assert_eq!(app.current_cursor_pos(), 1712);
+            assert_eq!(app.line_entry.get_alert(), None);
+
+            // Undo yank or seek, depending on whether the yank counted as an action
+            test_driver(&mut app, "u");
+            assert_eq!(app.line_entry.get_alert(), None);
+            if i < 32 {
+                assert_eq!(app.current_cursor_pos(), 1712);
+            } else {
+                assert_eq!(app.current_cursor_pos(), 1728);
+            }
+        }
+
+        for i in 0..64 {
+            // Yank 16 bytes starting at 1712
+            test_driver(&mut app, &format!("1712g{}m+16g`{}y", i, i)); 
+            assert_eq!(app.line_entry.get_alert(), None);
+            assert_eq!(app.current_cursor_pos(), 1728);
+
+            // Paste them at byte 1728 and confirm their contents
+            test_driver(&mut app, "1728gp"); 
+            assert_eq!(app.line_entry.get_alert(), None);
+            assert_eq!(app.current_cursor_pos(), 1728 + 16);
+
+            let buff_expected = vec![
+                0x74, 0x98, 0xb2, 0x8e, 
+                0x72, 0x95, 0x1a, 0xfc, 
+                0xb7, 0xb5, 0x00, 0xb8, 
+                0x21, 0x2c, 0x64, 0x64
+            ];
+            let mut buff = vec![0; 16];
+            assert_eq!(app.editors.current_mut().hex_edit.get_bytes(1728, &mut buff).unwrap(), 16);
+            assert_eq!(buff_expected, buff);
+
+            // Undo paste
+            test_driver(&mut app, "uu"); 
+        }
+
+        // Record a bunch of macros for yanking the next sixteen bytes from the cursor
+        // using marks
+        for i in 0..32 {
+            test_driver(&mut app, &format!("g{}Q+16g{}m-16g{}r`{}yQ", i, i, i, i)); 
+            assert_eq!(app.line_entry.get_alert(), None);
+            assert_eq!(app.current_cursor_pos(), 0);
+        }
+
+        for i in 0..32 {
+            // Yank 16 bytes starting at 1712
+            test_driver(&mut app, &format!("1712g{}q", i)); 
+            assert_eq!(app.line_entry.get_alert(), None);
+            assert_eq!(app.current_cursor_pos(), 1712);
+
+            // Paste them at byte 1728 and confirm their contents
+            test_driver(&mut app, "1728g"); 
+            assert_eq!(app.line_entry.get_alert(), None);
+            assert_eq!(app.current_cursor_pos(), 1728);
+            test_driver(&mut app, &format!("{}p", i)); 
+            assert_eq!(app.line_entry.get_alert(), None);
+            assert_eq!(app.current_cursor_pos(), 1728 + 16);
+
+            let buff_expected = vec![
+                0x74, 0x98, 0xb2, 0x8e, 
+                0x72, 0x95, 0x1a, 0xfc, 
+                0xb7, 0xb5, 0x00, 0xb8, 
+                0x21, 0x2c, 0x64, 0x64
+            ];
+            let mut buff = vec![0; 16];
+            assert_eq!(app.editors.current_mut().hex_edit.get_bytes(1728, &mut buff).unwrap(), 16);
+            assert_eq!(buff_expected, buff);
+
+            // Undo paste and seek
+            test_driver(&mut app, "uu"); 
+            assert_eq!(app.current_cursor_pos(), 1712);
+            assert_eq!(app.line_entry.get_alert(), None);
+        }
+
+        // Record a macro that copies the next 32 bytes to the first 32 registers
+        test_driver(&mut app, "0Q");
+        for i in 0..32 {
+            test_driver(&mut app, &format!("+1g{}m", i));
+        }
+        test_driver(&mut app, "`0g-1g");
+        for i in 0..32 {
+            test_driver(&mut app, &format!("{}r`{}y`{}g", i, i, i));
+        }
+        test_driver(&mut app, "`0g-1gQ");
+
+        // Record a macro that pastes all 32 registers in reverse order
+        test_driver(&mut app, "1Q31m");
+        for i in 0..32 {
+            test_driver(&mut app, &format!("`31g{}p", i));
+        }
+        test_driver(&mut app, "`31gQ");
+
+        // Use macros to swap 32 bytes
+
+        test_driver(&mut app, "1616g0q");
+
+        assert_eq!(app.current_cursor_pos(), 1616);
+        assert_eq!(app.line_entry.get_alert(), None);
+
+        test_driver(&mut app, "1q");
+
+        let buff_expected = vec![
+            0x74, 0x00, 0x9E, 0x67, 0x57, 0xF4, 0x85, 0x86, 
+            0x40, 0x41, 0xBB, 0x4D, 0x30, 0x43, 0x4D, 0xDC, 
+            0x26, 0xEA, 0x02, 0x7A, 0x8F, 0x32, 0xE9, 0x0B, 
+            0x14, 0xE4, 0x85, 0x27, 0xE8, 0xF3, 0x00, 0x23
+        ];
+
+        assert_eq!(app.current_cursor_pos(), 1616);
+        assert_eq!(app.line_entry.get_alert(), None);
+
+        let mut buff = vec![0; 32];
+        assert_eq!(app.editors.current_mut().hex_edit.get_bytes(1616, &mut buff).unwrap(), 32);
+        assert_eq!(buff_expected, buff);
+
+        // Use the same macros to swap the bytes back
+
+        test_driver(&mut app, "0q");
+
+        assert_eq!(app.current_cursor_pos(), 1616);
+        assert_eq!(app.line_entry.get_alert(), None);
+
+        test_driver(&mut app, "1q");
+
+        let buff_expected = vec![
+            0x23, 0x00, 0xF3, 0xE8, 0x27, 0x85, 0xE4, 0x14, 
+            0x0B, 0xE9, 0x32, 0x8F, 0x7A, 0x02, 0xEA, 0x26, 
+            0xDC, 0x4D, 0x43, 0x30, 0x4D, 0xBB, 0x41, 0x40, 
+            0x86, 0x85, 0xF4, 0x57, 0x67, 0x9E, 0x00, 0x74
+        ];
+
+        assert_eq!(app.current_cursor_pos(), 1616);
+        assert_eq!(app.line_entry.get_alert(), None);
+
+        let mut buff = vec![0; 32];
+        assert_eq!(app.editors.current_mut().hex_edit.get_bytes(1616, &mut buff).unwrap(), 32);
+        assert_eq!(buff_expected, buff);
+
+        // Record a macro by copying the first 32 bytes (copy won't be saved to macro)
+        test_driver(&mut app, "0g0Q");
+        for i in 32..64 {
+            test_driver(&mut app, &format!("+1g{}m", i));
+        }
+        test_driver(&mut app, "`32g-1g");
+        for i in 32..64 {
+            test_driver(&mut app, &format!("{}r`{}y`{}g", i, i, i));
+        }
+        test_driver(&mut app, "`32g-1gQ");
+
+        // Record a macro that pastes all 32 registers in reverse order
+        test_driver(&mut app, "1Q31m");
+        for i in 32..64 {
+            test_driver(&mut app, &format!("`31g{}p", i));
+        }
+        test_driver(&mut app, "`31gQ");
+
+        // Run macros at byte 1616. See that the data that was yanked
+        // while recording the macros is what is pasted, and that the
+        // cursor returns to the position of the original recording
+
+        test_driver(&mut app, "1616g0q");
+
+        assert_eq!(app.current_cursor_pos(), 0);
+        assert_eq!(app.line_entry.get_alert(), None);
+
+        test_driver(&mut app, "1616g1q");
+
+        let buff_expected = vec![
+            0xED, 0x18, 0xFC, 0x00, 0x00, 0x00, 0x02, 0x08, 
+            0x20, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00, 
+            0x52, 0x44, 0x48, 0x49, 0x0D, 0x00, 0x00, 0x00, 
+            0x0A, 0x1A, 0x0A, 0x0D, 0x47, 0x4E, 0x50, 0x89
+        ];
+
+        assert_eq!(app.current_cursor_pos(), 1616);
+        assert_eq!(app.line_entry.get_alert(), None);
+
+        let mut buff = vec![0; 32];
+        assert_eq!(app.editors.current_mut().hex_edit.get_bytes(1616, &mut buff).unwrap(), 32);
+        assert_eq!(buff_expected, buff);
+
     }
 
     #[test]
