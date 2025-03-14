@@ -153,6 +153,8 @@ const MANUAL_TEXT: &str = r"\c<b>COMMANDS</b>
 
     #y      =>  <u>Y</u>ank (copy) next # bytes from the cursor location to register 0
     #r##y   =>  <u>Y</u>ank (copy) next ## bytes from the cursor location to <u>r</u>egister #
+    `#y     =>  <u>Y</u>ank (copy) data from the cursor location until #th mark to register 0
+    #r`##y  =>  <u>Y</u>ank (copy) data from the cursor location until ##th mark to <u>r</u>egister #
     p       =>  <u>P</u>aste contents of register 0 at cursor location
     P       =>  <u>P</u>aste contents of register 0 at cursor location, overwriting current bytes
     #p      =>  <u>P</u>aste contents of register # at cursor location
@@ -171,16 +173,42 @@ const BUGS: &str = "Inputting numbers greater than usize maximum in commands/key
 Setting line length to value greater than width of terminal causes panic
 ";
 
-type MacroArray = BoundedVec<32, Option<Rc<CompoundAction>>>;
-type MacroId = BoundedIndex<32>;
+const MACRO_ARRAY_LENGTH: usize = 32;
+const MARKS_ARRAY_LENGTH: usize = 32;
+const REGISTER_ARRAY_LENGTH: usize = 32;
 
-type MarkArray = BoundedVec<32, BitIndex>;
-type MarkId = BoundedIndex<32>;
+// const MARKS_ARRAY_LENGTH_X2: usize = MARKS_ARRAY_LENGTH * 2;
+
+type MacroArray = BoundedVec<MACRO_ARRAY_LENGTH, Option<Rc<CompoundAction>>>;
+type MacroId = BoundedIndex<MACRO_ARRAY_LENGTH>;
+
+type MarkArray = BoundedVec<MARKS_ARRAY_LENGTH, BitIndex>;
+type MarkId = BoundedIndex<MARKS_ARRAY_LENGTH>;
+
+type RegisterArray = BoundedVec<REGISTER_ARRAY_LENGTH, BitIndex>;
+type RegisterId = BoundedIndex<REGISTER_ARRAY_LENGTH>;
 
 #[derive(Clone, Copy)]
 enum FullMarkId {
-    Upper(MarkId),
-    Lower(MarkId)
+    Lower(MarkId),
+    Upper(MarkId)
+    
+}
+
+impl FullMarkId {
+    pub fn new(index: usize) -> Result<FullMarkId, usize> {
+        if let Ok(mark_id) = MarkId::new(index) {
+            Ok(FullMarkId::Lower(mark_id))
+        } else if let Ok(mark_id) = MarkId::new(index - MarkId::BOUND) {
+            Ok(FullMarkId::Upper(mark_id))
+        } else {
+            Err(MarkId::BOUND * 2)
+        }
+    }
+
+    pub fn zero() -> FullMarkId {
+        FullMarkId::Lower(MarkId::zero())
+    }
 }
 
 struct HexEditManager {
