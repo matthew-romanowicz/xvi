@@ -68,6 +68,8 @@ options:
     let fname = r"C:\Users\Matthew\Documents\Rust\xvi\tests\exif2c08.png".to_string();
     
     // let fname = r"C:\Users\Matthew\Documents\Rust\xvi\tests\oi4n2c16.png".to_string();
+    
+    // let fname = r"C:\Users\Matthew\Documents\Rust\xvi\tests\oi4n2c16.png".to_string();
     match run(fname, file_manager_type, extract) {
         Ok(_) => {
             std::process::exit(0);

@@ -25,8 +25,8 @@ use crate::large_text_view::LargeTextView;
 
 mod hex_edit;
 use crate::hex_edit::{FileManager, Action, CompoundAction, ActionStack, UpdateDescription, Seek, FullSeek,
-        EditMode, ActionResult, ShowType, ByteOperation, FillType, FindDirection, shift_vector, 
-        vector_op, HexEdit, DataSource, RangeSize, FullRangeSize, Structure, FileMap};
+        EditMode, ActionResult, ShowType, ByteOperation, FillType, FullFillType, FindDirection, shift_vector, 
+        vector_op, HexEdit, DataSource, FullDataSource, RangeSize, FullRangeSize, Structure, FileMap};
 pub use crate::hex_edit::FileManagerType;
 
 
@@ -185,7 +185,7 @@ type MacroId = BoundedIndex<MACRO_ARRAY_LENGTH>;
 type MarkArray = BoundedVec<MARKS_ARRAY_LENGTH, BitIndex>;
 type MarkId = BoundedIndex<MARKS_ARRAY_LENGTH>;
 
-type RegisterArray = BoundedVec<REGISTER_ARRAY_LENGTH, BitIndex>;
+type RegisterArray = BoundedVec<REGISTER_ARRAY_LENGTH, BitField>;
 type RegisterId = BoundedIndex<REGISTER_ARRAY_LENGTH>;
 
 #[derive(Clone, Copy)]
@@ -211,6 +211,29 @@ impl FullMarkId {
     }
 }
 
+#[derive(Clone, Copy)]
+enum FullRegisterId {
+    Lower(RegisterId),
+    Upper(RegisterId)
+    
+}
+
+impl FullRegisterId {
+    pub fn new(index: usize) -> Result<FullRegisterId, usize> {
+        if let Ok(reg_id) = RegisterId::new(index) {
+            Ok(FullRegisterId::Lower(reg_id))
+        } else if let Ok(reg_id) = RegisterId::new(index - RegisterId::BOUND) {
+            Ok(FullRegisterId::Upper(reg_id))
+        } else {
+            Err(RegisterId::BOUND * 2)
+        }
+    }
+
+    pub fn zero() -> FullRegisterId {
+        FullRegisterId::Lower(RegisterId::zero())
+    }
+}
+
 struct HexEditManager {
     hex_edit: HexEdit,
     action_stack: ActionStack
@@ -233,7 +256,7 @@ struct EditorStack {
     y: usize,
     width: usize,
     height: usize,
-    clipboard_registers: [BitField; 32],
+    clipboard_registers: RegisterArray,
     marks: MarkArray,
     endianness: Endianness,
     cnum: ShowType,
@@ -342,12 +365,14 @@ impl EditorStack {
     }
 
     fn get_current_register(&self, index: usize) -> Result<BitField, String> {
-        if index < 32 {
-            self.current().hex_edit.get_register(index as u8)
-        } else if index < 64 {
-            Ok(self.clipboard_registers[index - 32].clone())
-        } else {
-            Err("Clipboard register must be less than 64".to_string())
+        match FullRegisterId::new(index) {
+            Ok(FullRegisterId::Lower(reg_id)) => {
+                self.current().hex_edit.get_register(reg_id)
+            },
+            Ok(FullRegisterId::Upper(reg_id)) => {
+                Ok(self.clipboard_registers[reg_id].clone())
+            },
+            Err(n) => Err(format!("Clipboard register must be less than {}", n).to_string())
         }
     }
 }
@@ -527,7 +552,12 @@ impl App {
 
         match command[0] {
             ':' => {
-                let tokens = parse_command(&command[1..].to_vec());
+                let tokens;
+                match parse_command(&command[1..].to_vec()) {
+                    Ok(t) => tokens = t,
+                    Err(msg) => return (CommandInstruction::NoOp, ActionResult::error(msg))
+                }
+
                 match tokens.len() {
                     1 => {
                         // let hm = &mut editor_stack.editors[editor_stack.current];
@@ -573,87 +603,65 @@ impl App {
                     }
                     2 => {
                         match (&tokens[0], &tokens[1]) {
-                            (CommandToken::Keyword(CommandKeyword::Swap), CommandToken::Register(n)) => {
-                                if *n < 32 {
-                                    (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.swap_register(*n as u8))
-                                } else if *n < 64 {
-                                    // self.editors.clipboard_registers[*n - 32].reverse();
-                                    // TODO: Consider swap_le_to_be
-                                    self.editors.clipboard_registers[*n - 32].swap_be_to_le();
-                                    (CommandInstruction::NoOp, ActionResult::empty())
-                                } else {
-                                    (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
-                                }
-                                
+                            (CommandToken::Keyword(CommandKeyword::Swap), CommandToken::Register(FullRegisterId::Lower(reg_id))) => {
+                                (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.swap_register(*reg_id))
                             },
-                            (CommandToken::Keyword(CommandKeyword::Not), CommandToken::Register(n)) => {
-                                if *n < 32 {
-                                    (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.invert_register(*n as u8))
-                                } else if *n < 64 {
-                                    // let new = self.editors.clipboard_registers[*n - 32].iter().map(|x| !x).collect();
-                                    // self.editors.clipboard_registers[*n - 32] = new;
-                                    self.editors.clipboard_registers[*n - 32] = !&self.editors.clipboard_registers[*n - 32];
-                                    (CommandInstruction::NoOp, ActionResult::empty())
-                                } else {
-                                    (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
-                                }
-                                
+                            (CommandToken::Keyword(CommandKeyword::Swap), CommandToken::Register(FullRegisterId::Upper(reg_id))) => {
+                                self.editors.clipboard_registers[*reg_id].swap_be_to_le();
+                                (CommandInstruction::NoOp, ActionResult::empty())
                             },
-                            (CommandToken::Keyword(CommandKeyword::Deflate), CommandToken::Register(n)) => {
-                                if *n < 32 {
-                                    let clevel = self.editors.clevel;
-                                    (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.deflate_register(*n as u8, clevel))
-                                } else if *n < 64 {
-                                    let mut e = DeflateEncoder::new(Vec::new(), Compression::new(self.editors.clevel as u32));
-                                    // TODO: Make this work for non byte-aligned registers
-                                    let buff = self.editors.clipboard_registers[*n - 32].clone().into_boxed_slice().unwrap().to_vec();
-                                    if let Err(msg) = e.write_all(&buff) {
-                                        (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
-                                    } else {
-                                        match e.finish() {
-                                            Ok(w) => {
-                                                self.editors.clipboard_registers[*n - 32] = BitField::from_vec(w);
-                                                (CommandInstruction::NoOp, ActionResult::empty())
-                                            },
-                                            Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
-                                        }
+                            (CommandToken::Keyword(CommandKeyword::Not),  CommandToken::Register(FullRegisterId::Lower(reg_id))) => {
+                                (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.invert_register(*reg_id))
+                            },
+                            (CommandToken::Keyword(CommandKeyword::Not),  CommandToken::Register(FullRegisterId::Upper(reg_id))) => {
+                                self.editors.clipboard_registers[*reg_id] = !&self.editors.clipboard_registers[*reg_id];
+                                    (CommandInstruction::NoOp, ActionResult::empty())
+                            },
+                            (CommandToken::Keyword(CommandKeyword::Deflate), CommandToken::Register(FullRegisterId::Lower(reg_id))) => {
+                                let clevel = self.editors.clevel;
+                                (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.deflate_register(*reg_id, clevel))
+                            },
+                            (CommandToken::Keyword(CommandKeyword::Deflate), CommandToken::Register(FullRegisterId::Upper(reg_id))) => {
+                                let mut e = DeflateEncoder::new(Vec::new(), Compression::new(self.editors.clevel as u32));
+                                // TODO: Make this work for non byte-aligned registers
+                                let buff = self.editors.clipboard_registers[*reg_id].clone().into_boxed_slice().unwrap().to_vec();
+                                if let Err(msg) = e.write_all(&buff) {
+                                    (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
+                                } else {
+                                    match e.finish() {
+                                        Ok(w) => {
+                                            self.editors.clipboard_registers[*reg_id] = BitField::from_vec(w);
+                                            (CommandInstruction::NoOp, ActionResult::empty())
+                                        },
+                                        Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
                                     }
-                                } else {
-                                    (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
                                 }
                             },
-                            (CommandToken::Keyword(CommandKeyword::Inflate), CommandToken::Register(n)) => {
-                                if *n < 32 {
-                                    (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.inflate_register(*n as u8)) // TODO: Make level variable
-                                } else if *n < 64 {
-                                    let mut e = DeflateDecoder::new(Vec::new());
-                                    // TODO: Make this work for non byte-aligned registers
-                                    let buff = self.editors.clipboard_registers[*n - 32].clone().into_boxed_slice().unwrap().to_vec();
-                                    if let Err(msg) = e.write_all(&buff) {
-                                        (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
-                                    } else {
-                                        match e.finish() {
-                                            Ok(w) => {
-                                                self.editors.clipboard_registers[*n - 32] = BitField::from_vec(w);
-                                                (CommandInstruction::NoOp, ActionResult::empty())
-                                            },
-                                            Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
-                                        }
+                            (CommandToken::Keyword(CommandKeyword::Inflate), CommandToken::Register(FullRegisterId::Lower(reg_id))) => {
+                                (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.inflate_register(*reg_id)) // TODO: Make level variable
+                            },
+                            (CommandToken::Keyword(CommandKeyword::Inflate), CommandToken::Register(FullRegisterId::Upper(reg_id))) => {
+                                let mut e = DeflateDecoder::new(Vec::new());
+                                // TODO: Make this work for non byte-aligned registers
+                                let buff = self.editors.clipboard_registers[*reg_id].clone().into_boxed_slice().unwrap().to_vec();
+                                if let Err(msg) = e.write_all(&buff) {
+                                    (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
+                                } else {
+                                    match e.finish() {
+                                        Ok(w) => {
+                                            self.editors.clipboard_registers[*reg_id] = BitField::from_vec(w);
+                                            (CommandInstruction::NoOp, ActionResult::empty())
+                                        },
+                                        Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
                                     }
-                                } else {
-                                    (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
                                 }
-                            }
-                            (CommandToken::Keyword(CommandKeyword::Clear), CommandToken::Register(n)) => {
-                                if *n < 32 {
-                                    (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.set_register(*n as u8, &BitField::default()))
-                                } else if *n < 64 {
-                                    // self.editors.clipboard_registers[*n - 32] = Vec::<u8>::new();
-                                    self.editors.clipboard_registers[*n - 32] = BitField::default();
-                                    (CommandInstruction::NoOp, ActionResult::empty())
-                                } else {
-                                    (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
-                                }
+                            },
+                            (CommandToken::Keyword(CommandKeyword::Clear), CommandToken::Register(FullRegisterId::Lower(reg_id))) => {
+                                (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.set_register(*reg_id, &BitField::default()))
+                            },
+                            (CommandToken::Keyword(CommandKeyword::Clear), CommandToken::Register(FullRegisterId::Upper(reg_id))) => {
+                                self.editors.clipboard_registers[*reg_id] = BitField::default();
+                                (CommandInstruction::NoOp, ActionResult::empty())
                             },
                             (CommandToken::Keyword(CommandKeyword::Clear), CommandToken::Keyword(CommandKeyword::Undo)) => {
                                 self.editors.current_mut().action_stack.clear();
@@ -780,8 +788,10 @@ impl App {
                                     (CommandToken::Keyword(CommandKeyword::Syntax), CommandToken::Keyword(CommandKeyword::Off)) => {
                                         (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.set_syntax(None))
                                     },
-                                    (CommandToken::Keyword(CommandKeyword::Fill), CommandToken::Register(n)) => {
-                                        (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.set_fill(FillType::Register(*n as u8)))
+                                    (CommandToken::Keyword(CommandKeyword::Fill), CommandToken::Register(reg_id)) => {
+                                        let fill = FullFillType::Register(*reg_id);
+                                        let fill = fill.convert(&self.editors.clipboard_registers);
+                                        (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.set_fill(fill))
                                     },
                                     (CommandToken::Keyword(CommandKeyword::Fill), CommandToken::Word(word)) => {
                                         match parse_bytes(word) {
@@ -794,44 +804,36 @@ impl App {
                             },
                             CommandToken::Keyword(CommandKeyword::Cat) => { // :cat [] []
                                 match (&tokens[1], &tokens[2]) {
-                                    (CommandToken::Register(n1), CommandToken::Register(n2)) => {
-                                        if *n1 < 32 {
-                                            if *n2 < 32 {
-                                                (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.concatenate_register(*n1 as u8, FillType::Register(*n2 as u8)))
-                                            } else if *n2 < 64 { 
-                                                let fill = FillType::Bytes(self.editors.clipboard_registers[*n2 - 32].clone());
-                                                (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.concatenate_register(*n1 as u8, fill))
-                                            } else {
-                                                (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
-                                            }
-                                        } else if *n1 < 64 {
-                                            if *n2 < 32 {
-                                                let fill = self.editors.current().hex_edit.get_register(*n2 as u8).unwrap();
-                                                self.editors.clipboard_registers[*n1 - 32].extend(&fill);
-                                                (CommandInstruction::NoOp, ActionResult::empty())
-                                            } else if *n2 < 64 { 
-                                                let fill = self.editors.clipboard_registers[*n2 - 32].clone();
-                                                self.editors.clipboard_registers[*n1 - 32].extend(&fill);
-                                                (CommandInstruction::NoOp, ActionResult::empty())
-                                            } else {
-                                                (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
-                                            }
-                                        } else {
-                                            (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
-                                        }
-                                        
+                                    (CommandToken::Register(FullRegisterId::Lower(reg_id1)), CommandToken::Register(FullRegisterId::Lower(reg_id2))) => {
+                                        (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.concatenate_register(*reg_id1, FillType::Register(*reg_id2)))
                                     },
-                                    (CommandToken::Register(n), CommandToken::Word(word)) => {
+                                    (CommandToken::Register(FullRegisterId::Lower(reg_id1)), CommandToken::Register(FullRegisterId::Upper(reg_id2))) => {
+                                        let fill = FillType::Bytes(self.editors.clipboard_registers[*reg_id2].clone());
+                                        (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.concatenate_register(*reg_id1, fill))
+                                    },
+                                    (CommandToken::Register(FullRegisterId::Upper(reg_id1)), CommandToken::Register(FullRegisterId::Lower(reg_id2))) => {
+                                        let fill = self.editors.current().hex_edit.get_register(*reg_id2).unwrap();
+                                        self.editors.clipboard_registers[*reg_id1].extend(&fill);
+                                        (CommandInstruction::NoOp, ActionResult::empty())
+                                    },
+                                    (CommandToken::Register(FullRegisterId::Upper(reg_id1)), CommandToken::Register(FullRegisterId::Upper(reg_id2))) => {
+                                        let fill = self.editors.clipboard_registers[*reg_id2].clone();
+                                        self.editors.clipboard_registers[*reg_id1].extend(&fill);
+                                        (CommandInstruction::NoOp, ActionResult::empty())
+                                    },
+                                    (CommandToken::Register(FullRegisterId::Lower(reg_id)), CommandToken::Word(word)) => {
                                         match parse_bytes(word) {
                                             Ok(v) => {
-                                                if *n < 32 {
-                                                    (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.concatenate_register(*n as u8, FillType::Bytes(BitField::from_vec(v))))
-                                                } else if *n < 64 {
-                                                    self.editors.clipboard_registers[*n - 32].extend(&BitField::from_vec(v));
-                                                    (CommandInstruction::NoOp, ActionResult::empty())
-                                                } else {
-                                                    (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
-                                                }
+                                                (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.concatenate_register(*reg_id, FillType::Bytes(BitField::from_vec(v))))
+                                            },
+                                            Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg))
+                                        }
+                                    },
+                                    (CommandToken::Register(FullRegisterId::Upper(reg_id)), CommandToken::Word(word)) => {
+                                        match parse_bytes(word) {
+                                            Ok(v) => {
+                                                self.editors.clipboard_registers[*reg_id].extend(&BitField::from_vec(v));
+                                                (CommandInstruction::NoOp, ActionResult::empty())
                                             },
                                             Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg))
                                         }
@@ -850,45 +852,37 @@ impl App {
                                     _ => return (CommandInstruction::NoOp, ActionResult::error("Impossible state".to_string()))
                                 };
                                 match (&tokens[1], &tokens[2]) {
-                                    (CommandToken::Register(n1), CommandToken::Register(n2)) => {
-                                        if *n1 < 32 {
-                                            if *n2 < 32 {
-                                                (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.manipulate_register(*n1 as u8, FillType::Register(*n2 as u8), op))
-                                            } else if *n2 < 64 { 
-                                                let fill = FillType::Bytes(self.editors.clipboard_registers[*n2 - 32].clone());
-                                                (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.manipulate_register(*n1 as u8, fill, op))
-                                            } else {
-                                                (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
-                                            }
-                                        } else if *n1 < 64 {
-                                            if *n2 < 32 {
-                                                let mut fill = self.editors.current_mut().hex_edit.get_register(*n2 as u8).unwrap();
-                                                self.editors.clipboard_registers[*n1 - 32] = op.apply(&self.editors.clipboard_registers[*n1 - 32], &fill);
-                                                (CommandInstruction::NoOp, ActionResult::empty())
-                                            } else if *n2 < 64 { 
-                                                let mut fill = self.editors.clipboard_registers[*n2 - 32].clone();
-                                                self.editors.clipboard_registers[*n1 - 32] = op.apply(&self.editors.clipboard_registers[*n1 - 32], &fill);
-                                                (CommandInstruction::NoOp, ActionResult::empty())
-                                            } else {
-                                                (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
-                                            }
-                                        } else {
-                                            (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
-                                        }
-                                        
+                                    (CommandToken::Register(FullRegisterId::Lower(reg_id1)), CommandToken::Register(FullRegisterId::Lower(reg_id2))) => {
+                                        (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.manipulate_register(*reg_id1, FillType::Register(*reg_id2), op))
                                     },
-                                    (CommandToken::Register(n), CommandToken::Word(word)) => {
+                                    (CommandToken::Register(FullRegisterId::Lower(reg_id1)), CommandToken::Register(FullRegisterId::Upper(reg_id2))) => {
+                                        let fill = FillType::Bytes(self.editors.clipboard_registers[*reg_id2].clone());
+                                        (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.manipulate_register(*reg_id1, fill, op))
+                                    },
+                                    (CommandToken::Register(FullRegisterId::Upper(reg_id1)), CommandToken::Register(FullRegisterId::Lower(reg_id2))) => {
+                                        let mut fill = self.editors.current_mut().hex_edit.get_register(*reg_id2).unwrap();
+                                        self.editors.clipboard_registers[*reg_id1] = op.apply(&self.editors.clipboard_registers[*reg_id1], &fill);
+                                        (CommandInstruction::NoOp, ActionResult::empty())
+                                    },
+                                    (CommandToken::Register(FullRegisterId::Upper(reg_id1)), CommandToken::Register(FullRegisterId::Upper(reg_id2))) => {
+                                        let mut fill = self.editors.clipboard_registers[*reg_id2].clone();
+                                        self.editors.clipboard_registers[*reg_id1] = op.apply(&self.editors.clipboard_registers[*reg_id1], &fill);
+                                        (CommandInstruction::NoOp, ActionResult::empty())
+                                    },
+                                    (CommandToken::Register(FullRegisterId::Lower(reg_id)), CommandToken::Word(word)) => {
                                         match parse_bytes(word) {
                                             Ok(v) => {
-                                                if *n < 32 {
-                                                    (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.manipulate_register(*n as u8, FillType::Bytes(BitField::from_vec(v)), op))
-                                                } else if *n < 64 {
-                                                    let mut fill = BitField::from_vec(v);
-                                                    self.editors.clipboard_registers[*n - 32] = op.apply(&self.editors.clipboard_registers[*n - 32], &fill);
-                                                    (CommandInstruction::NoOp, ActionResult::empty())
-                                                } else {
-                                                    (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
-                                                }
+                                                (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.manipulate_register(*reg_id, FillType::Bytes(BitField::from_vec(v)), op))
+                                            },
+                                            Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg))
+                                        }
+                                    },
+                                    (CommandToken::Register(FullRegisterId::Upper(reg_id)), CommandToken::Word(word)) => {
+                                        match parse_bytes(word) {
+                                            Ok(v) => {
+                                                let mut fill = BitField::from_vec(v);
+                                                self.editors.clipboard_registers[*reg_id] = op.apply(&self.editors.clipboard_registers[*reg_id], &fill);
+                                                (CommandInstruction::NoOp, ActionResult::empty())
                                             },
                                             Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg))
                                         }
@@ -935,23 +929,19 @@ impl App {
                                             CommandToken::Keyword(CommandKeyword::LShift) => -(*n as i8),
                                             _ => return (CommandInstruction::NoOp, ActionResult::error("Impossible state".to_string()))
                                         };
-    
-                                        if *register < 32 {
-                                            (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.shift_register(*register as u8, shift))
-                                        } else if *register < 64 {
-                                            // match shift_vector(&mut self.editors.clipboard_registers[*register - 32], shift) {
-                                            //     Ok(()) => (CommandInstruction::NoOp, ActionResult::empty()),
-                                            //     Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
-                                            // }
-                                            if shift < 0 { // TODO: use 'take' here
-                                                self.editors.clipboard_registers[*register - 32] = self.editors.clipboard_registers[*register - 32].clone() << (shift.abs() as usize);
-                                            } else {
-                                                self.editors.clipboard_registers[*register - 32] = self.editors.clipboard_registers[*register - 32].clone() >> (shift as usize);
+
+                                        match register {
+                                            FullRegisterId::Lower(reg_id) => {
+                                                (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.shift_register(*reg_id, shift))
+                                            },
+                                            FullRegisterId::Upper(reg_id) => {
+                                                if shift < 0 { // TODO: use 'take' here
+                                                    self.editors.clipboard_registers[*reg_id] = self.editors.clipboard_registers[*reg_id].clone() << (shift.abs() as usize);
+                                                } else {
+                                                    self.editors.clipboard_registers[*reg_id] = self.editors.clipboard_registers[*reg_id].clone() >> (shift as usize);
+                                                }
+                                                (CommandInstruction::NoOp, ActionResult::empty())
                                             }
-                                            (CommandInstruction::NoOp, ActionResult::empty())
-                                            
-                                        } else {
-                                            (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
                                         }
                                     },
                                     _ => return (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
@@ -962,23 +952,22 @@ impl App {
                     },
                     4 => {
                         match (&tokens[0], &tokens[1], &tokens[2], &tokens[3]) {
-                            (CommandToken::Keyword(CommandKeyword::Slice), CommandToken::Register(register), CommandToken::Integer(_, n1), CommandToken::Integer(_, n2)) => {
-                                if *register < 32 {
-                                    (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.slice_register(*register as u8, BitIndex::bytes(*n1), BitIndex::bytes(*n2)))
-                                } else if *register < 64 {
-                                    if BitIndex::bytes(*n2) > self.editors.clipboard_registers[*register - 32].len() {
-                                        (CommandInstruction::NoOp, ActionResult::error("Slice index outside of register contents bounds".to_string()))
-                                    } else if *n1 > *n2 {
-                                        (CommandInstruction::NoOp, ActionResult::error("Slice start index greater than slice end index".to_string()))
-                                    } else {
-                                        // let temp = &self.editors.clipboard_registers[*register - 32][*n1..*n2];
-                                        // self.editors.clipboard_registers[*register - 32] = temp.to_vec();
-                                        let temp = self.editors.clipboard_registers[*register - 32].slice_be(&BitIndex::bytes(*n1), &BitIndex::bytes(*n2));
-                                        self.editors.clipboard_registers[*register - 32] = temp;
-                                        (CommandInstruction::NoOp, ActionResult::empty())
-                                    }
+                            (CommandToken::Keyword(CommandKeyword::Slice), CommandToken::Register(FullRegisterId::Lower(reg_id)), 
+                                    CommandToken::Integer(_, n1), CommandToken::Integer(_, n2)) => {
+                                (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.slice_register(*reg_id, BitIndex::bytes(*n1), BitIndex::bytes(*n2)))
+                            },
+                            (CommandToken::Keyword(CommandKeyword::Slice), CommandToken::Register(FullRegisterId::Upper(reg_id)), 
+                                    CommandToken::Integer(_, n1), CommandToken::Integer(_, n2)) => {
+                                if BitIndex::bytes(*n2) > self.editors.clipboard_registers[*reg_id].len() {
+                                    (CommandInstruction::NoOp, ActionResult::error("Slice index outside of register contents bounds".to_string()))
+                                } else if *n1 > *n2 {
+                                    (CommandInstruction::NoOp, ActionResult::error("Slice start index greater than slice end index".to_string()))
                                 } else {
-                                    (CommandInstruction::NoOp, ActionResult::error("Register indices must be less than 64".to_string()))
+                                    // let temp = &self.editors.clipboard_registers[*register - 32][*n1..*n2];
+                                    // self.editors.clipboard_registers[*register - 32] = temp.to_vec();
+                                    let temp = self.editors.clipboard_registers[*reg_id].slice_be(&BitIndex::bytes(*n1), &BitIndex::bytes(*n2));
+                                    self.editors.clipboard_registers[*reg_id] = temp;
+                                    (CommandInstruction::NoOp, ActionResult::empty())
                                 }
                             },
                             _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
@@ -1037,44 +1026,27 @@ impl App {
                 self.editors.marks[mark_id] = BitIndex::bytes(pos);
                 ActionResult::empty()
             },
-            KeystrokeCommand::Yank{register, size} if register >= 64 => {
-                unreachable!()
+            KeystrokeCommand::Yank{register: FullRegisterId::Lower(reg_id), size} => {
+                let size = size.convert(&self.editors.marks);
+                self.editors.current_mut().hex_edit.yank(reg_id, size)
             },
-            KeystrokeCommand::Yank{register, size} if register >= 32 => {
+            KeystrokeCommand::Yank{register: FullRegisterId::Upper(reg_id), size} => {
                 let size = size.convert(&self.editors.marks);
                 match self.editors.current_mut().hex_edit.get_range(size) {
                     Ok((bf, truncated)) => {
-                        self.editors.clipboard_registers[register as usize - 32] = bf;
+                        self.editors.clipboard_registers[reg_id] = bf;
                         ActionResult::no_error(UpdateDescription::NoUpdate)
                     },
                     Err(msg) => ActionResult::error(msg.to_string())
                 }
                 
             },
-            KeystrokeCommand::Yank{register, size} => {
-                let size = size.convert(&self.editors.marks);
-                self.editors.current_mut().hex_edit.yank(register, size)
-            }
-            KeystrokeCommand::Insert{source: DataSource::Register(register)} if register >= 32 => {
-                if register < 64 {
-                    let v = self.editors.clipboard_registers[register as usize - 32].clone().into_boxed_slice().unwrap().to_vec(); // TODO: Make this work for non-byte aligned
-                    self.editors.current_mut().hex_edit.insert(DataSource::Bytes(v))
-                } else {
-                    unreachable!()
-                }
-            },
             KeystrokeCommand::Insert{source} => {
+                let source = source.convert(&self.editors.clipboard_registers);
                 self.editors.current_mut().hex_edit.insert(source)
             },
-            KeystrokeCommand::Overwrite{source: DataSource::Register(register)} if register >= 32 => {
-                if register < 64 {
-                    let v = self.editors.clipboard_registers[register as usize - 32].clone().into_boxed_slice().unwrap().to_vec(); // TODO: Make this work for non-byte aligned
-                    self.editors.current_mut().hex_edit.overwrite(DataSource::Bytes(v))
-                } else {
-                    unreachable!()
-                }
-            },
             KeystrokeCommand::Overwrite{source} =>{
+                let source = source.convert(&self.editors.clipboard_registers);
                 self.editors.current_mut().hex_edit.overwrite(source)
             },
             KeystrokeCommand::Delete{bytes} => {
@@ -1473,7 +1445,7 @@ mod app_string_tests {
             0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00, 0x20, 
             0x08, 0x02, 0x00, 0x00, 0x00, 0xfc, 0x18, 0xed
         ]);
-        let r0 = app.editors.current().hex_edit.get_register(0).unwrap();
+        let r0 = app.editors.current().hex_edit.get_register(RegisterId::new(0).unwrap()).unwrap();
         assert_eq!(r0_expected, r0)
     }
 
@@ -1978,7 +1950,7 @@ mod app_string_tests {
             0x49, 0x48, 0x44, 0x52,
             0xa3, 0x00, 0x00, 0x03
         ]);
-        let r0 = app.editors.current().hex_edit.get_register(0).unwrap();
+        let r0 = app.editors.current().hex_edit.get_register(RegisterId::new(0).unwrap()).unwrap();
         assert_eq!(r0_expected, r0);
         assert_eq!(app.current_cursor_pos(), file_length - 16);
 
@@ -1992,7 +1964,7 @@ mod app_string_tests {
         let r0_expected = BitField::from_vec(vec![
             0xff, 0x0c, 0xbe, 0x99, 0x00, 0x29, 0x47, 0x4b
         ]);
-        let r0 = app.editors.current().hex_edit.get_register(0).unwrap();
+        let r0 = app.editors.current().hex_edit.get_register(RegisterId::new(0).unwrap()).unwrap();
         assert_eq!(r0_expected, r0);
         assert_eq!(app.current_cursor_pos(), file_length - 1216);
 
@@ -2094,7 +2066,7 @@ mod app_string_tests {
         let r0_expected = BitField::from_vec(vec![
             0xb6, 0xa0, 0x37, 0x26, 0xe1, 0xf1, 0xb1, 0x70
         ]);
-        let r0 = app.editors.current().hex_edit.get_register(0).unwrap();
+        let r0 = app.editors.current().hex_edit.get_register(RegisterId::new(0).unwrap()).unwrap();
         assert_eq!(r0_expected, r0);
         assert_eq!(app.current_cursor_pos(), file_length - 1216 - 8);
 
@@ -2125,7 +2097,7 @@ mod app_string_tests {
         let r0_expected = BitField::from_vec(vec![
             0xb6, 0xa0, 0x37, 0x26, 0xe1, 0xf1, 0xb1, 0x70
         ]);
-        let r0 = app.editors.current().hex_edit.get_register(0).unwrap();
+        let r0 = app.editors.current().hex_edit.get_register(RegisterId::new(0).unwrap()).unwrap();
         assert_eq!(r0_expected, r0);
         assert_eq!(app.current_cursor_pos(), file_length - 1216 - 8);
 
@@ -4076,23 +4048,23 @@ mod app_string_tests {
         let mut r1_expected = vec![
             0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52
         ];
-        let mut r0 = app.editors.current().hex_edit.get_register(0).unwrap();
+        let mut r0 = app.editors.current().hex_edit.get_register(RegisterId::new(0).unwrap()).unwrap();
         assert_eq!(BitField::from_vec(r0_expected), r0);
-        let mut r1 = app.editors.current().hex_edit.get_register(1).unwrap();
+        let mut r1 = app.editors.current().hex_edit.get_register(RegisterId::new(1).unwrap()).unwrap();
         assert_eq!(BitField::from_vec(r1_expected), r1);
 
         test_driver(&mut app, ":not r1\n"); 
         r1_expected = vec![
             0xff, 0xff, 0xff, 0xf2, 0xb6, 0xb7, 0xbb, 0xad
         ];
-        r1 = app.editors.current().hex_edit.get_register(1).unwrap();
+        r1 = app.editors.current().hex_edit.get_register(RegisterId::new(1).unwrap()).unwrap();
         assert_eq!(BitField::from_vec(r1_expected), r1);
 
         test_driver(&mut app, ":and r0 r1\n"); 
         r0_expected = vec![
             0x89, 0x50, 0x4e, 0x42, 0x04, 0x02, 0x1a, 0x08
         ];
-        r0 = app.editors.current().hex_edit.get_register(0).unwrap();
+        r0 = app.editors.current().hex_edit.get_register(RegisterId::new(0).unwrap()).unwrap();
         assert_eq!(BitField::from_vec(r0_expected), r0);
         
     }

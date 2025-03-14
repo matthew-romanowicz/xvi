@@ -1,6 +1,6 @@
 use std::io::SeekFrom;
 
-use crate::{DataSource, RangeSize, FullRangeSize, Seek, FullSeek, MacroId, MarkId, FullMarkId};
+use crate::{DataSource, FullDataSource, RangeSize, FullRangeSize, Seek, FullSeek, MacroId, MarkId, FullMarkId, RegisterId, FullRegisterId};
 
 pub enum CommandKeyword {
     Set,
@@ -175,40 +175,44 @@ pub fn parse_bytes(word: &Vec<char>) -> Result<Vec<u8>, String> {
     }
 }
 
+
 //#[derive(Copy, Clone)]
 pub enum CommandToken {
     Word(Vec<char>),
     Integer(Vec<char>, usize),
-    Register(usize),
+    Register(FullRegisterId),
     Keyword(CommandKeyword)
 }
 
-pub fn parse_command_token(v: &Vec<char>) -> Option<CommandToken> {
+pub fn parse_command_token(v: &Vec<char>) -> Result<Option<CommandToken>, String> {
     if v.len() == 0 {
-        return None;
+        return Ok(None);
     } else if let Ok(n) = v.iter().collect::<String>().parse::<usize>() {
-        return Some(CommandToken::Integer(v.to_vec(), n));
+        return Ok(Some(CommandToken::Integer(v.to_vec(), n)));
     } else if v[0] == 'r' {
         if let Ok(n) = v[1..v.len()].iter().collect::<String>().parse::<usize>() {
-            return Some(CommandToken::Register(n));
+            match FullRegisterId::new(n) {
+                Ok(reg_id) => return Ok(Some(CommandToken::Register(reg_id))),
+                Err(n) => return Err(format!("Register indices must be less than {}", n).to_string())
+            }
         }
     }
 
     if let Some(kwrd) = parse_command_keyword(v) {
-        Some(CommandToken::Keyword(kwrd))
+        Ok(Some(CommandToken::Keyword(kwrd)))
     } else {
-        Some(CommandToken::Word(v.to_vec()))
+        Ok(Some(CommandToken::Word(v.to_vec())))
     }
 }
 
-pub fn parse_command(command: &Vec<char>) -> Vec<CommandToken> {
+pub fn parse_command(command: &Vec<char>) -> Result<Vec<CommandToken>, String> {
     let mut result = Vec::<CommandToken>::new();
     let mut current_word = Vec::<char>::new();
 
     for c in command {
         match c {
             ' ' => {
-                match parse_command_token(&current_word) {
+                match parse_command_token(&current_word)? {
                     Some(token) => result.push(token),
                     None => ()
                 };
@@ -218,12 +222,12 @@ pub fn parse_command(command: &Vec<char>) -> Vec<CommandToken> {
         }
     }
 
-    match parse_command_token(&current_word) {
+    match parse_command_token(&current_word)? {
         Some(token) => result.push(token),
         None => ()
     }
 
-    result
+    Ok(result)
 }
 
 #[derive(Copy, Clone)]
@@ -235,10 +239,10 @@ pub enum KeystrokeToken {
 pub enum KeystrokeCommand {
     Seek{from: FullSeek},
     SeekFindResult{reversed: bool},
-    Yank{register: u8, size: FullRangeSize},
+    Yank{register: FullRegisterId, size: FullRangeSize},
     Mark{mark_id: FullMarkId},
-    Insert{source: DataSource},
-    Overwrite{source: DataSource},
+    Insert{source: FullDataSource},
+    Overwrite{source: FullDataSource},
     Delete{bytes: usize},
     Swap{bytes: usize},
     Undo,
@@ -308,10 +312,10 @@ pub fn parse_keystroke(keystroke: &Vec<char>) -> Result<Option<KeystrokeCommand>
                     Ok(Some(KeystrokeCommand::Redo))
                 },
                 KeystrokeToken::Character('p') => {
-                    Ok(Some(KeystrokeCommand::Insert{source: DataSource::Register(0)}))
+                    Ok(Some(KeystrokeCommand::Insert{source: FullDataSource::Register(FullRegisterId::zero())}))
                 },
                 KeystrokeToken::Character('P') => {
-                    Ok(Some(KeystrokeCommand::Overwrite{source: DataSource::Register(0)}))
+                    Ok(Some(KeystrokeCommand::Overwrite{source: FullDataSource::Register(FullRegisterId::zero())}))
                 },
                 KeystrokeToken::Character('Q') => {
                     Ok(Some(KeystrokeCommand::FinishRecordingMacro))
@@ -338,10 +342,10 @@ pub fn parse_keystroke(keystroke: &Vec<char>) -> Result<Option<KeystrokeCommand>
                     }
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('f')) => {
-                    Ok(Some(KeystrokeCommand::Insert{source: DataSource::Fill(n)}))
+                    Ok(Some(KeystrokeCommand::Insert{source: FullDataSource::Fill(n)}))
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('F')) => {
-                    Ok(Some(KeystrokeCommand::Overwrite{source: DataSource::Fill(n)}))
+                    Ok(Some(KeystrokeCommand::Overwrite{source: FullDataSource::Fill(n)}))
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('d')) => {
                     Ok(Some(KeystrokeCommand::Delete{bytes: n}))
@@ -350,21 +354,19 @@ pub fn parse_keystroke(keystroke: &Vec<char>) -> Result<Option<KeystrokeCommand>
                     Ok(Some(KeystrokeCommand::Swap{bytes: n}))
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('y')) => {
-                    Ok(Some(KeystrokeCommand::Yank{register: 0, size: FullRangeSize::Bytes(n)}))
+                    Ok(Some(KeystrokeCommand::Yank{register: FullRegisterId::zero(), size: FullRangeSize::Bytes(n)}))
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('p')) => {
-                    if n >= 64 {
-                        Err("Register indices must be less than 64".to_string())
-                    } else {
-                        Ok(Some(KeystrokeCommand::Insert{source: DataSource::Register(n as u8)}))
+                    match FullRegisterId::new(n) {
+                        Ok(reg_id) => Ok(Some(KeystrokeCommand::Insert{source: FullDataSource::Register(reg_id)})),
+                        Err(n) => Err(format!("Register indices must be less than {}", n).to_string())
                     }
                     
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('P')) => {
-                    if n >= 64 {
-                        Err("Register indices must be less than 64".to_string())
-                    } else {
-                        Ok(Some(KeystrokeCommand::Overwrite{source: DataSource::Register(n as u8)}))
+                    match FullRegisterId::new(n) {
+                        Ok(reg_id) => Ok(Some(KeystrokeCommand::Overwrite{source: FullDataSource::Register(reg_id)})),
+                        Err(n) => Err(format!("Register indices must be less than {}", n).to_string())
                     }
                     
                 },
@@ -405,7 +407,7 @@ pub fn parse_keystroke(keystroke: &Vec<char>) -> Result<Option<KeystrokeCommand>
                 },
                 (KeystrokeToken::Character('`'), KeystrokeToken::Integer(n), KeystrokeToken::Character('y')) => {
                     match FullMarkId::new(n) {
-                        Ok(mark_id) => Ok(Some(KeystrokeCommand::Yank{register: 0, size: FullRangeSize::UntilMark(mark_id)})),
+                        Ok(mark_id) => Ok(Some(KeystrokeCommand::Yank{register: FullRegisterId::zero(), size: FullRangeSize::UntilMark(mark_id)})),
                         Err(n) => Err(format!("Mark indices must be less than {}", n).to_string())
                     }
                 },
@@ -419,10 +421,9 @@ pub fn parse_keystroke(keystroke: &Vec<char>) -> Result<Option<KeystrokeCommand>
         4 => {
             match (tokens[0], tokens[1], tokens[2], tokens[3]) {
                 (KeystrokeToken::Integer(n1), KeystrokeToken::Character('r'), KeystrokeToken::Integer(n2), KeystrokeToken::Character('y')) => {
-                    if n1 >= 64 {
-                        Err("Register indices must be less than 64".to_string())
-                    } else {
-                        Ok(Some(KeystrokeCommand::Yank{register: n1 as u8, size: FullRangeSize::Bytes(n2)}))
+                    match FullRegisterId::new(n1) {
+                        Ok(reg_id) => Ok(Some(KeystrokeCommand::Yank{register: reg_id, size: FullRangeSize::Bytes(n2)})),
+                        Err(n) => Err(format!("Register indices must be less than {}", n).to_string())
                     }
                 },
                 _ => {
@@ -435,13 +436,14 @@ pub fn parse_keystroke(keystroke: &Vec<char>) -> Result<Option<KeystrokeCommand>
         5 => {
             match (tokens[0], tokens[1], tokens[2], tokens[3], tokens[4]) {
                 (KeystrokeToken::Integer(n1), KeystrokeToken::Character('r'), KeystrokeToken::Character('`'), KeystrokeToken::Integer(n2), KeystrokeToken::Character('y')) => {
-                    if n1 >= 64 {
-                        Err("Register indices must be less than 64".to_string())
-                    } else {
-                        match FullMarkId::new(n2) {
-                            Ok(mark_id) => Ok(Some(KeystrokeCommand::Yank{register: n1 as u8, size: FullRangeSize::UntilMark(mark_id)})),
-                            Err(n) => Err(format!("Mark indices must be less than {}", n).to_string())
-                        }
+                    match FullRegisterId::new(n1) {
+                        Ok(reg_id) => {
+                            match FullMarkId::new(n2) {
+                                Ok(mark_id) => Ok(Some(KeystrokeCommand::Yank{register: reg_id, size: FullRangeSize::UntilMark(mark_id)})),
+                                Err(n) => Err(format!("Mark indices must be less than {}", n).to_string())
+                            }
+                        },
+                        Err(n) => Err(format!("Register indices must be less than {}", n).to_string())
                     }
                 },
                 _ => {

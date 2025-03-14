@@ -13,7 +13,7 @@ use crate::globals;
 
 use crate::AlertType;
 use crate::expr::ExprValue;
-use crate::{MarkId, FullMarkId, MarkArray};
+use crate::{MarkId, FullMarkId, MarkArray, RegisterId, FullRegisterId, RegisterArray};
 
 mod file_manager;
 pub use crate::hex_edit::file_manager::{FileManagerType, FileManager};
@@ -102,16 +102,51 @@ pub struct Highlight {
 
 pub enum FillType {
     Bytes(BitField),
-    Register(u8)
+    Register(RegisterId)
+}
+
+pub enum FullFillType {
+    Bytes(BitField),
+    Register(FullRegisterId)
+}
+
+impl FullFillType {
+    pub fn convert(self, registers: &RegisterArray) -> FillType {
+        match self {
+            FullFillType::Bytes(b) => FillType::Bytes(b),
+            FullFillType::Register(FullRegisterId::Upper(reg_id)) => {
+                FillType::Bytes(registers[reg_id].clone())
+            },
+            FullFillType::Register(FullRegisterId::Lower(reg_id)) => FillType::Register(reg_id)
+        }
+    }
 }
 
 pub enum DataSource {
     Bytes(Vec<u8>),
     Fill(usize),
-    Register(u8)
+    Register(RegisterId)
 }
 
+pub enum FullDataSource {
+    Bytes(Vec<u8>),
+    Fill(usize),
+    Register(FullRegisterId)
+}
 
+impl FullDataSource {
+    pub fn convert(self, registers: &RegisterArray) -> DataSource {
+        match self {
+            FullDataSource::Bytes(b) => DataSource::Bytes(b),
+            FullDataSource::Fill(n) => DataSource::Fill(n),
+            FullDataSource::Register(FullRegisterId::Upper(reg_id)) => {
+                let v = registers[reg_id].clone().into_boxed_slice().unwrap().to_vec(); // TODO: Make this work for non-byte aligned
+                DataSource::Bytes(v)
+            },
+            FullDataSource::Register(FullRegisterId::Lower(reg_id)) => DataSource::Register(reg_id)
+        }
+    }
+}
 
 #[derive(Clone)]
 pub enum RangeSize {
@@ -324,13 +359,13 @@ impl Action for SwapAction {
 
 
 pub struct YankAction {
-    register: u8,
+    register: RegisterId,
     size: RangeSize,
     original_bytes: BitField
 }
 
 impl YankAction {
-    pub fn new(register: u8, size: RangeSize, original_bytes: BitField) -> YankAction {
+    pub fn new(register: RegisterId, size: RangeSize, original_bytes: BitField) -> YankAction {
         YankAction {
             register,
             size,
@@ -355,13 +390,13 @@ impl Action for YankAction {
 }
 
 pub struct SetRegisterAction {
-    register: u8,
+    register: RegisterId,
     new_bytes: BitField,
     original_bytes: BitField
 }
 
 impl SetRegisterAction {
-    pub fn new(register: u8, new_bytes: BitField, original_bytes: BitField) -> SetRegisterAction {
+    pub fn new(register: RegisterId, new_bytes: BitField, original_bytes: BitField) -> SetRegisterAction {
         SetRegisterAction {
             register,
             new_bytes,
@@ -386,11 +421,11 @@ impl Action for SetRegisterAction {
 }
 
 pub struct SwapRegisterAction {
-    register: u8
+    register: RegisterId
 }
 
 impl SwapRegisterAction {
-    pub fn new(register: u8) -> SwapRegisterAction {
+    pub fn new(register: RegisterId) -> SwapRegisterAction {
         SwapRegisterAction {
             register
         }
@@ -412,11 +447,11 @@ impl Action for SwapRegisterAction {
 }
 
 pub struct InvertRegisterAction {
-    register: u8
+    register: RegisterId
 }
 
 impl InvertRegisterAction {
-    pub fn new(register: u8) -> InvertRegisterAction {
+    pub fn new(register: RegisterId) -> InvertRegisterAction {
         InvertRegisterAction {
             register
         }
@@ -438,12 +473,12 @@ impl Action for InvertRegisterAction {
 }
 
 pub struct ShiftRegisterAction {
-    register: u8,
+    register: RegisterId,
     shift: i8
 }
 
 impl ShiftRegisterAction {
-    pub fn new(register: u8, shift: i8) -> ShiftRegisterAction {
+    pub fn new(register: RegisterId, shift: i8) -> ShiftRegisterAction {
         ShiftRegisterAction {
             register,
             shift
@@ -466,12 +501,12 @@ impl Action for ShiftRegisterAction {
 }
 
 pub struct DeflateRegisterAction {
-    register: u8,
+    register: RegisterId,
     level: u8
 }
 
 impl DeflateRegisterAction {
-    pub fn new(register: u8, level: u8) -> DeflateRegisterAction {
+    pub fn new(register: RegisterId, level: u8) -> DeflateRegisterAction {
         DeflateRegisterAction {
             register,
             level
@@ -494,14 +529,14 @@ impl Action for DeflateRegisterAction {
 }
 
 pub struct RegisterOpAction {
-    register: u8,
+    register: RegisterId,
     fill: FillType,
     original_bytes: BitField,
     op: ByteOperation
 }
 
 impl RegisterOpAction {
-    pub fn new(register: u8, fill: FillType, original_bytes: BitField, op: ByteOperation) -> RegisterOpAction {
+    pub fn new(register: RegisterId, fill: FillType, original_bytes: BitField, op: ByteOperation) -> RegisterOpAction {
         RegisterOpAction {
             register,
             fill,
@@ -530,12 +565,12 @@ impl Action for RegisterOpAction {
 }
 
 struct ConcatenateRegisterAction {
-    register: u8,
+    register: RegisterId,
     fill: FillType
 }
 
 impl ConcatenateRegisterAction {
-    fn new(register: u8, fill: FillType) -> ConcatenateRegisterAction {
+    fn new(register: RegisterId, fill: FillType) -> ConcatenateRegisterAction {
         ConcatenateRegisterAction {
             register,
             fill
@@ -576,13 +611,13 @@ impl Action for ConcatenateRegisterAction {
 }
 
 struct SliceRegisterAction {
-    register: u8,
+    register: RegisterId,
     left: BitField,
     right: BitField
 }
 
 impl SliceRegisterAction {
-    fn new(register: u8, left: BitField, right: BitField) -> SliceRegisterAction {
+    fn new(register: RegisterId, left: BitField, right: BitField) -> SliceRegisterAction {
         SliceRegisterAction {
             register,
             left,
@@ -1101,7 +1136,7 @@ pub struct HexEdit {
     current_find: Option<FindInfo>,
     display_data: Vec::<u8>,
     valid_bytes: usize,
-    clipboard_registers: [BitField; 32], //Needs to be 32 or less for Default::default() to work
+    clipboard_registers: RegisterArray,
     marks: MarkArray,
     file_spec: Option<FileMap>,
     current_field: Option<(std::ops::Range<BitIndex>, bool)>, // (range, is_valid)
@@ -1548,8 +1583,8 @@ impl HexEdit {
         }
     }
 
-    fn register_len(&self, register: u8) -> BitIndex {
-        self.clipboard_registers[register as usize].len()
+    fn register_len(&self, register: RegisterId) -> BitIndex {
+        self.clipboard_registers[register].len()
     }
 
     fn get_fill_bytes(&self, n_bytes: usize) -> Vec<u8> {
@@ -1560,7 +1595,7 @@ impl HexEdit {
             },
             FillType::Register(n) => {
                 // self.clipboard_registers[*n as usize].iter().cycle().take(n_bytes).cloned().collect()
-                self.clipboard_registers[*n as usize].clone()
+                self.clipboard_registers[*n].clone()
             }
         };
 
@@ -1574,16 +1609,14 @@ impl HexEdit {
 
     }
 
-    pub fn concatenate_register(&mut self, register: u8, fill: FillType) -> ActionResult {
-        if register >= 32 {
-            return ActionResult::error("Register number must be less than 32".to_string())
-        }
+    pub fn concatenate_register(&mut self, register: RegisterId, fill: FillType) -> ActionResult {
         match &fill {
             FillType::Bytes(bytes) => {
-                self.clipboard_registers[register as usize].extend(bytes); // TODO add action to this
+                self.clipboard_registers[register].extend(bytes); // TODO add action to this
             },
-            FillType::Register(n) => {
-                self.clipboard_registers[register as usize].extend(&self.clipboard_registers[*n as usize].clone()); // TODO add action to this
+            FillType::Register(reg_id) => {
+                let right = self.clipboard_registers[*reg_id].clone();
+                self.clipboard_registers[register].extend(&right); // TODO add action to this
             }
         }
         ActionResult {
@@ -1594,12 +1627,9 @@ impl HexEdit {
         }
     }
 
-    pub fn swap_register(&mut self, register: u8) -> ActionResult {
-        if register >= 32 {
-            return ActionResult::error("Register number must be less than 32".to_string())
-        }
+    pub fn swap_register(&mut self, register: RegisterId) -> ActionResult {
         // TODO: Consider swap_le_to_be?
-        self.clipboard_registers[register as usize].swap_be_to_le();
+        self.clipboard_registers[register].swap_be_to_le();
         ActionResult {
             alert: None,
             alert_type: AlertType::None,
@@ -1608,11 +1638,8 @@ impl HexEdit {
         }
     }
 
-    pub fn invert_register(&mut self, register: u8) -> ActionResult {
-        if register >= 32 {
-            return ActionResult::error("Register number must be less than 32".to_string())
-        }
-        self.clipboard_registers[register as usize] = !&self.clipboard_registers[register as usize];
+    pub fn invert_register(&mut self, register: RegisterId) -> ActionResult {
+        self.clipboard_registers[register] = !&self.clipboard_registers[register];
         ActionResult {
             alert: None,
             alert_type: AlertType::None,
@@ -1621,19 +1648,16 @@ impl HexEdit {
         }
     }
 
-    pub fn deflate_register(&mut self, register: u8, level: u8) -> ActionResult {
-        if register >= 32 {
-            return ActionResult::error("Register number must be less than 32".to_string())
-        }
+    pub fn deflate_register(&mut self, register: RegisterId, level: u8) -> ActionResult {
 
         let mut e = DeflateEncoder::new(Vec::new(), Compression::new(level as u32));
         // TODO: Make this work for non-byte aligned registers. Also make it so it doesn't get cloned
-        if let Err(msg) = e.write_all(&self.clipboard_registers[register as usize].clone().into_boxed_slice().unwrap().to_vec()) {
+        if let Err(msg) = e.write_all(&self.clipboard_registers[register].clone().into_boxed_slice().unwrap().to_vec()) {
             ActionResult::error(msg.to_string())
         } else {
             match e.finish() {
                 Ok(w) => {
-                    self.clipboard_registers[register as usize] = BitField::from_vec(w);
+                    self.clipboard_registers[register] = BitField::from_vec(w);
                     ActionResult {
                         alert: None,
                         alert_type: AlertType::None,
@@ -1646,19 +1670,15 @@ impl HexEdit {
         }
     }
 
-    pub fn inflate_register(&mut self, register: u8) -> ActionResult {
-        if register >= 32 {
-            return ActionResult::error("Register number must be less than 32".to_string())
-        }
-
+    pub fn inflate_register(&mut self, register: RegisterId) -> ActionResult {
         let mut e = DeflateDecoder::new(Vec::new());
         // TODO: Make this work for non-byte aligned registers. Also make it so it doesn't get cloned
-        if let Err(msg) = e.write_all(&self.clipboard_registers[register as usize].clone().into_boxed_slice().unwrap().to_vec()) {
+        if let Err(msg) = e.write_all(&self.clipboard_registers[register].clone().into_boxed_slice().unwrap().to_vec()) {
             ActionResult::error(msg.to_string())
         } else {
             match e.finish() {
                 Ok(w) => {
-                    self.clipboard_registers[register as usize] = BitField::from_vec(w);
+                    self.clipboard_registers[register] = BitField::from_vec(w);
                     ActionResult::empty() // TODO: Add action to this... It's tough to undo since it doesn't tell you the compression level
                 },
                 Err(msg) => ActionResult::error(msg.to_string())
@@ -1666,22 +1686,19 @@ impl HexEdit {
         }
     }
 
-    pub fn manipulate_register(&mut self, register: u8, fill: FillType, op: ByteOperation) -> ActionResult {
+    pub fn manipulate_register(&mut self, register: RegisterId, fill: FillType, op: ByteOperation) -> ActionResult {
 
-        if register >= 32 {
-            return ActionResult::error("Register number must be less than 32".to_string())
-        }
-        let original_bytes = std::mem::take(&mut self.clipboard_registers[register as usize]);
+        let original_bytes = std::mem::take(&mut self.clipboard_registers[register]);
         let mut op_bytes = match &fill {
             FillType::Bytes(bytes) => {
                 bytes.clone()
             },
             FillType::Register(n) => {
-                self.clipboard_registers[*n as usize].clone()
+                self.clipboard_registers[*n].clone()
             }
         };
 
-        self.clipboard_registers[register as usize] = op.apply(&original_bytes, &op_bytes);
+        self.clipboard_registers[register] = op.apply(&original_bytes, &op_bytes);
         ActionResult {
             alert: None,
             alert_type: AlertType::None,
@@ -1690,14 +1707,12 @@ impl HexEdit {
         }
     }
 
-    pub fn shift_register(&mut self, register: u8, shift: i8) -> ActionResult { // negative is left
-        if register >= 32 {
-            return ActionResult::error("Register number must be less than 32".to_string())
-        }
+    pub fn shift_register(&mut self, register: RegisterId, shift: i8) -> ActionResult { // negative is left
+
         if shift < 0 {
-            self.clipboard_registers[register as usize] = std::mem::take(&mut self.clipboard_registers[register as usize]) << (shift.abs() as usize);
+            self.clipboard_registers[register] = std::mem::take(&mut self.clipboard_registers[register]) << (shift.abs() as usize);
         } else {
-            self.clipboard_registers[register as usize] = std::mem::take(&mut self.clipboard_registers[register as usize]) >> (shift as usize);
+            self.clipboard_registers[register] = std::mem::take(&mut self.clipboard_registers[register]) >> (shift as usize);
         }
         ActionResult {
             alert: None,
@@ -1717,21 +1732,18 @@ impl HexEdit {
 
     }
 
-    pub fn slice_register(&mut self, register: u8, n1: BitIndex, n2: BitIndex) -> ActionResult {
-        if register >= 32 {
-            return ActionResult::error("Register number must be less than 32".to_string())
-        }
+    pub fn slice_register(&mut self, register: RegisterId, n1: BitIndex, n2: BitIndex) -> ActionResult {
 
-        if n2 > self.clipboard_registers[register as usize].len() {
+        if n2 > self.clipboard_registers[register].len() {
             ActionResult::error("Slice index outside of register contents bounds".to_string())
         } else if n1 > n2 {
             ActionResult::error("Slice start index greater than slice end index".to_string())
         } else {
-            let temp = self.clipboard_registers[register as usize].bit_slice(&n1, &n2);
-            let left = self.clipboard_registers[register as usize].bit_slice(&BitIndex::zero(), &n1);
-            let register_len = self.clipboard_registers[register as usize].len();
-            let right = self.clipboard_registers[register as usize].bit_slice(&n2, &register_len);
-            self.clipboard_registers[register as usize] = temp.clone();
+            let temp = self.clipboard_registers[register].bit_slice(&n1, &n2);
+            let left = self.clipboard_registers[register].bit_slice(&BitIndex::zero(), &n1);
+            let register_len = self.clipboard_registers[register].len();
+            let right = self.clipboard_registers[register].bit_slice(&n2, &register_len);
+            self.clipboard_registers[register] = temp.clone();
             ActionResult {
                 alert: None,
                 alert_type: AlertType::None,
@@ -1757,7 +1769,7 @@ impl HexEdit {
             // TODO: make this work for non-byte-aligned
             DataSource::Register(n) => {
                 // println!("Register length: {:?}", self.clipboard_registers[*n as usize].len());
-                self.clipboard_registers[*n as usize].clone().into_boxed_slice().unwrap().to_vec()
+                self.clipboard_registers[*n].clone().into_boxed_slice().unwrap().to_vec()
             }
         };
         match self.file_manager.insert_bytes(self.cursor_pos, &bytes) {
@@ -1782,7 +1794,7 @@ impl HexEdit {
             DataSource::Bytes(b) => b.to_vec(),
             DataSource::Fill(n) => self.get_fill_bytes(*n),
             // TODO: Make this work for non-byte-aligned
-            DataSource::Register(n) => self.clipboard_registers[*n as usize].clone().into_boxed_slice().unwrap().to_vec()
+            DataSource::Register(n) => self.clipboard_registers[*n].clone().into_boxed_slice().unwrap().to_vec()
         };
         if self.cursor_pos + bytes.len() > self.file_manager.len() {
             start_byte = self.file_manager.len();
@@ -1809,28 +1821,19 @@ impl HexEdit {
     }
 
     // pub fn get_register(&self, register: u8) -> Result<Vec<u8>, String>{
-    pub fn get_register(&self, register: u8) -> Result<BitField, String>{
-        if register < 32 {
-            // Ok(self.clipboard_registers[register as usize].to_vec())
-            Ok(self.clipboard_registers[register as usize].clone())
-        } else {
-            Err("Registers must be less than 32".to_string())
-        }
+    pub fn get_register(&self, register: RegisterId) -> Result<BitField, String>{
+        Ok(self.clipboard_registers[register].clone())
     }
 
     // pub fn set_register(&mut self, register: u8, bytes: &Vec<u8>) -> ActionResult {
-    pub fn set_register(&mut self, register: u8, bytes: &BitField) -> ActionResult {
-        if register < 32 {
-            let original_bytes = self.clipboard_registers[register as usize].clone(); // TODO: Convert this to take()
-            self.clipboard_registers[register as usize] = bytes.clone();
-            ActionResult {
-                alert: None,
-                alert_type: AlertType::None,
-                update: UpdateDescription::NoUpdate,
-                action: Some(Rc::new(SetRegisterAction::new(register, bytes.clone(), original_bytes)))
-            }
-        } else {
-            ActionResult::error("Registers must be less than 32".to_string())
+    pub fn set_register(&mut self, register: RegisterId, bytes: &BitField) -> ActionResult {
+        let original_bytes = self.clipboard_registers[register].clone(); // TODO: Convert this to take()
+        self.clipboard_registers[register] = bytes.clone();
+        ActionResult {
+            alert: None,
+            alert_type: AlertType::None,
+            update: UpdateDescription::NoUpdate,
+            action: Some(Rc::new(SetRegisterAction::new(register, bytes.clone(), original_bytes)))
         }
     }
 
@@ -1886,16 +1889,16 @@ impl HexEdit {
     }
 
     // Helper function for HexEdit::yank
-    fn yank_until(&mut self, size: RangeSize, register: u8, addr: BitIndex) -> ActionResult {
+    fn yank_until(&mut self, size: RangeSize, register: RegisterId, addr: BitIndex) -> ActionResult {
         // TODO: Make this work with cursor positions that are not byte-aligned
         let cursor_pos: BitIndex = BitIndex::bytes(self.cursor_pos);
 
 
         match self.get_bitfield(cursor_pos, addr) {
             Ok((bf, truncated)) => {
-                let original_bytes = self.clipboard_registers[register as usize].clone();
+                let original_bytes = self.clipboard_registers[register].clone();
                 
-                self.clipboard_registers[register as usize] = bf;
+                self.clipboard_registers[register] = bf;
 
                 // TODO: figure out what should be done in this case
                 let mut res = if truncated {
@@ -1914,11 +1917,7 @@ impl HexEdit {
         }
     }
 
-    pub fn yank(&mut self, register: u8, size: RangeSize) -> ActionResult {
-        if register >= 32 {
-            return ActionResult::error("Registers must be less than 32".to_string())
-        }
-
+    pub fn yank(&mut self, register: RegisterId, size: RangeSize) -> ActionResult {
         match size {
             RangeSize::Bytes(n_bytes) => {
                 self.yank_until(size, register, BitIndex::bytes(self.cursor_pos + n_bytes))
