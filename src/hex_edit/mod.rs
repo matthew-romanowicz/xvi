@@ -13,6 +13,7 @@ use crate::globals;
 
 use crate::AlertType;
 use crate::expr::ExprValue;
+use crate::{MarkId, FullMarkId, MarkArray};
 
 mod file_manager;
 pub use crate::hex_edit::file_manager::{FileManagerType, FileManager};
@@ -110,20 +111,31 @@ pub enum DataSource {
     Register(u8)
 }
 
+
+
 #[derive(Clone)]
 pub enum RangeSize {
     Bytes(usize),
     UntilAddr(BitIndex),
-    UntilMark(u8)
+    UntilMark(MarkId)
 }
 
-impl RangeSize {
-    pub fn convert_for_hexedit(self, marks: &[BitIndex; 32]) -> RangeSize {
+#[derive(Clone)]
+pub enum FullRangeSize {
+    Bytes(usize),
+    UntilAddr(BitIndex),
+    UntilMark(FullMarkId)
+}
+
+impl FullRangeSize {
+    pub fn convert(self, marks: &MarkArray) -> RangeSize {
         match self {
-            RangeSize::UntilMark(mark_id) if mark_id >= 32 => {
-                RangeSize::UntilAddr(marks[mark_id as usize - 32])
+            FullRangeSize::Bytes(b) => RangeSize::Bytes(b),
+            FullRangeSize::UntilAddr(bi) => RangeSize::UntilAddr(bi),
+            FullRangeSize::UntilMark(FullMarkId::Upper(mark_id)) => {
+                RangeSize::UntilAddr(marks[mark_id])
             },
-            rs => rs
+            FullRangeSize::UntilMark(FullMarkId::Lower(mark_id)) => RangeSize::UntilMark(mark_id)
         }
     }
 }
@@ -603,12 +615,37 @@ impl Action for SliceRegisterAction {
     }
 }
 
+
+
 #[derive(Clone, Copy)]
 pub enum Seek {
     FromStart(u64),
     FromCurrent(i64),
     FromEnd(i64),
-    Mark(u8)
+    Mark(MarkId)
+}
+
+#[derive(Clone, Copy)]
+pub enum FullSeek {
+    FromStart(u64),
+    FromCurrent(i64),
+    FromEnd(i64),
+    Mark(FullMarkId)
+}
+
+impl FullSeek {
+    pub fn convert(self, marks: &MarkArray) -> Seek {
+        match self {
+            FullSeek::FromStart(i) => Seek::FromStart(i),
+            FullSeek::FromCurrent(i) => Seek::FromCurrent(i),
+            FullSeek::FromEnd(i) => Seek::FromEnd(i),
+            FullSeek::Mark(FullMarkId::Lower(mark_id)) => Seek::Mark(mark_id),
+            FullSeek::Mark(FullMarkId::Upper(mark_id)) => {
+                // TODO: Make this work with BitIndex
+                Seek::FromStart(marks[mark_id].byte() as u64)
+            }
+        }
+    }
 }
 
 
@@ -641,12 +678,12 @@ impl Action for SeekAction {
 }
 
 pub struct MarkAction {
-    mark_id: u8,
+    mark_id: MarkId,
     original: BitIndex
 }
 
 impl MarkAction {
-    pub fn new(mark_id: u8, original: BitIndex) -> MarkAction {
+    pub fn new(mark_id: MarkId, original: BitIndex) -> MarkAction {
         MarkAction {
             mark_id,
             original
@@ -1065,7 +1102,7 @@ pub struct HexEdit {
     display_data: Vec::<u8>,
     valid_bytes: usize,
     clipboard_registers: [BitField; 32], //Needs to be 32 or less for Default::default() to work
-    marks: [BitIndex; 32],
+    marks: MarkArray,
     file_spec: Option<FileMap>,
     current_field: Option<(std::ops::Range<BitIndex>, bool)>, // (range, is_valid)
     related_fields: Vec<std::ops::Range<BitIndex>>
@@ -1145,7 +1182,7 @@ impl HexEdit {
             valid_bytes: 0,
             clipboard_registers: Default::default(),
             // TODO: clean this up once BitIndex gets Default implemented
-            marks: std::iter::repeat(BitIndex::zero()).take(32).collect::<Vec<BitIndex>>().try_into().unwrap(),
+            marks: MarkArray::new(BitIndex::zero),
             file_spec: None,
             current_field: None,
             related_fields: Vec::new()
@@ -1840,11 +1877,8 @@ impl HexEdit {
             RangeSize::UntilAddr(bi) => {
                 bi
             },
-            RangeSize::UntilMark(mark_id) if mark_id < 32 => {
-                self.marks[mark_id as usize]
-            },
             RangeSize::UntilMark(mark_id) => {
-                panic!("Mark IDs must be less than 32")
+                self.marks[mark_id]
             }
         };
 
@@ -1892,11 +1926,8 @@ impl HexEdit {
             RangeSize::UntilAddr(bi) => {
                 self.yank_until(size, register, bi)
             },
-            RangeSize::UntilMark(mark_id) if mark_id < 32 => {
-                self.yank_until(size, register, self.marks[mark_id as usize])
-            },
             RangeSize::UntilMark(mark_id) => {
-                ActionResult::error("Mark IDs must be less than 32".to_string())
+                self.yank_until(size, register, self.marks[mark_id])
             }
         }
     }
@@ -2147,10 +2178,7 @@ impl HexEdit {
                 self.set_cursor_pos(new_pos as usize)
             },
             Seek::Mark(mark_id) => {
-                if mark_id >= 32 {
-                    return ActionResult::error("Mark indices must be less than 64".to_string());
-                }
-                let new_pos = self.marks[mark_id as usize].byte();
+                let new_pos = self.marks[mark_id].byte();
                 self.set_cursor_pos(new_pos)
             }
         };
@@ -2159,27 +2187,19 @@ impl HexEdit {
         res
     }
 
-    pub fn set_mark(&mut self, mark_id: u8, position: BitIndex) -> ActionResult {
-        if mark_id >= 32 {
-            ActionResult::error("Mark indices must be less than 64".to_string())
-        } else {
-            self.marks[mark_id as usize] = position;
-            ActionResult::no_error(UpdateDescription::NoUpdate)
-        }
+    pub fn set_mark(&mut self, mark_id: MarkId, position: BitIndex) -> ActionResult {
+        self.marks[mark_id] = position;
+        ActionResult::no_error(UpdateDescription::NoUpdate)
     }
 
-    pub fn mark(&mut self, mark_id: u8) -> ActionResult {
+    pub fn mark(&mut self, mark_id: MarkId) -> ActionResult {
         let current_pos = self.cursor_pos;
-        if mark_id >= 32 {
-            // TODO: Make this fail gracefully in non-test mode
-            unreachable!()
-        } 
 
         let mut res = ActionResult::no_error(UpdateDescription::NoUpdate);
 
-        res.set_action(Some(Rc::new(MarkAction::new(mark_id, self.marks[mark_id as usize]))));
+        res.set_action(Some(Rc::new(MarkAction::new(mark_id, self.marks[mark_id]))));
 
-        self.marks[mark_id as usize] = BitIndex::bytes(current_pos);
+        self.marks[mark_id] = BitIndex::bytes(current_pos);
 
         res
 

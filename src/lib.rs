@@ -24,9 +24,9 @@ mod large_text_view;
 use crate::large_text_view::LargeTextView;
 
 mod hex_edit;
-use crate::hex_edit::{FileManager, Action, CompoundAction, ActionStack, UpdateDescription, Seek,
+use crate::hex_edit::{FileManager, Action, CompoundAction, ActionStack, UpdateDescription, Seek, FullSeek,
         EditMode, ActionResult, ShowType, ByteOperation, FillType, FindDirection, shift_vector, 
-        vector_op, HexEdit, DataSource, RangeSize, Structure, FileMap};
+        vector_op, HexEdit, DataSource, RangeSize, FullRangeSize, Structure, FileMap};
 pub use crate::hex_edit::FileManagerType;
 
 
@@ -171,7 +171,17 @@ const BUGS: &str = "Inputting numbers greater than usize maximum in commands/key
 Setting line length to value greater than width of terminal causes panic
 ";
 
+type MacroArray = BoundedVec<32, Option<Rc<CompoundAction>>>;
+type MacroId = BoundedIndex<32>;
 
+type MarkArray = BoundedVec<32, BitIndex>;
+type MarkId = BoundedIndex<32>;
+
+#[derive(Clone, Copy)]
+enum FullMarkId {
+    Upper(MarkId),
+    Lower(MarkId)
+}
 
 struct HexEditManager {
     hex_edit: HexEdit,
@@ -196,7 +206,7 @@ struct EditorStack {
     width: usize,
     height: usize,
     clipboard_registers: [BitField; 32],
-    marks: [BitIndex; 32],
+    marks: MarkArray,
     endianness: Endianness,
     cnum: ShowType,
     show_hex: bool,
@@ -217,7 +227,7 @@ impl EditorStack {
             height,
             clipboard_registers: Default::default(),
             // TODO: clean this up once BitIndex gets Default implemented
-            marks: std::iter::repeat(BitIndex::zero()).take(32).collect::<Vec<BitIndex>>().try_into().unwrap(),
+            marks: MarkArray::new(BitIndex::zero),
             endianness: Endianness::Network,
             cnum: ShowType::Hex,
             show_hex: true,
@@ -324,8 +334,7 @@ enum CommandInstruction {
 }
 
 
-type MacroArray = BoundedVec<32, Option<Rc<CompoundAction>>>;
-type MacroId = BoundedIndex<32>;
+
 
 struct MacroManager {
     // macros: [Option<Rc<CompoundAction>>; 32], //Needs to be 32 or less for Default::default() to work
@@ -985,36 +994,26 @@ impl App {
     fn execute_keystroke(&mut self, keystroke: KeystrokeCommand) -> ActionResult {
 
         match keystroke {
-            KeystrokeCommand::Seek{from: Seek::Mark(mark_id)} if mark_id >= 32 => {
-                if mark_id < 64 {
-                    let pos = self.editors.marks[mark_id as usize - 32];
-                    self.editors.current_mut().hex_edit.seek(Seek::FromStart(pos.byte() as u64))
-                } else {
-                    unreachable!()
-                }
-            },
             KeystrokeCommand::Seek{from} => {
+                let from = from.convert(&self.editors.marks);
                 self.editors.current_mut().hex_edit.seek(from)
             },
             KeystrokeCommand::SeekFindResult{reversed} => {
                 self.editors.current_mut().hex_edit.seek_find_result(reversed)
             },
-            KeystrokeCommand::Mark{mark_id} => {
-                if mark_id < 32 {
-                    self.editors.current_mut().hex_edit.mark(mark_id)
-                } else if mark_id < 64 {
-                    let pos = self.editors.current().hex_edit.get_cursor_pos();
-                    self.editors.marks[mark_id as usize - 32] = BitIndex::bytes(pos);
-                    ActionResult::empty()
-                } else {
-                    unreachable!()
-                }
+            KeystrokeCommand::Mark{mark_id: FullMarkId::Lower(mark_id)} => {
+                self.editors.current_mut().hex_edit.mark(mark_id)
+            },
+            KeystrokeCommand::Mark{mark_id: FullMarkId::Upper(mark_id)} => {
+                let pos = self.editors.current().hex_edit.get_cursor_pos();
+                self.editors.marks[mark_id] = BitIndex::bytes(pos);
+                ActionResult::empty()
             },
             KeystrokeCommand::Yank{register, size} if register >= 64 => {
                 unreachable!()
             },
             KeystrokeCommand::Yank{register, size} if register >= 32 => {
-                let size = size.convert_for_hexedit(&self.editors.marks);
+                let size = size.convert(&self.editors.marks);
                 match self.editors.current_mut().hex_edit.get_range(size) {
                     Ok((bf, truncated)) => {
                         self.editors.clipboard_registers[register as usize - 32] = bf;
@@ -1025,7 +1024,7 @@ impl App {
                 
             },
             KeystrokeCommand::Yank{register, size} => {
-                let size = size.convert_for_hexedit(&self.editors.marks);
+                let size = size.convert(&self.editors.marks);
                 self.editors.current_mut().hex_edit.yank(register, size)
             }
             KeystrokeCommand::Insert{source: DataSource::Register(register)} if register >= 32 => {

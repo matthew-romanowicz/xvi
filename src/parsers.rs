@@ -1,6 +1,6 @@
 use std::io::SeekFrom;
 
-use crate::{DataSource, RangeSize, Seek, MacroId};
+use crate::{DataSource, RangeSize, FullRangeSize, Seek, FullSeek, MacroId, MarkId, FullMarkId};
 
 pub enum CommandKeyword {
     Set,
@@ -233,10 +233,10 @@ pub enum KeystrokeToken {
 }
 
 pub enum KeystrokeCommand {
-    Seek{from: Seek},
+    Seek{from: FullSeek},
     SeekFindResult{reversed: bool},
-    Yank{register: u8, size: RangeSize},
-    Mark{mark_id: u8},
+    Yank{register: u8, size: FullRangeSize},
+    Mark{mark_id: FullMarkId},
     Insert{source: DataSource},
     Overwrite{source: DataSource},
     Delete{bytes: usize},
@@ -287,10 +287,10 @@ pub fn parse_keystroke(keystroke: &Vec<char>) -> Result<Option<KeystrokeCommand>
             // let hm = &mut self.editors.editors[self.editors.current];
             match tokens[0] {
                 KeystrokeToken::Character('g') => {
-                    Ok(Some(KeystrokeCommand::Seek{from: Seek::FromStart(0)}))
+                    Ok(Some(KeystrokeCommand::Seek{from: FullSeek::FromStart(0)}))
                 },
                 KeystrokeToken::Character('G') => {
-                    Ok(Some(KeystrokeCommand::Seek{from: Seek::FromEnd(0)}))
+                    Ok(Some(KeystrokeCommand::Seek{from: FullSeek::FromEnd(0)}))
                 },
                 KeystrokeToken::Character('n') => {
                     Ok(Some(KeystrokeCommand::SeekFindResult{reversed: false}))
@@ -299,7 +299,7 @@ pub fn parse_keystroke(keystroke: &Vec<char>) -> Result<Option<KeystrokeCommand>
                     Ok(Some(KeystrokeCommand::SeekFindResult{reversed: true}))
                 },
                 KeystrokeToken::Character('m') => {
-                    Ok(Some(KeystrokeCommand::Mark{mark_id: 0}))
+                    Ok(Some(KeystrokeCommand::Mark{mark_id: FullMarkId::Lower(MarkId::new(0).unwrap())}))
                 },
                 KeystrokeToken::Character('u') => {
                     Ok(Some(KeystrokeCommand::Undo))
@@ -326,16 +326,20 @@ pub fn parse_keystroke(keystroke: &Vec<char>) -> Result<Option<KeystrokeCommand>
         2 => {
             match (tokens[0], tokens[1]) {
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('g')) => {
-                    Ok(Some(KeystrokeCommand::Seek{from: Seek::FromStart(n as u64)}))
+                    Ok(Some(KeystrokeCommand::Seek{from: FullSeek::FromStart(n as u64)}))
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('G')) => {
-                    Ok(Some(KeystrokeCommand::Seek{from: Seek::FromEnd(n as i64)}))
+                    Ok(Some(KeystrokeCommand::Seek{from: FullSeek::FromEnd(n as i64)}))
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('m')) => {
                     if n >= 64 {
                         Err("Mark indices must be less than 64".to_string())
+                    } else if n >= 32 {
+                        let mark_id = FullMarkId::Upper(MarkId::new(n - 32).unwrap());
+                        Ok(Some(KeystrokeCommand::Mark{mark_id}))
                     } else {
-                        Ok(Some(KeystrokeCommand::Mark{mark_id: n as u8}))
+                        let mark_id = FullMarkId::Lower(MarkId::new(n).unwrap());
+                        Ok(Some(KeystrokeCommand::Mark{mark_id}))
                     }
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('f')) => {
@@ -351,7 +355,7 @@ pub fn parse_keystroke(keystroke: &Vec<char>) -> Result<Option<KeystrokeCommand>
                     Ok(Some(KeystrokeCommand::Swap{bytes: n}))
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('y')) => {
-                    Ok(Some(KeystrokeCommand::Yank{register: 0, size: RangeSize::Bytes(n)}))
+                    Ok(Some(KeystrokeCommand::Yank{register: 0, size: FullRangeSize::Bytes(n)}))
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('p')) => {
                     if n >= 64 {
@@ -393,19 +397,31 @@ pub fn parse_keystroke(keystroke: &Vec<char>) -> Result<Option<KeystrokeCommand>
         3 => {
             match (tokens[0], tokens[1], tokens[2]) {
                 (KeystrokeToken::Character('+'), KeystrokeToken::Integer(n), KeystrokeToken::Character('g')) => {
-                    Ok(Some(KeystrokeCommand::Seek{from: Seek::FromCurrent(n as i64)}))
+                    Ok(Some(KeystrokeCommand::Seek{from: FullSeek::FromCurrent(n as i64)}))
                 },
                 (KeystrokeToken::Character('-'), KeystrokeToken::Integer(n), KeystrokeToken::Character('g')) => {
-                    Ok(Some(KeystrokeCommand::Seek{from: Seek::FromCurrent(-(n as i64))}))
+                    Ok(Some(KeystrokeCommand::Seek{from: FullSeek::FromCurrent(-(n as i64))}))
                 },
                 (KeystrokeToken::Character('`'), KeystrokeToken::Integer(n), KeystrokeToken::Character('g')) => {
-                    Ok(Some(KeystrokeCommand::Seek{from: Seek::Mark(n as u8)}))
+                    if n >= 64 {
+                        Err("Mark IDs must be less than 64".to_string())
+                    } else if n >= 32 {
+                        let mark_id = FullMarkId::Upper(MarkId::new(n - 32).unwrap());
+                        Ok(Some(KeystrokeCommand::Seek{from: FullSeek::Mark(mark_id)}))
+                    } else {
+                        let mark_id = FullMarkId::Lower(MarkId::new(n).unwrap());
+                        Ok(Some(KeystrokeCommand::Seek{from: FullSeek::Mark(mark_id)}))
+                    }
                 },
                 (KeystrokeToken::Character('`'), KeystrokeToken::Integer(n), KeystrokeToken::Character('y')) => {
                     if n >= 64 {
                         Err("Mark IDs must be less than 64".to_string())
+                    } else if n >= 32 {
+                        let mark_id = FullMarkId::Upper(MarkId::new(n - 32).unwrap());
+                        Ok(Some(KeystrokeCommand::Yank{register: 0, size: FullRangeSize::UntilMark(mark_id)}))
                     } else {
-                        Ok(Some(KeystrokeCommand::Yank{register: 0, size: RangeSize::UntilMark(n as u8)}))
+                        let mark_id = FullMarkId::Lower(MarkId::new(n).unwrap());
+                        Ok(Some(KeystrokeCommand::Yank{register: 0, size: FullRangeSize::UntilMark(mark_id)}))
                     }
                 },
                 _ => {
@@ -421,7 +437,7 @@ pub fn parse_keystroke(keystroke: &Vec<char>) -> Result<Option<KeystrokeCommand>
                     if n1 >= 64 {
                         Err("Register indices must be less than 64".to_string())
                     } else {
-                        Ok(Some(KeystrokeCommand::Yank{register: n1 as u8, size: RangeSize::Bytes(n2)}))
+                        Ok(Some(KeystrokeCommand::Yank{register: n1 as u8, size: FullRangeSize::Bytes(n2)}))
                     }
                 },
                 _ => {
@@ -438,8 +454,12 @@ pub fn parse_keystroke(keystroke: &Vec<char>) -> Result<Option<KeystrokeCommand>
                         Err("Register indices must be less than 64".to_string())
                     } else if n2 >= 64 {
                         Err("Mark IDs must be less than 64".to_string())
+                    } else if n2 >= 32 {
+                        let mark_id = FullMarkId::Upper(MarkId::new(n2 - 32).unwrap());
+                        Ok(Some(KeystrokeCommand::Yank{register: n1 as u8, size: FullRangeSize::UntilMark(mark_id)}))
                     } else {
-                        Ok(Some(KeystrokeCommand::Yank{register: n1 as u8, size: RangeSize::UntilMark(n2 as u8)}))
+                        let mark_id = FullMarkId::Lower(MarkId::new(n2).unwrap());
+                        Ok(Some(KeystrokeCommand::Yank{register: n1 as u8, size: FullRangeSize::UntilMark(mark_id)}))
                     }
                 },
                 _ => {
