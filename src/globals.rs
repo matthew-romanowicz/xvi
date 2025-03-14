@@ -1,4 +1,8 @@
 
+pub const MACRO_ARRAY_LENGTH: usize = 32;
+pub const MARKS_ARRAY_LENGTH: usize = 32;
+pub const REGISTER_ARRAY_LENGTH: usize = 32;
+
 // 8: Gray
 // 9: Bright red
 // 10: bright green

@@ -14,6 +14,10 @@ use bitutils2::{BitIndex, BitField, BitIndexable};
 mod utils;
 use crate::utils::{BoundedIndex, BoundedVec};
 
+mod common;
+use crate::common::{MarkId, FullMarkId, MarkArray, RegisterId, FullRegisterId, RegisterArray, MacroId, MacroArray,
+    FillType, FullFillType, DataSource, FullDataSource, RangeSize, FullRangeSize, Seek, FullSeek};
+
 mod expr;
 use crate::expr::*;
 
@@ -24,9 +28,9 @@ mod large_text_view;
 use crate::large_text_view::LargeTextView;
 
 mod hex_edit;
-use crate::hex_edit::{FileManager, Action, CompoundAction, ActionStack, UpdateDescription, Seek, FullSeek,
-        EditMode, ActionResult, ShowType, ByteOperation, FillType, FullFillType, FindDirection, shift_vector, 
-        vector_op, HexEdit, DataSource, FullDataSource, RangeSize, FullRangeSize, Structure, FileMap};
+use crate::hex_edit::{FileManager, Action, CompoundAction, ActionStack, UpdateDescription, 
+        EditMode, ActionResult, ShowType, ByteOperation, FindDirection, shift_vector, 
+        vector_op, HexEdit, Structure, FileMap};
 pub use crate::hex_edit::FileManagerType;
 
 
@@ -173,66 +177,7 @@ const BUGS: &str = "Inputting numbers greater than usize maximum in commands/key
 Setting line length to value greater than width of terminal causes panic
 ";
 
-const MACRO_ARRAY_LENGTH: usize = 32;
-const MARKS_ARRAY_LENGTH: usize = 32;
-const REGISTER_ARRAY_LENGTH: usize = 32;
 
-// const MARKS_ARRAY_LENGTH_X2: usize = MARKS_ARRAY_LENGTH * 2;
-
-type MacroArray = BoundedVec<MACRO_ARRAY_LENGTH, Option<Rc<CompoundAction>>>;
-type MacroId = BoundedIndex<MACRO_ARRAY_LENGTH>;
-
-type MarkArray = BoundedVec<MARKS_ARRAY_LENGTH, BitIndex>;
-type MarkId = BoundedIndex<MARKS_ARRAY_LENGTH>;
-
-type RegisterArray = BoundedVec<REGISTER_ARRAY_LENGTH, BitField>;
-type RegisterId = BoundedIndex<REGISTER_ARRAY_LENGTH>;
-
-#[derive(Clone, Copy)]
-enum FullMarkId {
-    Lower(MarkId),
-    Upper(MarkId)
-    
-}
-
-impl FullMarkId {
-    pub fn new(index: usize) -> Result<FullMarkId, usize> {
-        if let Ok(mark_id) = MarkId::new(index) {
-            Ok(FullMarkId::Lower(mark_id))
-        } else if let Ok(mark_id) = MarkId::new(index - MarkId::BOUND) {
-            Ok(FullMarkId::Upper(mark_id))
-        } else {
-            Err(MarkId::BOUND * 2)
-        }
-    }
-
-    pub fn zero() -> FullMarkId {
-        FullMarkId::Lower(MarkId::zero())
-    }
-}
-
-#[derive(Clone, Copy)]
-enum FullRegisterId {
-    Lower(RegisterId),
-    Upper(RegisterId)
-    
-}
-
-impl FullRegisterId {
-    pub fn new(index: usize) -> Result<FullRegisterId, usize> {
-        if let Ok(reg_id) = RegisterId::new(index) {
-            Ok(FullRegisterId::Lower(reg_id))
-        } else if let Ok(reg_id) = RegisterId::new(index - RegisterId::BOUND) {
-            Ok(FullRegisterId::Upper(reg_id))
-        } else {
-            Err(RegisterId::BOUND * 2)
-        }
-    }
-
-    pub fn zero() -> FullRegisterId {
-        FullRegisterId::Lower(RegisterId::zero())
-    }
-}
 
 struct HexEditManager {
     hex_edit: HexEdit,

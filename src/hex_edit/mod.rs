@@ -13,7 +13,8 @@ use crate::globals;
 
 use crate::AlertType;
 use crate::expr::ExprValue;
-use crate::{MarkId, FullMarkId, MarkArray, RegisterId, FullRegisterId, RegisterArray};
+use crate::common::{MarkId, FullMarkId, MarkArray, RegisterId, FullRegisterId, RegisterArray,
+    FillType, FullFillType, DataSource, FullDataSource, RangeSize, FullRangeSize, Seek, FullSeek};
 
 mod file_manager;
 pub use crate::hex_edit::file_manager::{FileManagerType, FileManager};
@@ -100,80 +101,6 @@ pub struct Highlight {
     pub span: usize
 }
 
-pub enum FillType {
-    Bytes(BitField),
-    Register(RegisterId)
-}
-
-pub enum FullFillType {
-    Bytes(BitField),
-    Register(FullRegisterId)
-}
-
-impl FullFillType {
-    pub fn convert(self, registers: &RegisterArray) -> FillType {
-        match self {
-            FullFillType::Bytes(b) => FillType::Bytes(b),
-            FullFillType::Register(FullRegisterId::Upper(reg_id)) => {
-                FillType::Bytes(registers[reg_id].clone())
-            },
-            FullFillType::Register(FullRegisterId::Lower(reg_id)) => FillType::Register(reg_id)
-        }
-    }
-}
-
-pub enum DataSource {
-    Bytes(Vec<u8>),
-    Fill(usize),
-    Register(RegisterId)
-}
-
-pub enum FullDataSource {
-    Bytes(Vec<u8>),
-    Fill(usize),
-    Register(FullRegisterId)
-}
-
-impl FullDataSource {
-    pub fn convert(self, registers: &RegisterArray) -> DataSource {
-        match self {
-            FullDataSource::Bytes(b) => DataSource::Bytes(b),
-            FullDataSource::Fill(n) => DataSource::Fill(n),
-            FullDataSource::Register(FullRegisterId::Upper(reg_id)) => {
-                let v = registers[reg_id].clone().into_boxed_slice().unwrap().to_vec(); // TODO: Make this work for non-byte aligned
-                DataSource::Bytes(v)
-            },
-            FullDataSource::Register(FullRegisterId::Lower(reg_id)) => DataSource::Register(reg_id)
-        }
-    }
-}
-
-#[derive(Clone)]
-pub enum RangeSize {
-    Bytes(usize),
-    UntilAddr(BitIndex),
-    UntilMark(MarkId)
-}
-
-#[derive(Clone)]
-pub enum FullRangeSize {
-    Bytes(usize),
-    UntilAddr(BitIndex),
-    UntilMark(FullMarkId)
-}
-
-impl FullRangeSize {
-    pub fn convert(self, marks: &MarkArray) -> RangeSize {
-        match self {
-            FullRangeSize::Bytes(b) => RangeSize::Bytes(b),
-            FullRangeSize::UntilAddr(bi) => RangeSize::UntilAddr(bi),
-            FullRangeSize::UntilMark(FullMarkId::Upper(mark_id)) => {
-                RangeSize::UntilAddr(marks[mark_id])
-            },
-            FullRangeSize::UntilMark(FullMarkId::Lower(mark_id)) => RangeSize::UntilMark(mark_id)
-        }
-    }
-}
 
 pub trait Action {
     fn undo(&self, hex_edit: &mut HexEdit) -> ActionResult;
@@ -647,39 +574,6 @@ impl Action for SliceRegisterAction {
 
     fn size(&self) -> usize{
         16 // TODO this is wrong
-    }
-}
-
-
-
-#[derive(Clone, Copy)]
-pub enum Seek {
-    FromStart(u64),
-    FromCurrent(i64),
-    FromEnd(i64),
-    Mark(MarkId)
-}
-
-#[derive(Clone, Copy)]
-pub enum FullSeek {
-    FromStart(u64),
-    FromCurrent(i64),
-    FromEnd(i64),
-    Mark(FullMarkId)
-}
-
-impl FullSeek {
-    pub fn convert(self, marks: &MarkArray) -> Seek {
-        match self {
-            FullSeek::FromStart(i) => Seek::FromStart(i),
-            FullSeek::FromCurrent(i) => Seek::FromCurrent(i),
-            FullSeek::FromEnd(i) => Seek::FromEnd(i),
-            FullSeek::Mark(FullMarkId::Lower(mark_id)) => Seek::Mark(mark_id),
-            FullSeek::Mark(FullMarkId::Upper(mark_id)) => {
-                // TODO: Make this work with BitIndex
-                Seek::FromStart(marks[mark_id].byte() as u64)
-            }
-        }
     }
 }
 

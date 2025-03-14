@@ -1,6 +1,6 @@
 use std::io::SeekFrom;
 
-use crate::{DataSource, FullDataSource, RangeSize, FullRangeSize, Seek, FullSeek, MacroId, MarkId, FullMarkId, RegisterId, FullRegisterId};
+use crate::common::{DataSource, FullDataSource, RangeSize, FullRangeSize, Seek, FullSeek, MacroId, MarkId, FullMarkId, RegisterId, FullRegisterId};
 
 pub enum CommandKeyword {
     Set,
