@@ -320,6 +320,20 @@ impl EditorStack {
             Err(n) => Err(format!("Clipboard register must be less than {}", n).to_string())
         }
     }
+
+    fn borrow_register<'b>(&'b self, id: FullRegisterId) -> &'b BitField {
+        match id {
+            FullRegisterId::Lower(reg_id) => &self.editors[self.current].hex_edit.clipboard_registers[reg_id],
+            FullRegisterId::Upper(reg_id) => &self.clipboard_registers[reg_id],
+        }
+    }
+
+    fn borrow_register_mut<'b>(&'b mut self, id: FullRegisterId) -> &'b mut BitField {
+        match id {
+            FullRegisterId::Lower(reg_id) => &mut self.editors[self.current].hex_edit.clipboard_registers[reg_id],
+            FullRegisterId::Upper(reg_id) => &mut self.clipboard_registers[reg_id],
+        }
+    }
 }
 
 enum CommandInstruction {
@@ -749,21 +763,17 @@ impl App {
                             },
                             CommandToken::Keyword(CommandKeyword::Cat) => { // :cat [] []
                                 match (&tokens[1], &tokens[2]) {
-                                    (CommandToken::Register(FullRegisterId::Lower(reg_id1)), CommandToken::Register(FullRegisterId::Lower(reg_id2))) => {
-                                        (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.concatenate_register(*reg_id1, FillType::Register(*reg_id2)))
-                                    },
-                                    (CommandToken::Register(FullRegisterId::Lower(reg_id1)), CommandToken::Register(FullRegisterId::Upper(reg_id2))) => {
-                                        let fill = FillType::Bytes(self.editors.clipboard_registers[*reg_id2].clone());
+                                    (CommandToken::Register(FullRegisterId::Lower(reg_id1)), CommandToken::Register(reg_id2)) => {
+                                        let fill = FullFillType::Register(*reg_id2).convert(&self.editors.clipboard_registers);
                                         (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.concatenate_register(*reg_id1, fill))
                                     },
-                                    (CommandToken::Register(FullRegisterId::Upper(reg_id1)), CommandToken::Register(FullRegisterId::Lower(reg_id2))) => {
-                                        let fill = self.editors.current().hex_edit.get_register(*reg_id2).unwrap();
-                                        self.editors.clipboard_registers[*reg_id1].extend(&fill);
-                                        (CommandInstruction::NoOp, ActionResult::empty())
-                                    },
-                                    (CommandToken::Register(FullRegisterId::Upper(reg_id1)), CommandToken::Register(FullRegisterId::Upper(reg_id2))) => {
-                                        let fill = self.editors.clipboard_registers[*reg_id2].clone();
-                                        self.editors.clipboard_registers[*reg_id1].extend(&fill);
+                                    (CommandToken::Register(FullRegisterId::Upper(reg_id1)), CommandToken::Register(reg_id2)) => {
+                                        // let bf = reg_id2.get_bitfield(
+                                        //     &self.editors.current().hex_edit.clipboard_registers, 
+                                        //     &self.editors.clipboard_registers
+                                        // ).clone();
+                                        let bf = self.editors.borrow_register(*reg_id2).clone();
+                                        self.editors.clipboard_registers[*reg_id1].extend(&bf);
                                         (CommandInstruction::NoOp, ActionResult::empty())
                                     },
                                     (CommandToken::Register(FullRegisterId::Lower(reg_id)), CommandToken::Word(word)) => {
@@ -797,20 +807,12 @@ impl App {
                                     _ => return (CommandInstruction::NoOp, ActionResult::error("Impossible state".to_string()))
                                 };
                                 match (&tokens[1], &tokens[2]) {
-                                    (CommandToken::Register(FullRegisterId::Lower(reg_id1)), CommandToken::Register(FullRegisterId::Lower(reg_id2))) => {
-                                        (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.manipulate_register(*reg_id1, FillType::Register(*reg_id2), op))
-                                    },
-                                    (CommandToken::Register(FullRegisterId::Lower(reg_id1)), CommandToken::Register(FullRegisterId::Upper(reg_id2))) => {
-                                        let fill = FillType::Bytes(self.editors.clipboard_registers[*reg_id2].clone());
+                                    (CommandToken::Register(FullRegisterId::Lower(reg_id1)), CommandToken::Register(reg_id2)) => {
+                                        let fill = FullFillType::Register(*reg_id2).convert(&self.editors.clipboard_registers);
                                         (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.manipulate_register(*reg_id1, fill, op))
                                     },
-                                    (CommandToken::Register(FullRegisterId::Upper(reg_id1)), CommandToken::Register(FullRegisterId::Lower(reg_id2))) => {
-                                        let mut fill = self.editors.current_mut().hex_edit.get_register(*reg_id2).unwrap();
-                                        self.editors.clipboard_registers[*reg_id1] = op.apply(&self.editors.clipboard_registers[*reg_id1], &fill);
-                                        (CommandInstruction::NoOp, ActionResult::empty())
-                                    },
-                                    (CommandToken::Register(FullRegisterId::Upper(reg_id1)), CommandToken::Register(FullRegisterId::Upper(reg_id2))) => {
-                                        let mut fill = self.editors.clipboard_registers[*reg_id2].clone();
+                                    (CommandToken::Register(FullRegisterId::Upper(reg_id1)), CommandToken::Register(reg_id2)) => {
+                                        let fill = self.editors.borrow_register(*reg_id2).clone();
                                         self.editors.clipboard_registers[*reg_id1] = op.apply(&self.editors.clipboard_registers[*reg_id1], &fill);
                                         (CommandInstruction::NoOp, ActionResult::empty())
                                     },

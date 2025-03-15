@@ -1030,7 +1030,7 @@ pub struct HexEdit {
     current_find: Option<FindInfo>,
     display_data: Vec::<u8>,
     valid_bytes: usize,
-    clipboard_registers: RegisterArray,
+    pub clipboard_registers: RegisterArray,
     marks: MarkArray,
     file_spec: Option<FileMap>,
     current_field: Option<(std::ops::Range<BitIndex>, bool)>, // (range, is_valid)
