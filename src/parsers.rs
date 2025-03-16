@@ -1,6 +1,11 @@
+#![feature(if_let_guard)]
+
 use std::io::SeekFrom;
 
-use crate::common::{DataSource, FullDataSource, RangeSize, FullRangeSize, Seek, FullSeek, MacroId, MarkId, FullMarkId, RegisterId, FullRegisterId};
+use bitutils2::{BitIndex, BitField, BitIndexable};
+
+use crate::{Endianness, FindDirection, BinaryFormat, UIntFormat, IIntFormat, FloatFormat};
+use crate::common::{BinaryLogicOp, DecHexOff, DataSource, FullDataSource, RangeSize, FullRangeSize, Seek, FullSeek, FillType, FullFillType, MacroId, MarkId, FullMarkId, RegisterId, FullRegisterId};
 
 pub enum CommandKeyword {
     Set,
@@ -205,15 +210,129 @@ pub fn parse_command_token(v: &Vec<char>) -> Result<Option<CommandToken>, String
     }
 }
 
-pub fn parse_command(command: &Vec<char>) -> Result<Vec<CommandToken>, String> {
-    let mut result = Vec::<CommandToken>::new();
+fn command_kwrd_to_fmt(kwrd: &CommandKeyword) -> Result<BinaryFormat, String> {
+    match kwrd {
+        CommandKeyword::U8 => Ok(BinaryFormat::UInt(UIntFormat::U8)),
+        CommandKeyword::U16 => Ok(BinaryFormat::UInt(UIntFormat::U16)),
+        CommandKeyword::U32 => Ok(BinaryFormat::UInt(UIntFormat::U32)),
+        CommandKeyword::U64 => Ok(BinaryFormat::UInt(UIntFormat::U64)),
+        CommandKeyword::I8 => Ok(BinaryFormat::IInt(IIntFormat::I8)),
+        CommandKeyword::I16 => Ok(BinaryFormat::IInt(IIntFormat::I16)),
+        CommandKeyword::I32 => Ok(BinaryFormat::IInt(IIntFormat::I32)),
+        CommandKeyword::I64 => Ok(BinaryFormat::IInt(IIntFormat::I64)),
+        CommandKeyword::F16 => Ok(BinaryFormat::Float(FloatFormat::F16)),
+        CommandKeyword::F32 => Ok(BinaryFormat::Float(FloatFormat::F32)),
+        CommandKeyword::F64 => Ok(BinaryFormat::Float(FloatFormat::F64)),
+        _ => Err("Command not recognized".to_string())
+    }
+}
+
+pub enum UnaryRegisterOp {
+    Swap,
+    Not,
+    Inflate,
+    Deflate,
+    Shift{bits: isize},
+    Slice{start: BitIndex, stop: BitIndex},
+    Clear
+}
+
+impl BinaryLogicOp {
+    fn from_keyword(kw: &CommandKeyword) -> Option<BinaryLogicOp> {
+        match kw {
+            CommandKeyword::And => Some(BinaryLogicOp::And),
+            CommandKeyword::Or => Some(BinaryLogicOp::Or),
+            CommandKeyword::Nand => Some(BinaryLogicOp::Nand),
+            CommandKeyword::Nor => Some(BinaryLogicOp::Nor),
+            CommandKeyword::Xor => Some(BinaryLogicOp::Xor),
+            CommandKeyword::Xnor => Some(BinaryLogicOp::Xnor),
+            _ => None
+        }
+    }
+}
+
+pub enum BinaryRegisterOp {
+    Cat,
+    LogicOp(BinaryLogicOp)
+}
+
+pub enum OnOffSetting {
+    Caps,
+    Hex,
+    Ascii,
+    Filename,
+    Icase,
+    Regex
+}
+
+
+
+
+impl DecHexOff {
+    fn from_keyword(kw: &CommandKeyword) -> Result<DecHexOff, String> {
+        match kw {
+            CommandKeyword::Dec => Ok(DecHexOff::Dec),
+            CommandKeyword::Hex => Ok(DecHexOff::Hex),
+            CommandKeyword::Off => Ok(DecHexOff::Off),
+            _ => Err("Invalid option. Expected 'dec', 'hex', or 'off'".to_string())
+        }
+    }
+}
+
+impl Endianness {
+    fn from_keyword(kw: &CommandKeyword) -> Result<Endianness, String> {
+        match kw {
+            CommandKeyword::LittleEndian => Ok(Endianness::Little),
+            CommandKeyword::BigEndian => Ok(Endianness::Big),
+            CommandKeyword::NetworkEndian => Ok(Endianness::Network),
+            _ => Err("Invalid option. Expected 'le', 'be', or 'ne'".to_string())
+        }
+    }
+}
+
+
+pub enum DecHexOffSetting {
+    CNum,
+    LNum
+}
+
+pub enum UIntSetting {
+    Line,
+    Chunk,
+    CLevel,
+    Undo,
+
+}
+
+pub enum Command {
+    SaveAndOrQuit{save: bool, quit: bool, forced: bool},
+    Manual,
+    Refresh,
+    Step,
+    ClearUndo,
+    Open{path: String},
+    UnaryRegisterOp{op: UnaryRegisterOp, reg: FullRegisterId},
+    BinaryRegisterOp{op: BinaryRegisterOp, reg: FullRegisterId, other: FullFillType},
+    Insert{value: String, fmt: BinaryFormat, overwrite: bool},
+    Print{fmt: BinaryFormat, seek: bool},
+    SetFill{fill: FullFillType},
+    SetOnOff{setting: OnOffSetting, value: bool},
+    SetDecHexOff{setting: DecHexOffSetting, value: DecHexOff},
+    SetEndian{value: Endianness},
+    SetUInt{setting: UIntSetting, value: usize},
+    SetSyntax{value: Option<String>},
+    Find{expr: Vec<char>, binary: bool, direction: FindDirection}
+}
+
+pub fn parse_command_tokens(command: &Vec<char>) -> Result<Vec::<CommandToken>, String> {
+    let mut tokens = Vec::<CommandToken>::new();
     let mut current_word = Vec::<char>::new();
 
     for c in command {
         match c {
             ' ' => {
                 match parse_command_token(&current_word)? {
-                    Some(token) => result.push(token),
+                    Some(token) => tokens.push(token),
                     None => ()
                 };
                 current_word = Vec::<char>::new();
@@ -223,11 +342,244 @@ pub fn parse_command(command: &Vec<char>) -> Result<Vec<CommandToken>, String> {
     }
 
     match parse_command_token(&current_word)? {
-        Some(token) => result.push(token),
+        Some(token) => tokens.push(token),
         None => ()
     }
 
-    Ok(result)
+    Ok(tokens)
+}
+
+pub fn parse_command(command: &Vec<char>) -> Result<Command, String> {
+
+    match command[0] {
+        ':' => {
+            let tokens = parse_command_tokens(&command[1..].to_vec())?;
+
+            match tokens.len() {
+                1 => {
+                    // let hm = &mut editor_stack.editors[editor_stack.current];
+                    match &tokens[0] {
+                        CommandToken::Keyword(CommandKeyword::Save) => {
+                            Ok(Command::SaveAndOrQuit{save: true, quit: false, forced: false})
+                        },
+                        CommandToken::Keyword(CommandKeyword::SaveAndQuit) => {
+                            Ok(Command::SaveAndOrQuit{save: true, quit: true, forced: false})
+                        },
+                        CommandToken::Keyword(CommandKeyword::ForceQuit) => {
+                            Ok(Command::SaveAndOrQuit{save: false, quit: true, forced: true})
+                        },
+                        CommandToken::Keyword(CommandKeyword::Quit) => {
+                            Ok(Command::SaveAndOrQuit{save: false, quit: true, forced: false})
+                        },
+                        CommandToken::Keyword(CommandKeyword::Manual) => {
+                            Ok(Command::Manual)
+                        },
+                        CommandToken::Keyword(CommandKeyword::Refresh) => {
+                            Ok(Command::Refresh)
+                        },
+                        CommandToken::Keyword(CommandKeyword::Step) => {
+                            Ok(Command::Step)
+                        },
+                        _ => Err("Command not recognized".to_string())
+                    }
+                },
+                2 => {
+                    match (&tokens[0], &tokens[1]) {
+                        (CommandToken::Keyword(CommandKeyword::Swap), CommandToken::Register(reg)) => {
+                            Ok(Command::UnaryRegisterOp{op: UnaryRegisterOp::Swap, reg: *reg})
+                        },
+                        (CommandToken::Keyword(CommandKeyword::Not),  CommandToken::Register(reg)) => {
+                            Ok(Command::UnaryRegisterOp{op: UnaryRegisterOp::Not, reg: *reg})
+                        },
+                        (CommandToken::Keyword(CommandKeyword::Deflate), CommandToken::Register(reg)) => {
+                            Ok(Command::UnaryRegisterOp{op: UnaryRegisterOp::Deflate, reg: *reg})
+                        },
+                        (CommandToken::Keyword(CommandKeyword::Inflate), CommandToken::Register(reg)) => {
+                            Ok(Command::UnaryRegisterOp{op: UnaryRegisterOp::Inflate, reg: *reg})
+                        },
+                        (CommandToken::Keyword(CommandKeyword::Clear), CommandToken::Register(reg)) => {
+                            Ok(Command::UnaryRegisterOp{op: UnaryRegisterOp::Clear, reg: *reg})
+                        },
+                        (CommandToken::Keyword(CommandKeyword::Clear), CommandToken::Keyword(CommandKeyword::Undo)) => {
+                            Ok(Command::ClearUndo)
+                        },
+                        (CommandToken::Keyword(CommandKeyword::Open), CommandToken::Word(word)) => {
+                            Ok(Command::Open{path: word.iter().collect()})
+                        },
+                        (CommandToken::Keyword(kwrd), _) if matches!(kwrd, CommandKeyword::Print | CommandKeyword::PrintSeek) => { // :p []
+                            // let hm = &mut editor_stack.editors[editor_stack.current];
+
+                            let fmt = match &tokens[1] {
+                                CommandToken::Keyword(fmt_kwrd) => {
+                                    match command_kwrd_to_fmt(fmt_kwrd) {
+                                        Ok(f) => f,
+                                        _ => return Err("Command not recognized".to_string())
+                                    }
+                                },
+                                _ => return Err("Command not recognized".to_string())
+                            };
+
+                            match kwrd {
+                                CommandKeyword::Print => Ok(Command::Print{fmt, seek: false}),
+                                CommandKeyword::PrintSeek => Ok(Command::Print{fmt, seek: true}),
+                                _ => Err("Impossible state".to_string())
+                            }
+
+                        },
+                        _ => Err("Command not recognized".to_string())
+                    }
+                },
+                3 => {
+                    match &tokens[0] {
+                        CommandToken::Keyword(CommandKeyword::Set) => { // :set [] []
+                            match (&tokens[1], &tokens[2]) {
+                                (CommandToken::Keyword(CommandKeyword::Caps), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::On | CommandKeyword::Off) => {
+                                    Ok(Command::SetOnOff{setting: OnOffSetting::Caps, value: matches!(kwrd, CommandKeyword::On)})
+                                },
+                                (CommandToken::Keyword(CommandKeyword::Hex), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::On | CommandKeyword::Off) => {
+                                    Ok(Command::SetOnOff{setting: OnOffSetting::Hex, value: matches!(kwrd, CommandKeyword::On)})
+                                },
+                                (CommandToken::Keyword(CommandKeyword::Ascii), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::On | CommandKeyword::Off) => {
+                                    Ok(Command::SetOnOff{setting: OnOffSetting::Ascii, value: matches!(kwrd, CommandKeyword::On)})
+                                },
+                                (CommandToken::Keyword(CommandKeyword::Filename), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::On | CommandKeyword::Off) => {
+                                    Ok(Command::SetOnOff{setting: OnOffSetting::Filename, value: matches!(kwrd, CommandKeyword::On)})
+                                },
+                                (CommandToken::Keyword(CommandKeyword::Icase), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::On | CommandKeyword::Off) => {
+                                    Ok(Command::SetOnOff{setting: OnOffSetting::Icase, value: matches!(kwrd, CommandKeyword::On)})
+                                },
+                                (CommandToken::Keyword(CommandKeyword::Regex), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::On | CommandKeyword::Off) => {
+                                    Ok(Command::SetOnOff{setting: OnOffSetting::Regex, value: matches!(kwrd, CommandKeyword::On)})
+                                },
+                                (CommandToken::Keyword(CommandKeyword::LNum), CommandToken::Keyword(kwrd)) => {
+                                    Ok(Command::SetDecHexOff{setting: DecHexOffSetting::LNum, value: DecHexOff::from_keyword(kwrd)?})
+                                },
+                                (CommandToken::Keyword(CommandKeyword::CNum), CommandToken::Keyword(kwrd)) => {
+                                    Ok(Command::SetDecHexOff{setting: DecHexOffSetting::CNum, value: DecHexOff::from_keyword(kwrd)?})
+                                },
+                                (CommandToken::Keyword(CommandKeyword::Endian), CommandToken::Keyword(kwrd)) => {
+                                    Ok(Command::SetEndian{value: Endianness::from_keyword(kwrd)?})
+                                },
+                                (CommandToken::Keyword(CommandKeyword::Line), CommandToken::Integer(_, value)) => {
+                                    Ok(Command::SetUInt{setting: UIntSetting::Line, value: *value})
+                                },
+                                (CommandToken::Keyword(CommandKeyword::Chunk), CommandToken::Integer(_, value)) => {
+                                    Ok(Command::SetUInt{setting: UIntSetting::Chunk, value: *value})
+                                },
+                                (CommandToken::Keyword(CommandKeyword::CLevel), CommandToken::Integer(_, value)) => {
+                                    Ok(Command::SetUInt{setting: UIntSetting::CLevel, value: *value})
+                                },
+                                (CommandToken::Keyword(CommandKeyword::Undo), CommandToken::Integer(_, value)) => {
+                                    Ok(Command::SetUInt{setting: UIntSetting::Undo, value: *value})
+                                },
+                                (CommandToken::Keyword(CommandKeyword::Syntax), CommandToken::Word(word)) => {
+                                    Ok(Command::SetSyntax{value: Some(word.into_iter().collect())})
+                                },
+                                (CommandToken::Keyword(CommandKeyword::Syntax), CommandToken::Keyword(CommandKeyword::Off)) => {
+                                    Ok(Command::SetSyntax{value: None})
+                                },
+                                (CommandToken::Keyword(CommandKeyword::Fill), CommandToken::Register(reg_id)) => {
+                                    Ok(Command::SetFill{fill: FullFillType::Register(*reg_id)})
+                                },
+                                (CommandToken::Keyword(CommandKeyword::Fill), CommandToken::Word(word)) => {
+                                    let v = parse_bytes(word)?;
+                                    Ok(Command::SetFill{fill: FullFillType::Bytes(BitField::from_vec(v))})
+                                },
+                                _ => Err("Command not recognized".to_string())
+                            }
+                        },
+                        CommandToken::Keyword(CommandKeyword::Cat) => { // :cat [] []
+                            match (&tokens[1], &tokens[2]) {
+                                (CommandToken::Register(reg), CommandToken::Register(reg2)) => {
+                                    Ok(Command::BinaryRegisterOp{op: BinaryRegisterOp::Cat, reg: *reg, other: FullFillType::Register(*reg2)})
+                                },
+                                (CommandToken::Register(reg), CommandToken::Word(word)) => {
+                                    let v = parse_bytes(word)?;
+                                    Ok(Command::BinaryRegisterOp{op: BinaryRegisterOp::Cat, reg: *reg, other: FullFillType::Bytes(BitField::from_vec(v))})
+                                },
+                                _ => Err("Command not recognized".to_string())
+                            }
+                        },
+                        CommandToken::Keyword(kwrd) if matches!(kwrd, CommandKeyword::Ins | CommandKeyword::Ovr) => { // :ins | ovr [] []
+
+                            let value = match &tokens[2] {
+                                CommandToken::Integer(word, _) => word,
+                                CommandToken::Word(word) => word,
+                                _ => return Err("Command not recognized".to_string())
+                            };
+
+                            let fmt = match &tokens[1] {
+                                CommandToken::Keyword(fmt_kwrd) => {
+                                    match command_kwrd_to_fmt(fmt_kwrd) {
+                                        Ok(f) => f,
+                                        _ => return Err("Command not recognized".to_string())
+                                    }
+                                },
+                                _ => return Err("Command not recognized".to_string())
+                            };
+
+                            Ok(Command::Insert{value: value.iter().collect(), fmt, overwrite: matches!(kwrd, CommandKeyword::Ovr)})
+                        },
+                        CommandToken::Keyword(CommandKeyword::RShift | CommandKeyword::LShift) => { // :rshft | lshft [] []
+                            match (&tokens[1], &tokens[2]) {
+                                (CommandToken::Register(reg), CommandToken::Integer(_, n)) => {
+                                    let shift = match &tokens[0] {
+                                        CommandToken::Keyword(CommandKeyword::RShift) => *n as isize,
+                                        CommandToken::Keyword(CommandKeyword::LShift) => -(*n as isize),
+                                        _ => return Err("Impossible state".to_string())
+                                    };
+
+                                    Ok(Command::UnaryRegisterOp{op: UnaryRegisterOp::Shift{bits: shift}, reg: *reg})
+                                },
+                                _ => Err("Command not recognized".to_string())
+                            }
+                        },
+                        CommandToken::Keyword(kwrd) => {
+                            if let Some(op) = BinaryLogicOp::from_keyword(kwrd) { // :and [] []
+                                match (&tokens[1], &tokens[2]) {
+                                    (CommandToken::Register(reg), CommandToken::Register(reg2)) => {
+                                        Ok(Command::BinaryRegisterOp{op: BinaryRegisterOp::LogicOp(op), reg: *reg, other: FullFillType::Register(*reg2)})
+                                    },
+                                    (CommandToken::Register(reg), CommandToken::Word(word)) => {
+                                        let v = parse_bytes(word)?;
+                                        Ok(Command::BinaryRegisterOp{op: BinaryRegisterOp::LogicOp(op), reg: *reg, other: FullFillType::Bytes(BitField::from_vec(v))})
+                                    },
+                                    _ => Err("Command not recognized".to_string())
+                                }
+                            } else {
+                                Err("Command not recognized".to_string())
+                            }
+                        },
+                        _ => Err("Command not recognized".to_string())
+                    }
+                },
+                4 => {
+                    match (&tokens[0], &tokens[1], &tokens[2], &tokens[3]) {
+                        (CommandToken::Keyword(CommandKeyword::Slice), CommandToken::Register(reg), 
+                                CommandToken::Integer(_, n1), CommandToken::Integer(_, n2)) => {
+                            Ok(Command::UnaryRegisterOp{op: UnaryRegisterOp::Slice{start: BitIndex::bytes(*n1), stop: BitIndex::bytes(*n2)}, reg: *reg})
+                        },
+                        _ => Err("Command not recognized".to_string())
+                    }
+                }
+                _ => Err("Command not recognized".to_string())
+            }
+        },
+        // FIND IN FILE
+        '/' => {
+            Ok(Command::Find{expr: command[1..].to_vec(), binary: false, direction: FindDirection::Forward})
+        },
+        '?' => {
+            Ok(Command::Find{expr: command[1..].to_vec(), binary: false, direction: FindDirection::Backward})
+        },
+        '\\' => {
+            Ok(Command::Find{expr: command[1..].to_vec(), binary: true, direction: FindDirection::Forward})
+        },
+        '|' => {
+            Ok(Command::Find{expr: command[1..].to_vec(), binary: true, direction: FindDirection::Backward})
+        },
+        _ => Err("Command not recognized".to_string())
+    }
 }
 
 #[derive(Copy, Clone)]

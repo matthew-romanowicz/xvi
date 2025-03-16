@@ -7,6 +7,53 @@ use crate::utils::{BoundedVec, BoundedIndex};
 use crate::hex_edit::CompoundAction;
 
 
+#[derive(Clone, Copy)]
+pub enum DecHexOff {
+    Dec,
+    Hex,
+    Off
+}
+
+#[derive(Clone, Copy)]
+pub enum BinaryLogicOp {
+    And,
+    Or,
+    Nand,
+    Nor,
+    Xor,
+    Xnor
+}
+
+impl BinaryLogicOp {
+    pub fn apply(&self, lhs: &BitField, rhs: &BitField) -> BitField {
+        // TODO: Use a bitfield method here
+        // let len = fill.len();
+        let repetitions = (lhs.len().total_bits() / rhs.len().total_bits()) as usize;
+        let mut rhs = rhs.clone();
+        rhs.repeat(repetitions + 1);
+        rhs.truncate(&lhs.len());
+        match self {
+            BinaryLogicOp::And => {
+                lhs & (&rhs)
+            },
+            BinaryLogicOp::Or => {
+                lhs | (&rhs)
+            },
+            BinaryLogicOp::Nand => {
+                !&(lhs & (&rhs))
+            },
+            BinaryLogicOp::Nor => {
+                !&(lhs | (&rhs))
+            },
+            BinaryLogicOp::Xor => {
+                lhs ^ (&rhs)
+            },
+            BinaryLogicOp::Xnor => {
+                !&(lhs ^ (&rhs))
+            }
+        }
+    }
+}
 
 // const MARKS_ARRAY_LENGTH_X2: usize = MARKS_ARRAY_LENGTH * 2;
 

@@ -13,7 +13,7 @@ use crate::globals;
 
 use crate::AlertType;
 use crate::expr::ExprValue;
-use crate::common::{MarkId, FullMarkId, MarkArray, RegisterId, FullRegisterId, RegisterArray,
+use crate::common::{BinaryLogicOp, DecHexOff, MarkId, FullMarkId, MarkArray, RegisterId, FullRegisterId, RegisterArray,
     FillType, FullFillType, DataSource, FullDataSource, RangeSize, FullRangeSize, Seek, FullSeek};
 
 mod file_manager;
@@ -47,53 +47,6 @@ pub enum EditMode {
     AsciiOverwrite,
     HexInsert,
     AsciiInsert
-}
-
-pub enum ShowType {
-    Off,
-    Dec,
-    Hex
-}
-
-#[derive(Copy, Clone)]
-pub enum ByteOperation {
-    And,
-    Or,
-    Nand,
-    Nor,
-    Xor,
-    Xnor
-}
-
-impl ByteOperation {
-    pub fn apply(&self, lhs: &BitField, rhs: &BitField) -> BitField {
-        // TODO: Use a bitfield method here
-        // let len = fill.len();
-        let repetitions = (lhs.len().total_bits() / rhs.len().total_bits()) as usize;
-        let mut rhs = rhs.clone();
-        rhs.repeat(repetitions + 1);
-        rhs.truncate(&lhs.len());
-        match self {
-            ByteOperation::And => {
-                lhs & (&rhs)
-            },
-            ByteOperation::Or => {
-                lhs | (&rhs)
-            },
-            ByteOperation::Nand => {
-                !&(lhs & (&rhs))
-            },
-            ByteOperation::Nor => {
-                !&(lhs | (&rhs))
-            },
-            ByteOperation::Xor => {
-                lhs ^ (&rhs)
-            },
-            ByteOperation::Xnor => {
-                !&(lhs ^ (&rhs))
-            }
-        }
-    }
 }
 
 pub struct Highlight {
@@ -459,11 +412,11 @@ pub struct RegisterOpAction {
     register: RegisterId,
     fill: FillType,
     original_bytes: BitField,
-    op: ByteOperation
+    op: BinaryLogicOp
 }
 
 impl RegisterOpAction {
-    pub fn new(register: RegisterId, fill: FillType, original_bytes: BitField, op: ByteOperation) -> RegisterOpAction {
+    pub fn new(register: RegisterId, fill: FillType, original_bytes: BitField, op: BinaryLogicOp) -> RegisterOpAction {
         RegisterOpAction {
             register,
             fill,
@@ -1013,7 +966,7 @@ pub struct HexEdit {
     show_filename: bool,
     show_hex: bool,
     show_ascii: bool,
-    show_lnum: ShowType,
+    show_lnum: DecHexOff,
     invalid_ascii_char: char,
     eof_ascii_char: char,
     eof_hex_char: char,
@@ -1092,7 +1045,7 @@ impl HexEdit {
             show_filename,
             show_hex,
             show_ascii,
-            show_lnum: ShowType::Hex,
+            show_lnum: DecHexOff::Hex,
             invalid_ascii_char,
             eof_ascii_char: '~',
             eof_hex_char: '~',
@@ -1165,7 +1118,7 @@ impl HexEdit {
         ActionResult::no_error(UpdateDescription::All)
     }
 
-    pub fn set_show_lnum(&mut self, show_lnum: ShowType) -> ActionResult {
+    pub fn set_show_lnum(&mut self, show_lnum: DecHexOff) -> ActionResult {
         self.show_lnum = show_lnum;
         ActionResult::no_error(UpdateDescription::All)
     }
@@ -1580,7 +1533,7 @@ impl HexEdit {
         }
     }
 
-    pub fn manipulate_register(&mut self, register: RegisterId, fill: FillType, op: ByteOperation) -> ActionResult {
+    pub fn manipulate_register(&mut self, register: RegisterId, fill: FillType, op: BinaryLogicOp) -> ActionResult {
 
         let original_bytes = std::mem::take(&mut self.clipboard_registers[register]);
         let mut op_bytes = match &fill {
@@ -2702,17 +2655,17 @@ impl HexEdit {
 
     fn line_label_len(&self) -> usize {
         match self.show_lnum {
-            ShowType::Off => 0,
-            ShowType::Dec => format!("{}", self.len()).len(),
-            ShowType::Hex => format!("{:x}", self.len()).len()
+            DecHexOff::Off => 0,
+            DecHexOff::Dec => format!("{}", self.len()).len(),
+            DecHexOff::Hex => format!("{:x}", self.len()).len()
         }
     }
 
     fn format_line_label(&self, lnum: usize) -> String {
         match self.show_lnum {
-            ShowType::Off => "".to_string(),
-            ShowType::Dec => format!("{:0width$}", lnum, width=self.line_label_len()),
-            ShowType::Hex => match self.capitalize_hex {
+            DecHexOff::Off => "".to_string(),
+            DecHexOff::Dec => format!("{:0width$}", lnum, width=self.line_label_len()),
+            DecHexOff::Hex => match self.capitalize_hex {
                 true => format!("{:0width$x}", lnum, width=self.line_label_len()).to_ascii_uppercase(),
                 false => format!("{:0width$x}", lnum, width=self.line_label_len())
             }

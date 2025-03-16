@@ -15,7 +15,7 @@ mod utils;
 use crate::utils::{BoundedIndex, BoundedVec};
 
 mod common;
-use crate::common::{MarkId, FullMarkId, MarkArray, RegisterId, FullRegisterId, RegisterArray, MacroId, MacroArray,
+use crate::common::{DecHexOff, BinaryLogicOp, MarkId, FullMarkId, MarkArray, RegisterId, FullRegisterId, RegisterArray, MacroId, MacroArray,
     FillType, FullFillType, DataSource, FullDataSource, RangeSize, FullRangeSize, Seek, FullSeek};
 
 mod expr;
@@ -29,36 +29,19 @@ use crate::large_text_view::LargeTextView;
 
 mod hex_edit;
 use crate::hex_edit::{FileManager, Action, CompoundAction, ActionStack, UpdateDescription, 
-        EditMode, ActionResult, ShowType, ByteOperation, FindDirection, shift_vector, 
+        EditMode, ActionResult, FindDirection, shift_vector, 
         vector_op, HexEdit, Structure, FileMap};
 pub use crate::hex_edit::FileManagerType;
 
 
 mod parsers;
-use crate::parsers::{CommandToken, CommandKeyword, parse_command, parse_bytes, KeystrokeToken, KeystrokeCommand, parse_keystroke};
+use crate::parsers::{CommandToken, CommandKeyword, OnOffSetting, DecHexOffSetting, UIntSetting, UnaryRegisterOp, BinaryRegisterOp, Command, parse_command, parse_bytes, KeystrokeToken, KeystrokeCommand, parse_keystroke};
 
 mod bin_format;
 use crate::bin_format::{Endianness, UIntFormat, IIntFormat, FloatFormat, BinaryFormat, DataType, fmt_length, from_bytes, to_bytes};
 
 mod globals;
 use crate::globals::*;
-
-fn command_kwrd_to_fmt(kwrd: &CommandKeyword) -> Result<BinaryFormat, String> {
-    match kwrd {
-        CommandKeyword::U8 => Ok(BinaryFormat::UInt(UIntFormat::U8)),
-        CommandKeyword::U16 => Ok(BinaryFormat::UInt(UIntFormat::U16)),
-        CommandKeyword::U32 => Ok(BinaryFormat::UInt(UIntFormat::U32)),
-        CommandKeyword::U64 => Ok(BinaryFormat::UInt(UIntFormat::U64)),
-        CommandKeyword::I8 => Ok(BinaryFormat::IInt(IIntFormat::I8)),
-        CommandKeyword::I16 => Ok(BinaryFormat::IInt(IIntFormat::I16)),
-        CommandKeyword::I32 => Ok(BinaryFormat::IInt(IIntFormat::I32)),
-        CommandKeyword::I64 => Ok(BinaryFormat::IInt(IIntFormat::I64)),
-        CommandKeyword::F16 => Ok(BinaryFormat::Float(FloatFormat::F16)),
-        CommandKeyword::F32 => Ok(BinaryFormat::Float(FloatFormat::F32)),
-        CommandKeyword::F64 => Ok(BinaryFormat::Float(FloatFormat::F64)),
-        _ => Err("Command not recognized".to_string())
-    }
-}
 
 enum EditState {
     Escaped,
@@ -204,7 +187,7 @@ struct EditorStack {
     clipboard_registers: RegisterArray,
     marks: MarkArray,
     endianness: Endianness,
-    cnum: ShowType,
+    cnum: DecHexOff,
     show_hex: bool,
     show_ascii: bool,
     show_filename: bool,
@@ -225,7 +208,7 @@ impl EditorStack {
             // TODO: clean this up once BitIndex gets Default implemented
             marks: MarkArray::new(BitIndex::zero),
             endianness: Endianness::Network,
-            cnum: ShowType::Hex,
+            cnum: DecHexOff::Hex,
             show_hex: true,
             show_ascii: true,
             show_filename: false,
@@ -390,7 +373,6 @@ impl MacroManager {
     }
 
     fn run(&self, n: MacroId, hex_edit: &mut HexEdit) -> ActionResult {
-        println!("Running macro {}", n);
         match &self.macros[n] {
             Some(m) => m.redo(hex_edit),
             None => ActionResult::error(format!("Macro {} not defined", n))
@@ -507,452 +489,312 @@ impl App {
         self.editors.current().hex_edit.get_cursor_pos()
     }
 
-    fn execute_command(&mut self, command: Vec<char>) -> (CommandInstruction, ActionResult) {
-
-        match command[0] {
-            ':' => {
-                let tokens;
-                match parse_command(&command[1..].to_vec()) {
-                    Ok(t) => tokens = t,
-                    Err(msg) => return (CommandInstruction::NoOp, ActionResult::error(msg))
-                }
-
-                match tokens.len() {
-                    1 => {
-                        // let hm = &mut editor_stack.editors[editor_stack.current];
-                        match &tokens[0] {
-                            CommandToken::Keyword(CommandKeyword::Save) => {
-                                let result = self.editors.current_mut().hex_edit.save();
-                                if let Some(err) = result.alert {
-                                    (CommandInstruction::NoOp, ActionResult::error(err.to_string()))
-                                } else {
-                                    (CommandInstruction::NoOp, ActionResult::empty())
-                                }
-                            },
-                            CommandToken::Keyword(CommandKeyword::SaveAndQuit) => {
-                                let result = self.editors.current_mut().hex_edit.save();
-                                if let Some(err) = result.alert {
-                                    (CommandInstruction::NoOp, ActionResult::error(err.to_string()))
-                                } else {
-                                    (CommandInstruction::Exit, ActionResult::empty())
-                                }
-                            },
-                            CommandToken::Keyword(CommandKeyword::ForceQuit) => {
-                                (CommandInstruction::Exit, ActionResult::empty())
-                            },
-                            CommandToken::Keyword(CommandKeyword::Quit) => {
-                                if self.editors.current().hex_edit.is_modified() {
-                                    (CommandInstruction::NoOp, ActionResult::error("File has unsaved changes".to_string()))
-                                } else {
-                                    (CommandInstruction::Exit, ActionResult::empty())
-                                }
-                            },
-                            CommandToken::Keyword(CommandKeyword::Manual) => {
-                                (CommandInstruction::ChangeState(EditState::Manual), ActionResult::empty())
-                            },
-                            CommandToken::Keyword(CommandKeyword::Refresh) => {
-                                (CommandInstruction::Refresh, ActionResult::empty())
-                            },
-                            CommandToken::Keyword(CommandKeyword::Step) => {
-                                let (fm, file_map) = self.editors.current_mut().hex_edit.assemble().unwrap();
-                                (CommandInstruction::NewEditor(fm, Some(file_map)), ActionResult::empty())
-                            },
-                            _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
-                        }
+    fn execute_command(&mut self, command: Command) -> (CommandInstruction, ActionResult) {
+        match command {
+            Command::SaveAndOrQuit{save, quit, forced} => {
+                if save {
+                    let result = self.editors.current_mut().hex_edit.save();
+                    if let Some(err) = result.alert {
+                        (CommandInstruction::NoOp, ActionResult::error(err.to_string()))
+                    } else if quit {
+                        (CommandInstruction::Exit, ActionResult::empty())
+                    } else {
+                        (CommandInstruction::NoOp, ActionResult::empty())
                     }
-                    2 => {
-                        match (&tokens[0], &tokens[1]) {
-                            (CommandToken::Keyword(CommandKeyword::Swap), CommandToken::Register(FullRegisterId::Lower(reg_id))) => {
-                                (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.swap_register(*reg_id))
-                            },
-                            (CommandToken::Keyword(CommandKeyword::Swap), CommandToken::Register(FullRegisterId::Upper(reg_id))) => {
-                                self.editors.clipboard_registers[*reg_id].swap_be_to_le();
-                                (CommandInstruction::NoOp, ActionResult::empty())
-                            },
-                            (CommandToken::Keyword(CommandKeyword::Not),  CommandToken::Register(FullRegisterId::Lower(reg_id))) => {
-                                (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.invert_register(*reg_id))
-                            },
-                            (CommandToken::Keyword(CommandKeyword::Not),  CommandToken::Register(FullRegisterId::Upper(reg_id))) => {
-                                self.editors.clipboard_registers[*reg_id] = !&self.editors.clipboard_registers[*reg_id];
-                                    (CommandInstruction::NoOp, ActionResult::empty())
-                            },
-                            (CommandToken::Keyword(CommandKeyword::Deflate), CommandToken::Register(FullRegisterId::Lower(reg_id))) => {
-                                let clevel = self.editors.clevel;
-                                (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.deflate_register(*reg_id, clevel))
-                            },
-                            (CommandToken::Keyword(CommandKeyword::Deflate), CommandToken::Register(FullRegisterId::Upper(reg_id))) => {
-                                let mut e = DeflateEncoder::new(Vec::new(), Compression::new(self.editors.clevel as u32));
-                                // TODO: Make this work for non byte-aligned registers
-                                let buff = self.editors.clipboard_registers[*reg_id].clone().into_boxed_slice().unwrap().to_vec();
-                                if let Err(msg) = e.write_all(&buff) {
-                                    (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
-                                } else {
-                                    match e.finish() {
-                                        Ok(w) => {
-                                            self.editors.clipboard_registers[*reg_id] = BitField::from_vec(w);
-                                            (CommandInstruction::NoOp, ActionResult::empty())
-                                        },
-                                        Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
-                                    }
-                                }
-                            },
-                            (CommandToken::Keyword(CommandKeyword::Inflate), CommandToken::Register(FullRegisterId::Lower(reg_id))) => {
-                                (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.inflate_register(*reg_id)) // TODO: Make level variable
-                            },
-                            (CommandToken::Keyword(CommandKeyword::Inflate), CommandToken::Register(FullRegisterId::Upper(reg_id))) => {
-                                let mut e = DeflateDecoder::new(Vec::new());
-                                // TODO: Make this work for non byte-aligned registers
-                                let buff = self.editors.clipboard_registers[*reg_id].clone().into_boxed_slice().unwrap().to_vec();
-                                if let Err(msg) = e.write_all(&buff) {
-                                    (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
-                                } else {
-                                    match e.finish() {
-                                        Ok(w) => {
-                                            self.editors.clipboard_registers[*reg_id] = BitField::from_vec(w);
-                                            (CommandInstruction::NoOp, ActionResult::empty())
-                                        },
-                                        Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
-                                    }
-                                }
-                            },
-                            (CommandToken::Keyword(CommandKeyword::Clear), CommandToken::Register(FullRegisterId::Lower(reg_id))) => {
-                                (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.set_register(*reg_id, &BitField::default()))
-                            },
-                            (CommandToken::Keyword(CommandKeyword::Clear), CommandToken::Register(FullRegisterId::Upper(reg_id))) => {
-                                self.editors.clipboard_registers[*reg_id] = BitField::default();
-                                (CommandInstruction::NoOp, ActionResult::empty())
-                            },
-                            (CommandToken::Keyword(CommandKeyword::Clear), CommandToken::Keyword(CommandKeyword::Undo)) => {
-                                self.editors.current_mut().action_stack.clear();
-                                (CommandInstruction::NoOp, ActionResult::empty())
-                            },
-                            (CommandToken::Keyword(CommandKeyword::Open), CommandToken::Word(word)) => {
-                                (CommandInstruction::Open(word.iter().collect()), ActionResult::empty())
-                            },
-                            (CommandToken::Keyword(kwrd), _) if matches!(kwrd, CommandKeyword::Print | CommandKeyword::PrintSeek) => { // :p []
-                                // let hm = &mut editor_stack.editors[editor_stack.current];
-    
-                                let fmt = match &tokens[1] {
-                                    CommandToken::Keyword(fmt_kwrd) => {
-                                        match command_kwrd_to_fmt(fmt_kwrd) {
-                                            Ok(f) => f,
-                                            _ => return (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
-                                        }
-                                    },
-                                    _ => return (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
-                                };
-    
-                                let n_bytes = fmt_length(&fmt);
-    
-                                let mut buffer = vec![0; n_bytes];
-
-                                let cursor_pos = self.editors.current().hex_edit.get_cursor_pos();
-    
-                                match self.editors.current_mut().hex_edit.get_bytes(cursor_pos, &mut buffer) {
-                                    Ok(n) if n == n_bytes => {
-                                        match from_bytes(&buffer, DataType {fmt, end: self.editors.endianness}) {
-                                            Ok(s) => {
-                                                let mut res = match kwrd {
-                                                    CommandKeyword::Print => ActionResult::empty(),
-                                                    CommandKeyword::PrintSeek => self.editors.current_mut().hex_edit.seek(Seek::FromCurrent(n_bytes as i64)),
-                                                    _ => return (CommandInstruction::NoOp, ActionResult::error("Impossible state".to_string()))
-                                                };
-                                                res.set_info(s);
-                                                (CommandInstruction::NoOp, res)
-                                            },
-                                            Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg))
-                                        }
-                                    },
-                                    Ok(_) => (CommandInstruction::NoOp, ActionResult::error("Not enough bytes for datatype".to_string())),
-                                    Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
-                                }
-                            },
-                            _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
-                        }
-                    },
-                    3 => {
-                        match &tokens[0] {
-                            CommandToken::Keyword(CommandKeyword::Set) => { // :set [] []
-                                match (&tokens[1], &tokens[2]) {
-                                    (CommandToken::Keyword(CommandKeyword::Caps), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::On | CommandKeyword::Off) => {
-                                        self.editors.caps = matches!(kwrd, CommandKeyword::On);
-                                        (CommandInstruction::NoOp, self.editors.apply(|h| h.set_capitalize_hex(matches!(kwrd, CommandKeyword::On))))
-                                    },
-                                    (CommandToken::Keyword(CommandKeyword::Hex), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::On | CommandKeyword::Off) => {
-                                        self.editors.show_hex = matches!(kwrd, CommandKeyword::On);
-                                        (CommandInstruction::NoOp, self.editors.apply(|h| h.set_show_hex(matches!(kwrd, CommandKeyword::On))))
-                                    },
-                                    (CommandToken::Keyword(CommandKeyword::Ascii), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::On | CommandKeyword::Off) => {
-                                        self.editors.show_ascii = matches!(kwrd, CommandKeyword::On);
-                                        (CommandInstruction::NoOp, self.editors.apply(|h| h.set_show_ascii(matches!(kwrd, CommandKeyword::On))))
-                                    },
-                                    (CommandToken::Keyword(CommandKeyword::Filename), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::On | CommandKeyword::Off) => {
-                                        self.editors.show_filename = matches!(kwrd, CommandKeyword::On);
-                                        (CommandInstruction::NoOp, self.editors.apply(|h| h.set_show_filename(matches!(kwrd, CommandKeyword::On))))
-                                    },
-                                    (CommandToken::Keyword(CommandKeyword::Icase), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::On | CommandKeyword::Off) => {
-                                        (CommandInstruction::NoOp, self.editors.apply(|h| h.set_ignore_case(matches!(kwrd, CommandKeyword::On))))
-                                    },
-                                    (CommandToken::Keyword(CommandKeyword::Regex), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::On | CommandKeyword::Off) => {
-                                        (CommandInstruction::NoOp, self.editors.apply(|h| h.set_use_regex(matches!(kwrd, CommandKeyword::On))))
-                                    },
-                                    (CommandToken::Keyword(CommandKeyword::LNum), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::Off | CommandKeyword::Hex | CommandKeyword::Dec) => {
-                                        (CommandInstruction::NoOp, self.editors.apply(|h| h.set_show_lnum(match kwrd {
-                                            CommandKeyword::Off => ShowType::Off,
-                                            CommandKeyword::Dec => ShowType::Dec,
-                                            _ => ShowType::Hex,
-                                        })))
-                                    },
-                                    (CommandToken::Keyword(CommandKeyword::CNum), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::Off | CommandKeyword::Hex | CommandKeyword::Dec) => {
-                                        self.editors.cnum = match kwrd {
-                                            CommandKeyword::Off => ShowType::Off,
-                                            CommandKeyword::Dec => ShowType::Dec,
-                                            _ => ShowType::Hex,
-                                        };
-                                        (CommandInstruction::NoOp, ActionResult::empty())
-                                    },
-                                    (CommandToken::Keyword(CommandKeyword::Endian), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::BigEndian | CommandKeyword::LittleEndian | CommandKeyword::NetworkEndian) => {
-                                        self.editors.endianness = match kwrd {
-                                            CommandKeyword::BigEndian => Endianness::Big,
-                                            CommandKeyword::LittleEndian => Endianness::Little,
-                                            CommandKeyword::NetworkEndian => Endianness::Network,
-                                            _ => return (CommandInstruction::NoOp, ActionResult::error("Impossible state".to_string()))
-                                        };
-                                        (CommandInstruction::NoOp, ActionResult::empty())
-                                    },
-                                    (CommandToken::Keyword(CommandKeyword::Line), CommandToken::Integer(_, n)) => {
-                                        (CommandInstruction::NoOp, self.editors.apply(|h| h.set_line_length(*n as u8)))
-                                    },
-                                    (CommandToken::Keyword(CommandKeyword::Chunk), CommandToken::Integer(_, n)) => {
-                                        (CommandInstruction::NoOp, self.editors.apply(|h| h.set_block_size(*n)))
-                                    },
-                                    (CommandToken::Keyword(CommandKeyword::CLevel), CommandToken::Integer(_, n)) => { // TODO: Need this to work for saving gz files as well
-                                        if *n >= 10 {
-                                            (CommandInstruction::NoOp, ActionResult::error("Compression level must be 0-9".to_string()))
-                                        } else {
-                                            self.editors.clevel = *n as u8;
-                                            (CommandInstruction::NoOp, ActionResult::empty())
-                                        }
-                                    },
-                                    (CommandToken::Keyword(CommandKeyword::Undo), CommandToken::Integer(_, n)) => {
-                                        for hm in self.editors.editors.iter_mut() {
-                                            hm.action_stack.set_length(*n);
-                                        }
-                                        (CommandInstruction::NoOp, ActionResult::empty())
-                                    },
-                                    (CommandToken::Keyword(CommandKeyword::Syntax), CommandToken::Word(word)) => {
-                                        let syntax: String = word.into_iter().collect();
-                                        (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.set_syntax(Some(syntax)))
-                                    },
-                                    (CommandToken::Keyword(CommandKeyword::Syntax), CommandToken::Keyword(CommandKeyword::Off)) => {
-                                        (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.set_syntax(None))
-                                    },
-                                    (CommandToken::Keyword(CommandKeyword::Fill), CommandToken::Register(reg_id)) => {
-                                        let fill = FullFillType::Register(*reg_id);
-                                        let fill = fill.convert(&self.editors.clipboard_registers);
-                                        (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.set_fill(fill))
-                                    },
-                                    (CommandToken::Keyword(CommandKeyword::Fill), CommandToken::Word(word)) => {
-                                        match parse_bytes(word) {
-                                            Ok(v) => (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.set_fill(FillType::Bytes(BitField::from_vec(v)))),
-                                            Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg))
-                                        }
-                                    },
-                                    _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
-                                }
-                            },
-                            CommandToken::Keyword(CommandKeyword::Cat) => { // :cat [] []
-                                match (&tokens[1], &tokens[2]) {
-                                    (CommandToken::Register(FullRegisterId::Lower(reg_id1)), CommandToken::Register(reg_id2)) => {
-                                        let fill = FullFillType::Register(*reg_id2).convert(&self.editors.clipboard_registers);
-                                        (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.concatenate_register(*reg_id1, fill))
-                                    },
-                                    (CommandToken::Register(FullRegisterId::Upper(reg_id1)), CommandToken::Register(reg_id2)) => {
-                                        // let bf = reg_id2.get_bitfield(
-                                        //     &self.editors.current().hex_edit.clipboard_registers, 
-                                        //     &self.editors.clipboard_registers
-                                        // ).clone();
-                                        let bf = self.editors.borrow_register(*reg_id2).clone();
-                                        self.editors.clipboard_registers[*reg_id1].extend(&bf);
-                                        (CommandInstruction::NoOp, ActionResult::empty())
-                                    },
-                                    (CommandToken::Register(FullRegisterId::Lower(reg_id)), CommandToken::Word(word)) => {
-                                        match parse_bytes(word) {
-                                            Ok(v) => {
-                                                (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.concatenate_register(*reg_id, FillType::Bytes(BitField::from_vec(v))))
-                                            },
-                                            Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg))
-                                        }
-                                    },
-                                    (CommandToken::Register(FullRegisterId::Upper(reg_id)), CommandToken::Word(word)) => {
-                                        match parse_bytes(word) {
-                                            Ok(v) => {
-                                                self.editors.clipboard_registers[*reg_id].extend(&BitField::from_vec(v));
-                                                (CommandInstruction::NoOp, ActionResult::empty())
-                                            },
-                                            Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg))
-                                        }
-                                    },
-                                    _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
-                                }
-                            },
-                            CommandToken::Keyword(kwrd) if matches!(kwrd, CommandKeyword::And | CommandKeyword::Or | CommandKeyword::Nand | CommandKeyword::Nor | CommandKeyword::Xor | CommandKeyword::Xnor) => { // :and [] []
-                                let op = match kwrd {
-                                    CommandKeyword::And => ByteOperation::And,
-                                    CommandKeyword::Or => ByteOperation::Or,
-                                    CommandKeyword::Nand => ByteOperation::Nand,
-                                    CommandKeyword::Nor => ByteOperation::Nor,
-                                    CommandKeyword::Xor => ByteOperation::Xor,
-                                    CommandKeyword::Xnor => ByteOperation::Xnor,
-                                    _ => return (CommandInstruction::NoOp, ActionResult::error("Impossible state".to_string()))
-                                };
-                                match (&tokens[1], &tokens[2]) {
-                                    (CommandToken::Register(FullRegisterId::Lower(reg_id1)), CommandToken::Register(reg_id2)) => {
-                                        let fill = FullFillType::Register(*reg_id2).convert(&self.editors.clipboard_registers);
-                                        (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.manipulate_register(*reg_id1, fill, op))
-                                    },
-                                    (CommandToken::Register(FullRegisterId::Upper(reg_id1)), CommandToken::Register(reg_id2)) => {
-                                        let fill = self.editors.borrow_register(*reg_id2).clone();
-                                        self.editors.clipboard_registers[*reg_id1] = op.apply(&self.editors.clipboard_registers[*reg_id1], &fill);
-                                        (CommandInstruction::NoOp, ActionResult::empty())
-                                    },
-                                    (CommandToken::Register(FullRegisterId::Lower(reg_id)), CommandToken::Word(word)) => {
-                                        match parse_bytes(word) {
-                                            Ok(v) => {
-                                                (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.manipulate_register(*reg_id, FillType::Bytes(BitField::from_vec(v)), op))
-                                            },
-                                            Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg))
-                                        }
-                                    },
-                                    (CommandToken::Register(FullRegisterId::Upper(reg_id)), CommandToken::Word(word)) => {
-                                        match parse_bytes(word) {
-                                            Ok(v) => {
-                                                let mut fill = BitField::from_vec(v);
-                                                self.editors.clipboard_registers[*reg_id] = op.apply(&self.editors.clipboard_registers[*reg_id], &fill);
-                                                (CommandInstruction::NoOp, ActionResult::empty())
-                                            },
-                                            Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg))
-                                        }
-                                    },
-                                    _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
-                                }
-                            },
-                            CommandToken::Keyword(kwrd) if matches!(kwrd, CommandKeyword::Ins | CommandKeyword::Ovr) => { // :ins | ovr [] []
-                                // let hm = &mut editor_stack.editors[editor_stack.current];
-                                let input = match &tokens[2] {
-                                    CommandToken::Integer(word, _) => word,
-                                    CommandToken::Word(word) => word,
-                                    _ => return (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
-                                };
-    
-                                let fmt = match &tokens[1] {
-                                    CommandToken::Keyword(fmt_kwrd) => {
-                                        match command_kwrd_to_fmt(fmt_kwrd) {
-                                            Ok(f) => f,
-                                            _ => return (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
-                                        }
-                                    },
-                                    _ => return (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
-                                };
-    
-    
-                                match to_bytes(input, DataType {fmt, end: self.editors.endianness}){
-                                    Ok(bytes) => {
-                                        match kwrd {
-                                            CommandKeyword::Ins => (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.insert(DataSource::Bytes(bytes.to_vec()))),
-                                            CommandKeyword::Ovr => (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.overwrite(DataSource::Bytes(bytes.to_vec()))),
-                                            _ => (CommandInstruction::NoOp, ActionResult::error("Impossible state".to_string()))
-                                        }
-                                    },
-                                    Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg))
-                                }
-                            
-                            },
-                            CommandToken::Keyword(CommandKeyword::RShift | CommandKeyword::LShift) => { // :rshft | lshft [] []
-                                match (&tokens[1], &tokens[2]) {
-                                    (CommandToken::Register(register), CommandToken::Integer(_, n)) => {
-                                        let shift = match &tokens[0] {
-                                            CommandToken::Keyword(CommandKeyword::RShift) => *n as i8,
-                                            CommandToken::Keyword(CommandKeyword::LShift) => -(*n as i8),
-                                            _ => return (CommandInstruction::NoOp, ActionResult::error("Impossible state".to_string()))
-                                        };
-
-                                        match register {
-                                            FullRegisterId::Lower(reg_id) => {
-                                                (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.shift_register(*reg_id, shift))
-                                            },
-                                            FullRegisterId::Upper(reg_id) => {
-                                                if shift < 0 { // TODO: use 'take' here
-                                                    self.editors.clipboard_registers[*reg_id] = self.editors.clipboard_registers[*reg_id].clone() << (shift.abs() as usize);
-                                                } else {
-                                                    self.editors.clipboard_registers[*reg_id] = self.editors.clipboard_registers[*reg_id].clone() >> (shift as usize);
-                                                }
-                                                (CommandInstruction::NoOp, ActionResult::empty())
-                                            }
-                                        }
-                                    },
-                                    _ => return (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
-                                }
-                            },
-                            _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
-                        }
-                    },
-                    4 => {
-                        match (&tokens[0], &tokens[1], &tokens[2], &tokens[3]) {
-                            (CommandToken::Keyword(CommandKeyword::Slice), CommandToken::Register(FullRegisterId::Lower(reg_id)), 
-                                    CommandToken::Integer(_, n1), CommandToken::Integer(_, n2)) => {
-                                (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.slice_register(*reg_id, BitIndex::bytes(*n1), BitIndex::bytes(*n2)))
-                            },
-                            (CommandToken::Keyword(CommandKeyword::Slice), CommandToken::Register(FullRegisterId::Upper(reg_id)), 
-                                    CommandToken::Integer(_, n1), CommandToken::Integer(_, n2)) => {
-                                if BitIndex::bytes(*n2) > self.editors.clipboard_registers[*reg_id].len() {
-                                    (CommandInstruction::NoOp, ActionResult::error("Slice index outside of register contents bounds".to_string()))
-                                } else if *n1 > *n2 {
-                                    (CommandInstruction::NoOp, ActionResult::error("Slice start index greater than slice end index".to_string()))
-                                } else {
-                                    // let temp = &self.editors.clipboard_registers[*register - 32][*n1..*n2];
-                                    // self.editors.clipboard_registers[*register - 32] = temp.to_vec();
-                                    let temp = self.editors.clipboard_registers[*reg_id].slice_be(&BitIndex::bytes(*n1), &BitIndex::bytes(*n2));
-                                    self.editors.clipboard_registers[*reg_id] = temp;
-                                    (CommandInstruction::NoOp, ActionResult::empty())
-                                }
-                            },
-                            _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
-                        }
+                } else if quit {
+                    if !forced && self.editors.current().hex_edit.is_modified() {
+                        (CommandInstruction::NoOp, ActionResult::error("File has unsaved changes".to_string()))
+                    } else {
+                        (CommandInstruction::Exit, ActionResult::empty())
                     }
-                    _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
+                } else {
+                    panic!("Save and/or quit command received with no operations");
+                    (CommandInstruction::NoOp, ActionResult::empty())
                 }
             },
-            // FIND IN FILE
-            '/' => {
-                // let hm = &mut editor_stack.editors[editor_stack.current];
-                let mut res = self.editors.current_mut().hex_edit.clear_find();
-                res = res.combine(self.editors.current_mut().hex_edit.find(&command[1..].to_vec(), FindDirection::Forward));
-                (CommandInstruction::NoOp, res.combine(self.editors.current_mut().hex_edit.seek_find_result(false)))
+            Command::Manual => {
+                (CommandInstruction::ChangeState(EditState::Manual), ActionResult::empty())
             },
-            '?' => {
-                // let hm = &mut editor_stack.editors[editor_stack.current];
-                let mut res = self.editors.current_mut().hex_edit.clear_find();
-                res = res.combine(self.editors.current_mut().hex_edit.find(&command[1..].to_vec(), FindDirection::Backward));
-                (CommandInstruction::NoOp, res.combine(self.editors.current_mut().hex_edit.seek_find_result(false)))
+            Command::Refresh => {
+                (CommandInstruction::Refresh, ActionResult::empty())
             },
-            '\\' => {
-                let mut word = command[1..].to_vec();
-                word.insert(0, 'x');
-                match parse_bytes(&word) {
-                    Ok(v) => {
-                        // let hm = &mut editor_stack.editors[editor_stack.current];
-                        let mut res = self.editors.current_mut().hex_edit.clear_find();
-                        res = res.combine(self.editors.current_mut().hex_edit.find_bytes(&v, FindDirection::Forward));
-                        (CommandInstruction::NoOp, res.combine(self.editors.current_mut().hex_edit.seek_find_result(false)))
+            Command::Step => {
+                let (fm, file_map) = self.editors.current_mut().hex_edit.assemble().unwrap();
+                (CommandInstruction::NewEditor(fm, Some(file_map)), ActionResult::empty())
+            },
+            Command::ClearUndo => {
+                self.editors.current_mut().action_stack.clear();
+                (CommandInstruction::NoOp, ActionResult::empty())
+            },
+            Command::Open{path} => {
+                (CommandInstruction::Open(path), ActionResult::empty())
+            },
+            Command::UnaryRegisterOp{op, reg: FullRegisterId::Lower(reg_id)} => {
+                match op {
+                    UnaryRegisterOp::Swap => {
+                        (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.swap_register(reg_id))
+                    },
+                    UnaryRegisterOp::Not => {
+                        (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.invert_register(reg_id))
+                    },
+                    UnaryRegisterOp::Inflate => {
+                        (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.inflate_register(reg_id)) // TODO: Make level variable
+                    },
+                    UnaryRegisterOp::Deflate => {
+                        let clevel = self.editors.clevel;
+                        (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.deflate_register(reg_id, clevel))
+                    },
+                    UnaryRegisterOp::Shift{bits} => {
+                        (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.shift_register(reg_id, bits as i8))
+                    },
+                    UnaryRegisterOp::Slice{start, stop} => {
+                        (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.slice_register(reg_id, start, stop))
+                    },
+                    UnaryRegisterOp::Clear => {
+                        (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.set_register(reg_id, &BitField::default()))
+                    }
+                }
+            },
+            Command::UnaryRegisterOp{op, reg: FullRegisterId::Upper(reg_id)} => {
+                match op {
+                    UnaryRegisterOp::Swap => {
+                        self.editors.clipboard_registers[reg_id].swap_be_to_le();
+                        (CommandInstruction::NoOp, ActionResult::empty())
+                    },
+                    UnaryRegisterOp::Not => {
+                        self.editors.clipboard_registers[reg_id] = !&self.editors.clipboard_registers[reg_id];
+                        (CommandInstruction::NoOp, ActionResult::empty())
+                    },
+                    UnaryRegisterOp::Inflate => {
+                        let mut e = DeflateDecoder::new(Vec::new());
+                        // TODO: Make this work for non byte-aligned registers
+                        let buff = self.editors.clipboard_registers[reg_id].clone().into_boxed_slice().unwrap().to_vec();
+                        if let Err(msg) = e.write_all(&buff) {
+                            (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
+                        } else {
+                            match e.finish() {
+                                Ok(w) => {
+                                    self.editors.clipboard_registers[reg_id] = BitField::from_vec(w);
+                                    (CommandInstruction::NoOp, ActionResult::empty())
+                                },
+                                Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
+                            }
+                        }
+                    },
+                    UnaryRegisterOp::Deflate => {
+                        let mut e = DeflateEncoder::new(Vec::new(), Compression::new(self.editors.clevel as u32));
+                        // TODO: Make this work for non byte-aligned registers
+                        let buff = self.editors.clipboard_registers[reg_id].clone().into_boxed_slice().unwrap().to_vec();
+                        if let Err(msg) = e.write_all(&buff) {
+                            (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
+                        } else {
+                            match e.finish() {
+                                Ok(w) => {
+                                    self.editors.clipboard_registers[reg_id] = BitField::from_vec(w);
+                                    (CommandInstruction::NoOp, ActionResult::empty())
+                                },
+                                Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
+                            }
+                        }
+                    },
+                    UnaryRegisterOp::Shift{bits} => {
+                        if bits < 0 { // TODO: use 'take' here
+                            self.editors.clipboard_registers[reg_id] = self.editors.clipboard_registers[reg_id].clone() << (bits.abs() as usize);
+                        } else {
+                            self.editors.clipboard_registers[reg_id] = self.editors.clipboard_registers[reg_id].clone() >> (bits as usize);
+                        }
+                        (CommandInstruction::NoOp, ActionResult::empty())
+                    },
+                    UnaryRegisterOp::Slice{start, stop} => {
+                        if stop > self.editors.clipboard_registers[reg_id].len() {
+                            (CommandInstruction::NoOp, ActionResult::error("Slice index outside of register contents bounds".to_string()))
+                        } else if start > stop {
+                            (CommandInstruction::NoOp, ActionResult::error("Slice start index greater than slice end index".to_string()))
+                        } else {
+                            // let temp = &self.editors.clipboard_registers[*register - 32][*n1..*n2];
+                            // self.editors.clipboard_registers[*register - 32] = temp.to_vec();
+                            let temp = self.editors.clipboard_registers[reg_id].slice_be(&start, &stop);
+                            self.editors.clipboard_registers[reg_id] = temp;
+                            (CommandInstruction::NoOp, ActionResult::empty())
+                        }
+                    },
+                    UnaryRegisterOp::Clear => {
+                        self.editors.clipboard_registers[reg_id] = BitField::default();
+                        (CommandInstruction::NoOp, ActionResult::empty())
+                    }
+                }
+            },
+            Command::BinaryRegisterOp{op, reg: FullRegisterId::Lower(reg), other} => {
+                let fill = other.convert(&self.editors.clipboard_registers);
+                match op {
+                    BinaryRegisterOp::Cat => {
+                        (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.concatenate_register(reg, fill))
+                    },
+                    BinaryRegisterOp::LogicOp(op) => {
+                        (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.manipulate_register(reg, fill, op))
+                    }
+                }
+            },
+            Command::BinaryRegisterOp{op, reg: FullRegisterId::Upper(reg), other} => {
+                match op {
+                    BinaryRegisterOp::Cat => {
+                        match &other {
+                            FullFillType::Bytes(bf) => {
+                                self.editors.clipboard_registers[reg].extend(bf);
+                                (CommandInstruction::NoOp, ActionResult::empty())
+                            },
+                            FullFillType::Register(reg2) => {
+                                let bf = self.editors.borrow_register(*reg2).clone();
+                                self.editors.clipboard_registers[reg].extend(&bf);
+                                (CommandInstruction::NoOp, ActionResult::empty())
+                            }
+                        }
+                    },
+                    BinaryRegisterOp::LogicOp(op) => {
+                        match &other {
+                            FullFillType::Bytes(bf) => {
+                                self.editors.clipboard_registers[reg] = op.apply(&self.editors.clipboard_registers[reg], bf);
+                                (CommandInstruction::NoOp, ActionResult::empty())
+                            },
+                            FullFillType::Register(reg2) => {
+                                let fill = self.editors.borrow_register(*reg2).clone();
+                                self.editors.clipboard_registers[reg] = op.apply(&self.editors.clipboard_registers[reg], &fill);
+                                (CommandInstruction::NoOp, ActionResult::empty())
+                            }
+                        }
+                        
+                    }
+                }
+            },
+            Command::Insert{value, fmt, overwrite} => {
+                match to_bytes(&value.chars().collect(), DataType {fmt, end: self.editors.endianness}){
+                    Ok(bytes) => {
+                        if overwrite {
+                            (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.overwrite(DataSource::Bytes(bytes.to_vec())))
+                        } else {
+                            (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.insert(DataSource::Bytes(bytes.to_vec())))
+                        }
                     },
                     Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg))
                 }
-            }
-            _ => (CommandInstruction::NoOp, ActionResult::error("Command not recognized".to_string()))
-        }
+            },
+            Command::Print{fmt, seek} => {
+                let n_bytes = fmt_length(&fmt);
     
-        //Ok(())
+                let mut buffer = vec![0; n_bytes];
+
+                let cursor_pos = self.editors.current().hex_edit.get_cursor_pos();
+
+                match self.editors.current_mut().hex_edit.get_bytes(cursor_pos, &mut buffer) {
+                    Ok(n) if n == n_bytes => {
+                        match from_bytes(&buffer, DataType {fmt, end: self.editors.endianness}) {
+                            Ok(s) => {
+                                let mut res = if seek {
+                                    self.editors.current_mut().hex_edit.seek(Seek::FromCurrent(n_bytes as i64))
+                                } else {
+                                    ActionResult::empty()
+                                };
+                                res.set_info(s);
+                                (CommandInstruction::NoOp, res)
+                            },
+                            Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg))
+                        }
+                    },
+                    Ok(_) => (CommandInstruction::NoOp, ActionResult::error("Not enough bytes for datatype".to_string())),
+                    Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
+                }
+            },
+            Command::SetFill{fill} => {
+                let fill = fill.convert(&self.editors.clipboard_registers);
+                (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.set_fill(fill))
+            },
+            Command::SetOnOff{setting, value} => {
+                match setting {
+                    OnOffSetting::Caps => {
+                        self.editors.caps = value;
+                        (CommandInstruction::NoOp, self.editors.apply(|h| h.set_capitalize_hex(value)))
+                    },
+                    OnOffSetting::Hex => {
+                        self.editors.show_hex = value;
+                        (CommandInstruction::NoOp, self.editors.apply(|h| h.set_show_hex(value)))
+                    },
+                    OnOffSetting::Ascii => {
+                        self.editors.show_ascii = value;
+                        (CommandInstruction::NoOp, self.editors.apply(|h| h.set_show_ascii(value)))
+                    },
+                    OnOffSetting::Filename => {
+                        self.editors.show_filename = value;
+                        (CommandInstruction::NoOp, self.editors.apply(|h| h.set_show_filename(value)))
+                    },
+                    OnOffSetting::Icase => {
+                        (CommandInstruction::NoOp, self.editors.apply(|h| h.set_ignore_case(value)))
+                    },
+                    OnOffSetting::Regex => {
+                        (CommandInstruction::NoOp, self.editors.apply(|h| h.set_use_regex(value)))
+                    }
+                }
+            },
+            Command::SetDecHexOff{setting, value} => {
+                match setting {
+                    DecHexOffSetting::CNum => {
+                        self.editors.cnum = value;
+                        (CommandInstruction::NoOp, ActionResult::empty())
+                    },
+                    DecHexOffSetting::LNum => {
+                        (CommandInstruction::NoOp, self.editors.apply(|h| h.set_show_lnum(value)))
+                    }
+                }
+                
+            },
+            Command::SetEndian{value} => {
+                self.editors.endianness = value;
+                (CommandInstruction::NoOp, ActionResult::empty())
+            },
+            Command::SetUInt{setting, value} => {
+                match setting {
+                    UIntSetting::Line => {
+                        (CommandInstruction::NoOp, self.editors.apply(|h| h.set_line_length(value as u8)))
+                    },
+                    UIntSetting::Chunk => {
+                        (CommandInstruction::NoOp, self.editors.apply(|h| h.set_block_size(value)))
+                    },
+                    UIntSetting::CLevel => {
+                        if value >= 10 {
+                            (CommandInstruction::NoOp, ActionResult::error("Compression level must be 0-9".to_string()))
+                        } else {
+                            self.editors.clevel = value as u8;
+                            (CommandInstruction::NoOp, ActionResult::empty())
+                        }
+                    },
+                    UIntSetting::Undo => {
+                        for hm in self.editors.editors.iter_mut() {
+                            hm.action_stack.set_length(value);
+                        }
+                        (CommandInstruction::NoOp, ActionResult::empty())
+                    }
+                }
+            },
+            Command::SetSyntax{value} => {
+                (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.set_syntax(value))
+            },
+            Command::Find{expr, binary, direction} => {
+                let mut res = self.editors.current_mut().hex_edit.clear_find();
+                if binary {
+                    let mut word = expr.to_vec();
+                    word.insert(0, 'x');
+                    match parse_bytes(&word) {
+                        Ok(v) => {
+                            res = res.combine(self.editors.current_mut().hex_edit.find_bytes(&v, direction));
+                        },
+                        Err(msg) => return (CommandInstruction::NoOp, ActionResult::error(msg))
+                    }
+                } else {
+                    res = res.combine(self.editors.current_mut().hex_edit.find(&expr.to_vec(), direction));
+                }
+                
+                (CommandInstruction::NoOp, res.combine(self.editors.current_mut().hex_edit.seek_find_result(false)))
+            }
+        }
     }
 
     fn execute_keystroke(&mut self, keystroke: KeystrokeCommand) -> ActionResult {
@@ -1123,9 +965,15 @@ impl App {
                         self.command_history.push(self.line_entry.get_text());
                         self.command_history_index = self.command_history.len();
 
-                        let (instr, result) = self.execute_command(self.line_entry.get_text());
+                        let (instr, result) = match parse_command(&self.line_entry.get_text()) {
+                            Ok(command) => self.execute_command(command),
+                            Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg))
+                        };
+                            
 
+                        // self.execute_command(self.line_entry.get_text());
                         self.handle_action_result(&mut window, result);
+
 
                         self.line_entry.clear();
                         if let Some(window) = &mut window {
@@ -1257,14 +1105,14 @@ impl App {
             let length = self.editors.current().hex_edit.len();
             let caps_hex = self.editors.current().hex_edit.get_capitalize_hex();
             let cursor_label_len = match self.editors.cnum {
-                ShowType::Off => 0,
-                ShowType::Dec => format!("{}", length).len(),
-                ShowType::Hex => format!("{:x}", length).len()
+                DecHexOff::Off => 0,
+                DecHexOff::Dec => format!("{}", length).len(),
+                DecHexOff::Hex => format!("{:x}", length).len()
             };
             let cursor_index_string = match self.editors.cnum {
-                ShowType::Off => "".to_string(),
-                ShowType::Dec => format!("{:0width$}", pos, width=cursor_label_len),
-                ShowType::Hex => match caps_hex {
+                DecHexOff::Off => "".to_string(),
+                DecHexOff::Dec => format!("{:0width$}", pos, width=cursor_label_len),
+                DecHexOff::Hex => match caps_hex {
                     true => format!("{:0width$x}", pos, width=cursor_label_len).to_ascii_uppercase(),
                     false => format!("{:0width$x}", pos, width=cursor_label_len)
                 }
