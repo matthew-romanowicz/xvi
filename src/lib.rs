@@ -490,94 +490,95 @@ impl App {
     }
 
     fn execute_command(&mut self, command: Command) -> (CommandInstruction, ActionResult) {
+
+        let mut ci = CommandInstruction::NoOp;
+        let mut res = ActionResult::empty();
+
         match command {
             Command::SaveAndOrQuit{save, quit, forced} => {
                 if save {
                     let result = self.editors.current_mut().hex_edit.save();
                     if let Some(err) = result.alert {
-                        (CommandInstruction::NoOp, ActionResult::error(err.to_string()))
+                        res = ActionResult::error(err.to_string());
                     } else if quit {
-                        (CommandInstruction::Exit, ActionResult::empty())
+                        ci = CommandInstruction::Exit;
                     } else {
-                        (CommandInstruction::NoOp, ActionResult::empty())
+                        // Use defualt ci and res
                     }
                 } else if quit {
                     if !forced && self.editors.current().hex_edit.is_modified() {
-                        (CommandInstruction::NoOp, ActionResult::error("File has unsaved changes".to_string()))
+                        res = ActionResult::error("File has unsaved changes".to_string());
                     } else {
-                        (CommandInstruction::Exit, ActionResult::empty())
+                        ci = CommandInstruction::Exit;
                     }
                 } else {
                     panic!("Save and/or quit command received with no operations");
-                    (CommandInstruction::NoOp, ActionResult::empty())
                 }
             },
             Command::Manual => {
-                (CommandInstruction::ChangeState(EditState::Manual), ActionResult::empty())
+                ci = CommandInstruction::ChangeState(EditState::Manual);
             },
             Command::Refresh => {
-                (CommandInstruction::Refresh, ActionResult::empty())
+                ci = CommandInstruction::Refresh;
             },
             Command::Step => {
                 let (fm, file_map) = self.editors.current_mut().hex_edit.assemble().unwrap();
-                (CommandInstruction::NewEditor(fm, Some(file_map)), ActionResult::empty())
+                ci = CommandInstruction::NewEditor(fm, Some(file_map));
             },
             Command::ClearUndo => {
                 self.editors.current_mut().action_stack.clear();
-                (CommandInstruction::NoOp, ActionResult::empty())
             },
             Command::Open{path} => {
-                (CommandInstruction::Open(path), ActionResult::empty())
+                ci = CommandInstruction::Open(path);
             },
             Command::UnaryRegisterOp{op, reg: FullRegisterId::Lower(reg_id)} => {
-                match op {
+                res = match op {
                     UnaryRegisterOp::Swap => {
-                        (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.swap_register(reg_id))
+                        self.editors.current_mut().hex_edit.swap_register(reg_id)
                     },
                     UnaryRegisterOp::Not => {
-                        (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.invert_register(reg_id))
+                        self.editors.current_mut().hex_edit.invert_register(reg_id)
                     },
                     UnaryRegisterOp::Inflate => {
-                        (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.inflate_register(reg_id)) // TODO: Make level variable
+                        self.editors.current_mut().hex_edit.inflate_register(reg_id) // TODO: Make level variable
                     },
                     UnaryRegisterOp::Deflate => {
                         let clevel = self.editors.clevel;
-                        (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.deflate_register(reg_id, clevel))
+                        self.editors.current_mut().hex_edit.deflate_register(reg_id, clevel)
                     },
                     UnaryRegisterOp::Shift{bits} => {
-                        (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.shift_register(reg_id, bits as i8))
+                        self.editors.current_mut().hex_edit.shift_register(reg_id, bits as i8)
                     },
                     UnaryRegisterOp::Slice{start, stop} => {
-                        (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.slice_register(reg_id, start, stop))
+                        self.editors.current_mut().hex_edit.slice_register(reg_id, start, stop)
                     },
                     UnaryRegisterOp::Clear => {
-                        (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.set_register(reg_id, &BitField::default()))
+                        self.editors.current_mut().hex_edit.set_register(reg_id, &BitField::default())
                     }
-                }
+                };
             },
             Command::UnaryRegisterOp{op, reg: FullRegisterId::Upper(reg_id)} => {
                 match op {
                     UnaryRegisterOp::Swap => {
                         self.editors.clipboard_registers[reg_id].swap_be_to_le();
-                        (CommandInstruction::NoOp, ActionResult::empty())
                     },
                     UnaryRegisterOp::Not => {
                         self.editors.clipboard_registers[reg_id] = !&self.editors.clipboard_registers[reg_id];
-                        (CommandInstruction::NoOp, ActionResult::empty())
                     },
                     UnaryRegisterOp::Inflate => {
                         let mut e = DeflateDecoder::new(Vec::new());
                         // TODO: Make this work for non byte-aligned registers
                         let buff = self.editors.clipboard_registers[reg_id].clone().into_boxed_slice().unwrap().to_vec();
                         if let Err(msg) = e.write_all(&buff) {
-                            (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
+                            res = ActionResult::error(msg.to_string())
                         } else {
                             match e.finish() {
                                 Ok(w) => {
                                     self.editors.clipboard_registers[reg_id] = BitField::from_vec(w);
-                                    (CommandInstruction::NoOp, ActionResult::empty())
                                 },
-                                Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
+                                Err(msg) => {
+                                    res = ActionResult::error(msg.to_string());
+                                }
                             }
                         }
                     },
@@ -586,14 +587,13 @@ impl App {
                         // TODO: Make this work for non byte-aligned registers
                         let buff = self.editors.clipboard_registers[reg_id].clone().into_boxed_slice().unwrap().to_vec();
                         if let Err(msg) = e.write_all(&buff) {
-                            (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
+                            res = ActionResult::error(msg.to_string())
                         } else {
                             match e.finish() {
                                 Ok(w) => {
                                     self.editors.clipboard_registers[reg_id] = BitField::from_vec(w);
-                                    (CommandInstruction::NoOp, ActionResult::empty())
                                 },
-                                Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
+                                Err(msg) => res = ActionResult::error(msg.to_string())
                             }
                         }
                     },
@@ -603,24 +603,19 @@ impl App {
                         } else {
                             self.editors.clipboard_registers[reg_id] = self.editors.clipboard_registers[reg_id].clone() >> (bits as usize);
                         }
-                        (CommandInstruction::NoOp, ActionResult::empty())
                     },
                     UnaryRegisterOp::Slice{start, stop} => {
                         if stop > self.editors.clipboard_registers[reg_id].len() {
-                            (CommandInstruction::NoOp, ActionResult::error("Slice index outside of register contents bounds".to_string()))
+                            res = ActionResult::error("Slice index outside of register contents bounds".to_string());
                         } else if start > stop {
-                            (CommandInstruction::NoOp, ActionResult::error("Slice start index greater than slice end index".to_string()))
+                            res = ActionResult::error("Slice start index greater than slice end index".to_string());
                         } else {
-                            // let temp = &self.editors.clipboard_registers[*register - 32][*n1..*n2];
-                            // self.editors.clipboard_registers[*register - 32] = temp.to_vec();
                             let temp = self.editors.clipboard_registers[reg_id].slice_be(&start, &stop);
                             self.editors.clipboard_registers[reg_id] = temp;
-                            (CommandInstruction::NoOp, ActionResult::empty())
                         }
                     },
                     UnaryRegisterOp::Clear => {
                         self.editors.clipboard_registers[reg_id] = BitField::default();
-                        (CommandInstruction::NoOp, ActionResult::empty())
                     }
                 }
             },
@@ -628,10 +623,10 @@ impl App {
                 let fill = other.convert(&self.editors.clipboard_registers);
                 match op {
                     BinaryRegisterOp::Cat => {
-                        (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.concatenate_register(reg, fill))
+                        res = self.editors.current_mut().hex_edit.concatenate_register(reg, fill)
                     },
                     BinaryRegisterOp::LogicOp(op) => {
-                        (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.manipulate_register(reg, fill, op))
+                        res = self.editors.current_mut().hex_edit.manipulate_register(reg, fill, op)
                     }
                 }
             },
@@ -641,12 +636,10 @@ impl App {
                         match &other {
                             FullFillType::Bytes(bf) => {
                                 self.editors.clipboard_registers[reg].extend(bf);
-                                (CommandInstruction::NoOp, ActionResult::empty())
                             },
                             FullFillType::Register(reg2) => {
                                 let bf = self.editors.borrow_register(*reg2).clone();
                                 self.editors.clipboard_registers[reg].extend(&bf);
-                                (CommandInstruction::NoOp, ActionResult::empty())
                             }
                         }
                     },
@@ -654,12 +647,10 @@ impl App {
                         match &other {
                             FullFillType::Bytes(bf) => {
                                 self.editors.clipboard_registers[reg] = op.apply(&self.editors.clipboard_registers[reg], bf);
-                                (CommandInstruction::NoOp, ActionResult::empty())
                             },
                             FullFillType::Register(reg2) => {
                                 let fill = self.editors.borrow_register(*reg2).clone();
                                 self.editors.clipboard_registers[reg] = op.apply(&self.editors.clipboard_registers[reg], &fill);
-                                (CommandInstruction::NoOp, ActionResult::empty())
                             }
                         }
                         
@@ -667,16 +658,16 @@ impl App {
                 }
             },
             Command::Insert{value, fmt, overwrite} => {
-                match to_bytes(&value.chars().collect(), DataType {fmt, end: self.editors.endianness}){
+               res = match to_bytes(&value.chars().collect(), DataType {fmt, end: self.editors.endianness}){
                     Ok(bytes) => {
                         if overwrite {
-                            (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.overwrite(DataSource::Bytes(bytes.to_vec())))
+                            self.editors.current_mut().hex_edit.overwrite(DataSource::Bytes(bytes.to_vec()))
                         } else {
-                            (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.insert(DataSource::Bytes(bytes.to_vec())))
+                            self.editors.current_mut().hex_edit.insert(DataSource::Bytes(bytes.to_vec()))
                         }
                     },
-                    Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg))
-                }
+                    Err(msg) => ActionResult::error(msg)
+                };
             },
             Command::Print{fmt, seek} => {
                 let n_bytes = fmt_length(&fmt);
@@ -685,7 +676,7 @@ impl App {
 
                 let cursor_pos = self.editors.current().hex_edit.get_cursor_pos();
 
-                match self.editors.current_mut().hex_edit.get_bytes(cursor_pos, &mut buffer) {
+                res = match self.editors.current_mut().hex_edit.get_bytes(cursor_pos, &mut buffer) {
                     Ok(n) if n == n_bytes => {
                         match from_bytes(&buffer, DataType {fmt, end: self.editors.endianness}) {
                             Ok(s) => {
@@ -695,90 +686,86 @@ impl App {
                                     ActionResult::empty()
                                 };
                                 res.set_info(s);
-                                (CommandInstruction::NoOp, res)
+                                res
                             },
-                            Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg))
+                            Err(msg) => ActionResult::error(msg)
                         }
                     },
-                    Ok(_) => (CommandInstruction::NoOp, ActionResult::error("Not enough bytes for datatype".to_string())),
-                    Err(msg) => (CommandInstruction::NoOp, ActionResult::error(msg.to_string()))
-                }
+                    Ok(_) => ActionResult::error("Not enough bytes for datatype".to_string()),
+                    Err(msg) => ActionResult::error(msg.to_string())
+                };
             },
             Command::SetFill{fill} => {
                 let fill = fill.convert(&self.editors.clipboard_registers);
-                (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.set_fill(fill))
+                res = self.editors.current_mut().hex_edit.set_fill(fill);
             },
             Command::SetOnOff{setting, value} => {
-                match setting {
+                res = match setting {
                     OnOffSetting::Caps => {
                         self.editors.caps = value;
-                        (CommandInstruction::NoOp, self.editors.apply(|h| h.set_capitalize_hex(value)))
+                        self.editors.apply(|h| h.set_capitalize_hex(value))
                     },
                     OnOffSetting::Hex => {
                         self.editors.show_hex = value;
-                        (CommandInstruction::NoOp, self.editors.apply(|h| h.set_show_hex(value)))
+                        self.editors.apply(|h| h.set_show_hex(value))
                     },
                     OnOffSetting::Ascii => {
                         self.editors.show_ascii = value;
-                        (CommandInstruction::NoOp, self.editors.apply(|h| h.set_show_ascii(value)))
+                        self.editors.apply(|h| h.set_show_ascii(value))
                     },
                     OnOffSetting::Filename => {
                         self.editors.show_filename = value;
-                        (CommandInstruction::NoOp, self.editors.apply(|h| h.set_show_filename(value)))
+                        self.editors.apply(|h| h.set_show_filename(value))
                     },
                     OnOffSetting::Icase => {
-                        (CommandInstruction::NoOp, self.editors.apply(|h| h.set_ignore_case(value)))
+                        self.editors.apply(|h| h.set_ignore_case(value))
                     },
                     OnOffSetting::Regex => {
-                        (CommandInstruction::NoOp, self.editors.apply(|h| h.set_use_regex(value)))
+                        self.editors.apply(|h| h.set_use_regex(value))
                     }
-                }
+                };
             },
             Command::SetDecHexOff{setting, value} => {
                 match setting {
                     DecHexOffSetting::CNum => {
                         self.editors.cnum = value;
-                        (CommandInstruction::NoOp, ActionResult::empty())
                     },
                     DecHexOffSetting::LNum => {
-                        (CommandInstruction::NoOp, self.editors.apply(|h| h.set_show_lnum(value)))
+                        res = self.editors.apply(|h| h.set_show_lnum(value));
                     }
                 }
                 
             },
             Command::SetEndian{value} => {
                 self.editors.endianness = value;
-                (CommandInstruction::NoOp, ActionResult::empty())
             },
             Command::SetUInt{setting, value} => {
                 match setting {
                     UIntSetting::Line => {
-                        (CommandInstruction::NoOp, self.editors.apply(|h| h.set_line_length(value as u8)))
+                        res = self.editors.apply(|h| h.set_line_length(value as u8));
                     },
                     UIntSetting::Chunk => {
-                        (CommandInstruction::NoOp, self.editors.apply(|h| h.set_block_size(value)))
+                        res = self.editors.apply(|h| h.set_block_size(value));
                     },
                     UIntSetting::CLevel => {
                         if value >= 10 {
-                            (CommandInstruction::NoOp, ActionResult::error("Compression level must be 0-9".to_string()))
+                            res = ActionResult::error("Compression level must be 0-9".to_string());
                         } else {
                             self.editors.clevel = value as u8;
-                            (CommandInstruction::NoOp, ActionResult::empty())
                         }
                     },
                     UIntSetting::Undo => {
                         for hm in self.editors.editors.iter_mut() {
                             hm.action_stack.set_length(value);
                         }
-                        (CommandInstruction::NoOp, ActionResult::empty())
                     }
                 }
             },
             Command::SetSyntax{value} => {
-                (CommandInstruction::NoOp, self.editors.current_mut().hex_edit.set_syntax(value))
+                res = self.editors.current_mut().hex_edit.set_syntax(value);
             },
             Command::Find{expr, binary, direction} => {
-                let mut res = self.editors.current_mut().hex_edit.clear_find();
+                res = self.editors.current_mut().hex_edit.clear_find();
                 if binary {
                     let mut word = expr.to_vec();
                     word.insert(0, 'x');
@@ -792,9 +779,11 @@ impl App {
                     res = res.combine(self.editors.current_mut().hex_edit.find(&expr.to_vec(), direction));
                 }
                 
-                (CommandInstruction::NoOp, res.combine(self.editors.current_mut().hex_edit.seek_find_result(false)))
+                res = res.combine(self.editors.current_mut().hex_edit.seek_find_result(false))
             }
         }
+
+        (ci, res)
     }
 
     fn execute_keystroke(&mut self, keystroke: KeystrokeCommand) -> ActionResult {
