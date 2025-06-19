@@ -966,6 +966,7 @@ pub struct HexEdit {
     show_filename: bool,
     show_hex: bool,
     show_ascii: bool,
+    show_byte: bool,
     show_lnum: DecHexOff,
     invalid_ascii_char: char,
     eof_ascii_char: char,
@@ -1029,7 +1030,7 @@ pub fn vector_op<F>(buffer1: &mut Vec<u8>, buffer2: &Vec<u8>, op: F) where F: Fn
 impl HexEdit {
 
     pub fn new(mut file_manager: FileManager, x: usize, y: usize, width: usize, height: usize, line_length: u8, show_filename: bool, 
-                show_hex: bool, show_ascii: bool, invalid_ascii_char: char, separator: String, capitalize_hex: bool) -> HexEdit {
+                show_hex: bool, show_ascii: bool, show_byte: bool, invalid_ascii_char: char, separator: String, capitalize_hex: bool) -> HexEdit {
 
         // let fs = PngFileSpec::new(&mut file_manager);
         // let png_struct = make_png();
@@ -1045,6 +1046,7 @@ impl HexEdit {
             show_filename,
             show_hex,
             show_ascii,
+            show_byte,
             show_lnum: DecHexOff::Hex,
             invalid_ascii_char,
             eof_ascii_char: '~',
@@ -1115,6 +1117,11 @@ impl HexEdit {
 
     pub fn set_show_hex(&mut self, show_hex: bool) -> ActionResult {
         self.show_hex = show_hex;
+        ActionResult::no_error(UpdateDescription::All)
+    }
+
+    pub fn set_show_byte(&mut self, show_byte: bool) -> ActionResult {
+        self.show_byte = show_byte;
         ActionResult::no_error(UpdateDescription::All)
     }
 
@@ -1839,11 +1846,19 @@ impl HexEdit {
         //self.refresh_viewport()
     }
 
+    pub fn byte_display_height(&self) -> usize {
+        if self.show_byte {
+            8
+        } else {
+            0
+        }
+    }
+
     pub fn content_height(&self) -> usize {
         if self.show_filename {
-            self.height - 1
+            self.height - 1 - self.byte_display_height()
         } else {
-            self.height
+            self.height - self.byte_display_height()
         }
     }
 
@@ -2052,12 +2067,12 @@ impl HexEdit {
 
     }
 
-    fn update_syntax_highlight(&mut self) -> Option<String> {
+    fn get_field_data(&mut self, pos: BitIndex) -> (Option<(std::ops::Range<BitIndex>, bool)>, Option<String>, Vec<std::ops::Range<BitIndex>>) {
         self.related_fields.clear();
         if let Some(ref mut fs) = &mut self.file_spec {
             // self.current_field = fs.field_at(self.cursor_pos, &mut self.file_manager);
-            if self.cursor_pos < self.file_manager.len() {
-                let region = fs.region_at(BitIndex::bytes(self.cursor_pos), &mut self.file_manager).unwrap();
+            if pos < BitIndex::bytes(self.file_manager.len()) {
+                let region = fs.region_at(pos, &mut self.file_manager).unwrap();
 
                 match region {
                     FileRegion::Field(field_id) => {
@@ -2065,10 +2080,11 @@ impl HexEdit {
                         let s_name = fs.structure_name(field_id.structure.clone());
                         let field = fs.get_field(field_id.clone(), &mut self.file_manager).unwrap();
                         let field_valid = fs.get_field_valid(field_id.clone(), &mut self.file_manager).unwrap();
-                        self.current_field = Some((field.start..(field.start + field.span), field_valid));
+                        let current_field = Some((field.start..(field.start + field.span), field_valid));
+                        let mut related_fields = vec![];
                         for fid in fs.related_fields(&field_id.structure) {
                             let related_field = fs.get_field(fid, &mut self.file_manager).unwrap();
-                            self.related_fields.push(related_field.start..(related_field.start + related_field.span));
+                            related_fields.push(related_field.start..(related_field.start + related_field.span));
                         }
                         let value = field.parse(&mut self.file_manager).unwrap();
                         let field_data = fs.format_field_data(field_id, value).unwrap();
@@ -2080,46 +2096,120 @@ impl HexEdit {
                         //     _ => todo!()
                         // };
                         // res.set_info(field_info);
-                        Some(field_info)
+                        (current_field, Some(field_info), related_fields)
                         
                     },
                     FileRegion::Spare(struct_id, rng) => {
-                        self.current_field = Some((rng, true));
+                        let current_field = Some((rng, true));
+                        let mut related_fields = vec![];
                         for fid in fs.related_fields(&struct_id) {
                             let related_field = fs.get_field(fid, &mut self.file_manager).unwrap();
-                            self.related_fields.push(related_field.start..(related_field.start + related_field.span));
+                            related_fields.push(related_field.start..(related_field.start + related_field.span));
                         }
                         let s_name = fs.structure_name(struct_id);
-                        Some(format!("[{}] Spare", s_name).to_string())
+                        (current_field, Some(format!("[{}] Spare", s_name).to_string()), related_fields)
                     },
                     FileRegion::Segment(struct_id, rng) => {
-                        self.current_field = Some((rng, true));
+                        let current_field = Some((rng, true));
+                        let mut related_fields = vec![];
                         for fid in fs.related_fields(&struct_id) {
                             let related_field = fs.get_field(fid, &mut self.file_manager).unwrap();
-                            self.related_fields.push(related_field.start..(related_field.start + related_field.span));
+                            related_fields.push(related_field.start..(related_field.start + related_field.span));
                         }
                         let s_name = fs.structure_name(struct_id);
-                        Some(format!("[{}] Segment", s_name).to_string())
+                        (current_field, Some(format!("[{}] Segment", s_name).to_string()), related_fields)
                     },
                     FileRegion::Compressed(struct_id, rng) => {
-                        self.current_field = Some((rng, true));
+                        let current_field = Some((rng, true));
+                        let mut related_fields = vec![];
                         for fid in fs.related_fields(&struct_id) {
                             let related_field = fs.get_field(fid, &mut self.file_manager).unwrap();
-                            self.related_fields.push(related_field.start..(related_field.start + related_field.span));
+                            related_fields.push(related_field.start..(related_field.start + related_field.span));
                         }
                         let s_name = fs.structure_name(struct_id);
-                        Some(format!("[{}] Compressed", s_name).to_string())
+                        (current_field, Some(format!("[{}] Compressed", s_name).to_string()), related_fields)
                     },
                     _ => todo!()
                 }
             } else {
-                self.current_field = None;
-                None
+                (None, None, vec![])
             }
         } else {
-            self.current_field = None;
-            None
+            (None, None, vec![])
         }
+    }
+
+    fn update_syntax_highlight(&mut self) -> Option<String> {
+        self.related_fields.clear();
+        let text: Option<String>;
+        (self.current_field, text, self.related_fields) = self.get_field_data(BitIndex::bytes(self.cursor_pos));
+        text
+        // if let Some(ref mut fs) = &mut self.file_spec {
+        //     // self.current_field = fs.field_at(self.cursor_pos, &mut self.file_manager);
+        //     if self.cursor_pos < self.file_manager.len() {
+        //         let region = fs.region_at(BitIndex::bytes(self.cursor_pos), &mut self.file_manager).unwrap();
+
+        //         match region {
+        //             FileRegion::Field(field_id) => {
+        //                 // TODO: take care of these unwraps...
+        //                 let s_name = fs.structure_name(field_id.structure.clone());
+        //                 let field = fs.get_field(field_id.clone(), &mut self.file_manager).unwrap();
+        //                 let field_valid = fs.get_field_valid(field_id.clone(), &mut self.file_manager).unwrap();
+        //                 self.current_field = Some((field.start..(field.start + field.span), field_valid));
+        //                 for fid in fs.related_fields(&field_id.structure) {
+        //                     let related_field = fs.get_field(fid, &mut self.file_manager).unwrap();
+        //                     self.related_fields.push(related_field.start..(related_field.start + related_field.span));
+        //                 }
+        //                 let value = field.parse(&mut self.file_manager).unwrap();
+        //                 let field_data = fs.format_field_data(field_id, value).unwrap();
+        //                 let field_info = format!("[{}] {}: {}", s_name, field.name, field_data).to_string();
+        //                 let mut field_info = field_info.replace("\x00", "\\x00");
+        //                 // let field_info = match value {
+        //                 //     ExprValue::Integer(v) => format!("[{}] {}: {}", s_name, field.name, v).to_string(),
+        //                 //     ExprValue::String(v) => format!("[{}] {}: {}", s_name, field.name, v).to_string(),
+        //                 //     _ => todo!()
+        //                 // };
+        //                 // res.set_info(field_info);
+        //                 Some(field_info)
+                        
+        //             },
+        //             FileRegion::Spare(struct_id, rng) => {
+        //                 self.current_field = Some((rng, true));
+        //                 for fid in fs.related_fields(&struct_id) {
+        //                     let related_field = fs.get_field(fid, &mut self.file_manager).unwrap();
+        //                     self.related_fields.push(related_field.start..(related_field.start + related_field.span));
+        //                 }
+        //                 let s_name = fs.structure_name(struct_id);
+        //                 Some(format!("[{}] Spare", s_name).to_string())
+        //             },
+        //             FileRegion::Segment(struct_id, rng) => {
+        //                 self.current_field = Some((rng, true));
+        //                 for fid in fs.related_fields(&struct_id) {
+        //                     let related_field = fs.get_field(fid, &mut self.file_manager).unwrap();
+        //                     self.related_fields.push(related_field.start..(related_field.start + related_field.span));
+        //                 }
+        //                 let s_name = fs.structure_name(struct_id);
+        //                 Some(format!("[{}] Segment", s_name).to_string())
+        //             },
+        //             FileRegion::Compressed(struct_id, rng) => {
+        //                 self.current_field = Some((rng, true));
+        //                 for fid in fs.related_fields(&struct_id) {
+        //                     let related_field = fs.get_field(fid, &mut self.file_manager).unwrap();
+        //                     self.related_fields.push(related_field.start..(related_field.start + related_field.span));
+        //                 }
+        //                 let s_name = fs.structure_name(struct_id);
+        //                 Some(format!("[{}] Compressed", s_name).to_string())
+        //             },
+        //             _ => todo!()
+        //         }
+        //     } else {
+        //         self.current_field = None;
+        //         None
+        //     }
+        // } else {
+        //     self.current_field = None;
+        //     None
+        // }
     }
 
     pub fn set_cursor_pos(&mut self, index: usize) -> ActionResult {
@@ -2212,6 +2302,224 @@ impl HexEdit {
 
     fn cursor_y(&self) -> i32 {
         (self.top_margin() + self.y + self.cursor_pos / (self.line_length as usize) - self.start_line) as i32
+    }
+
+    fn refresh_byte_display(&mut self, window: &mut Window) {
+        if !self.show_byte {
+            return;
+        }
+        let left = self.x as i32;
+        let top = self.top_margin() + self.content_height();
+        let b = self.get_byte(self.cursor_pos).unwrap();
+        // window.mv(top as i32, left);
+        // window.clrtoeol();
+        // window.addstr(format!("{:08b}", b));
+
+        let mut true_start = false;
+
+        let mut labels: Vec<(usize, String)> = vec![];
+        let mut end = BitIndex::bytes(0);
+        for i in 0..8 {
+            let bx = BitIndex::new(self.cursor_pos, i);
+            if bx >= end {
+                if let (Some((rng, valid)), text, _) = self.get_field_data(bx) {
+                    end = rng.end;
+                    let text = text.unwrap_or_else(|| "ERROR".to_string());
+                    if rng.start.byte() == self.cursor_pos {
+                        if labels.is_empty() {
+                            true_start = true;
+                        }
+                        labels.push((rng.start.bit()as usize, text));
+                    } else {
+                        if labels.is_empty() {
+                            true_start = false;
+                        }
+                        labels.push((0, text));
+                    }
+                }
+                
+            }
+        }
+        
+        let true_end = end <= BitIndex::bytes(self.cursor_pos + 1);
+
+        // TODO - actually get the cursor bit
+        let cursor_bit = 0;
+
+        let mut label_index = 0;
+        let mut at_end = labels.len() == 1;
+        for i in 0..8 {
+            
+            let bit = (b >> (7 - i)) & 1;
+            let mut line = if i == cursor_bit {
+                format!(">{} ", bit).to_string()
+            } else {
+                format!(" {} ", bit).to_string()
+            };
+
+            if labels.is_empty() {
+                window.mv((top + i) as i32, left);
+                window.clrtoeol();
+                window.addstr(line);
+                continue;
+            }
+
+            let is_start: bool;
+            let is_label: bool;
+            let is_end: bool;
+            if label_index >= labels.len() {
+                is_start = i == 0 && true_start;
+                is_label = false;
+                is_end = i == 7 && true_end;
+            } else {
+                if i == 0 {
+                    is_start = true_start;
+                } else {
+                    is_start = labels[label_index].0 == i;
+                }
+                is_label = labels[label_index].0 == i;
+                if i == 7 {
+                    is_end = true_end;
+                } else {
+                    is_end = !at_end && labels[label_index + 1].0 == i + 1;
+                }
+                
+                
+            }
+            
+            
+
+
+            let s = match (is_label, is_start, is_end) {
+                (false, false, false) => "│ ",
+                (false, false, true) => "┘ ",
+                (false, true, false) => "┐ ",
+                (false, true, true) => "╴ ",
+                (true, false, false) => "├ ",
+                (true, false, true) => "┴ ",
+                (true, true, false) => "┬ ",
+                (true, true, true) => "─ ",
+            };
+            
+            line.push_str(s);
+            if is_label {
+                line.push_str(&labels[label_index].1);
+            }
+
+            if is_end && label_index < labels.len() {
+                label_index += 1;
+            }
+            at_end = label_index + 1 == labels.len();
+
+            window.mv((top + i) as i32, left);
+            window.clrtoeol();
+            window.addstr(line);
+        }
+
+        let attrs = self.get_all_attrs();
+        let highlights = self.get_all_highlights();
+
+        for (start, end, a) in highlights {
+            if start.byte() <= self.cursor_pos && end.byte() >= self.cursor_pos {
+                let new_start = if start.byte() < self.cursor_pos {
+                    0
+                } else {
+                    start.bit() as i32
+                };
+                let new_end = if end.byte() > self.cursor_pos {
+                    8
+                } else {
+                    end.bit() as i32
+                };
+                for i in new_start..new_end {
+                    window.mvchgat(top as i32 + i, left + 1, 1, attrs[a], 0);
+                }
+                // window.mvchgat(top as i32, left + new_start, new_end - new_start, attrs[a], 0);
+            }
+        }
+    }
+
+    fn refresh_byte_display2(&mut self, window: &mut Window) {
+        if !self.show_byte {
+            return;
+        }
+        let left = self.x as i32;
+        let top = self.top_margin() + self.content_height();
+        let b = self.get_byte(self.cursor_pos).unwrap();
+        window.mv(top as i32, left);
+        window.clrtoeol();
+        window.addstr(format!("{:08b}", b));
+
+        let mut labels: Vec<(usize, String)> = vec![];
+        let mut end = BitIndex::bytes(0);
+        for i in 0..8 {
+            let bx = BitIndex::new(self.cursor_pos, i);
+            if bx >= end {
+                if let (Some((rng, valid)), text, _) = self.get_field_data(bx) {
+                    end = rng.end;
+                    let text = text.unwrap_or_else(|| "ERROR".to_string());
+                    if rng.start.byte() == self.cursor_pos {
+                        labels.push((rng.start.bit()as usize, text));
+                    } else {
+                        labels.push((0, text));
+                    }
+                }
+                
+            }
+            
+
+        }
+        // (self.current_field, text, self.related_fields) = self.get_field_data(BitIndex::bytes(self.cursor_pos));
+
+        // let labels = vec![(0, "Hello world!"), (3, "Spam and Eggs"), (4, "What?"), (6, "Last Label!")];
+        let num_labels = labels.len();
+        for i in 0..num_labels {
+            let mut last_j = 0;
+            let mut line: String = "".to_string();
+            for (j, text) in labels.iter().take(num_labels - i - 1) {
+                line.push_str(" ".repeat(*j - last_j).as_str());
+                line.push_str("│");
+                last_j = *j + 1;
+                
+            }
+
+            let (j, text) = &labels[num_labels - i - 1];
+            line.push_str(" ".repeat(j - last_j).as_str());
+            line.push_str("└");
+            line.push_str("─".repeat(8 - j - 1).as_str());
+            line.push_str(" ");
+            line.push_str(text);
+            let line_len = line.len();
+            if line_len < self.width {
+                line.push_str(" ".repeat(self.width - line_len).as_str());
+            }
+            
+            // window.mvaddstr((top + i + 1) as i32, left, line);
+            window.mv((top + i + 1) as i32, left);
+            window.clrtoeol();
+            window.addstr(line);
+        }
+
+        let attrs = self.get_all_attrs();
+        let highlights = self.get_all_highlights();
+
+        for (start, end, a) in highlights {
+            if start.byte() <= self.cursor_pos && end.byte() >= self.cursor_pos {
+                let new_start = if start.byte() < self.cursor_pos {
+                    0
+                } else {
+                    start.bit() as i32
+                };
+                let new_end = if end.byte() > self.cursor_pos {
+                    8
+                } else {
+                    end.bit() as i32
+                };
+
+                window.mvchgat(top as i32, left + new_start, new_end - new_start, attrs[a], 0);
+            }
+        }
+        
     }
 
     pub fn refresh_cursor(&self, window: &Window) {
@@ -2439,43 +2747,7 @@ impl HexEdit {
         }
     }
 
-    fn refresh_highlights(&self, window: &mut Window) {
-        // println!("Refreshing Highlights: {}", self.highlights.len());
-
-        // start_color();
-        
-
-        // TODO: clean this up!!!
-        let mut rv_attr = Attributes::new();
-        //rv_attr.set_reverse(true);
-        rv_attr.set_color_pair(pancurses::ColorPair(globals::HIGHLIGHT_COLOR));
-        let rv_attr = chtype::from(rv_attr);
-
-        
-
-        let start: usize = self.start_line * (self.line_length as usize);
-        let end: usize = start + self.content_height() * (self.line_length as usize);
-
-        let hex_offset = self.line_label_len() + self.separator.len();
-        let ascii_offset = self.line_label_len() + self.separator.len() * 2 + (self.line_length as usize) * 3 - 1;
-
-        let top_margin = self.top_margin() as i32;
-
-        // TODO: Merge this processing with the below processing
-
-        let mut field_attr = Attributes::new();
-        field_attr.set_color_pair(pancurses::ColorPair(globals::CURRENT_FIELD_COLOR));
-        let field_attr = chtype::from(field_attr);
-
-        let mut related_field_attr = Attributes::new();
-        related_field_attr.set_color_pair(pancurses::ColorPair(globals::RELATED_FIELD_COLOR));
-        let related_field_attr = chtype::from(related_field_attr);
-
-        let mut error_field_attr = Attributes::new();
-        error_field_attr.set_color_pair(pancurses::ColorPair(globals::ERROR_COLOR));
-        let error_field_attr = chtype::from(error_field_attr);
-
-        let attrs = vec![rv_attr, field_attr, related_field_attr, error_field_attr];
+    fn get_all_highlights(&self) -> Vec<(BitIndex, BitIndex, usize)> {
         let mut highlights = vec![];
         if let Some((h, v)) = &self.current_field {
             if *v {
@@ -2493,7 +2765,52 @@ impl HexEdit {
         for h in &self.highlights {
             highlights.push((BitIndex::bytes(h.start), BitIndex::bytes(h.start + h.span), 0));
         }
+        highlights
+    }
 
+    fn get_all_attrs(&self) -> Vec<chtype> {
+        let mut rv_attr = Attributes::new();
+        //rv_attr.set_reverse(true);
+        rv_attr.set_color_pair(pancurses::ColorPair(globals::HIGHLIGHT_COLOR));
+        let rv_attr = chtype::from(rv_attr);
+
+        let mut field_attr = Attributes::new();
+        field_attr.set_color_pair(pancurses::ColorPair(globals::CURRENT_FIELD_COLOR));
+        let field_attr = chtype::from(field_attr);
+
+        let mut related_field_attr = Attributes::new();
+        related_field_attr.set_color_pair(pancurses::ColorPair(globals::RELATED_FIELD_COLOR));
+        let related_field_attr = chtype::from(related_field_attr);
+
+        let mut error_field_attr = Attributes::new();
+        error_field_attr.set_color_pair(pancurses::ColorPair(globals::ERROR_COLOR));
+        let error_field_attr = chtype::from(error_field_attr);
+
+        vec![rv_attr, field_attr, related_field_attr, error_field_attr]
+    }
+
+    fn refresh_highlights(&self, window: &mut Window) {
+        // println!("Refreshing Highlights: {}", self.highlights.len());
+
+        // start_color();
+        
+
+
+        
+
+        let start: usize = self.start_line * (self.line_length as usize);
+        let end: usize = start + self.content_height() * (self.line_length as usize);
+
+        let hex_offset = self.line_label_len() + self.separator.len();
+        let ascii_offset = self.line_label_len() + self.separator.len() * 2 + (self.line_length as usize) * 3 - 1;
+
+        let top_margin = self.top_margin() as i32;
+
+        // TODO: Merge this processing with the below processing
+
+        
+        let attrs = self.get_all_attrs();
+        let highlights = self.get_all_highlights();
         // println!("{:?}", highlights);
 
         let mut bit_offset_indicators = HashMap::new();
@@ -2619,6 +2936,7 @@ impl HexEdit {
                 // println!("Refreshing attrs");
                 self.populate(window, 0, self.content_height()); //TODO: Get rid of this! It's only needed to refresh the attributes.
                 self.refresh_highlights(window);
+                self.refresh_byte_display(window);
                 self.refresh_cursor(window);
             },
             UpdateDescription::After(n) =>{
@@ -2627,6 +2945,7 @@ impl HexEdit {
                 self.refresh_viewport()?;
                 self.populate(window, line - self.start_line, self.content_height());
                 self.refresh_highlights(window);
+                self.refresh_byte_display(window);
                 self.refresh_cursor(window);
             },
             UpdateDescription::Range(n1, n2) => {
@@ -2637,6 +2956,7 @@ impl HexEdit {
                 self.refresh_viewport()?;
                 self.populate(window, line1 - self.start_line, line2 - self.start_line + 1);
                 self.refresh_highlights(window);
+                self.refresh_byte_display(window);
                 self.refresh_cursor(window);
             },
             UpdateDescription::All => {
@@ -2645,6 +2965,7 @@ impl HexEdit {
                 self.populate(window, 0, self.content_height());
                 self.refresh_filename(window);
                 self.refresh_highlights(window);
+                self.refresh_byte_display(window);
                 self.refresh_cursor(window);               
             }
 
@@ -2725,6 +3046,8 @@ impl HexEdit {
             }
         }
     }
+
+
 
     pub fn draw(&self, window: &mut Window) {
 

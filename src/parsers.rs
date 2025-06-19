@@ -12,6 +12,7 @@ pub enum CommandKeyword {
     Caps,
     Hex,
     Ascii,
+    Byte,
     Filename,
     LNum,
     CNum,
@@ -77,6 +78,7 @@ fn parse_command_keyword(word: &Vec<char>) -> Option<CommandKeyword> {
         "caps" => Some(CommandKeyword::Caps),
         "hex" => Some(CommandKeyword::Hex),
         "ascii" => Some(CommandKeyword::Ascii),
+        "byte" => Some(CommandKeyword::Byte),
         "fname" => Some(CommandKeyword::Filename),
         "lnum" => Some(CommandKeyword::LNum),
         "cnum" => Some(CommandKeyword::CNum),
@@ -260,6 +262,7 @@ pub enum OnOffSetting {
     Caps,
     Hex,
     Ascii,
+    Byte,
     Filename,
     Icase,
     Regex
@@ -442,6 +445,9 @@ pub fn parse_command(command: &Vec<char>) -> Result<Command, String> {
                                 },
                                 (CommandToken::Keyword(CommandKeyword::Ascii), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::On | CommandKeyword::Off) => {
                                     Ok(Command::SetOnOff{setting: OnOffSetting::Ascii, value: matches!(kwrd, CommandKeyword::On)})
+                                },
+                                (CommandToken::Keyword(CommandKeyword::Byte), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::On | CommandKeyword::Off) => {
+                                    Ok(Command::SetOnOff{setting: OnOffSetting::Byte, value: matches!(kwrd, CommandKeyword::On)})
                                 },
                                 (CommandToken::Keyword(CommandKeyword::Filename), CommandToken::Keyword(kwrd)) if matches!(kwrd, CommandKeyword::On | CommandKeyword::Off) => {
                                     Ok(Command::SetOnOff{setting: OnOffSetting::Filename, value: matches!(kwrd, CommandKeyword::On)})

@@ -55,6 +55,7 @@ const MANUAL_TEXT: &str = r"\c<b>COMMANDS</b>
     :set caps [on|off]  =>  Toggle the case of display hexadecimal values
     :set hex [on|off]   =>  Toggle the <u>hex</u> display
     :set ascii [on|off] =>  Toggle the <u>ascii</u> display
+    :set byte [on|off]  =>  Toggle the <u>byte</u> display
     :set fname [on|off] =>  Toggle the <u>f</u>ile<u>name</u> display
     :set lnum [hex|dec|off]  =>  Toggle <u>l</u>ine <u>num</u>ber display/base
     :set cnum [hex|dec|off]  =>  Toggle <u>c</u>ursor index display/base
@@ -190,6 +191,7 @@ struct EditorStack {
     cnum: DecHexOff,
     show_hex: bool,
     show_ascii: bool,
+    show_byte: bool,
     show_filename: bool,
     caps: bool,
     clevel: u8
@@ -211,6 +213,7 @@ impl EditorStack {
             cnum: DecHexOff::Hex,
             show_hex: true,
             show_ascii: true,
+            show_byte: false,
             show_filename: false,
             caps: true,
             clevel: 9
@@ -220,7 +223,7 @@ impl EditorStack {
     fn push(&mut self, filename: String, file_manager_type: FileManagerType, extract: bool, file_spec: Option<Rc<Structure>>) -> std::io::Result<usize> {
         let fm = FileManager::new(filename, file_manager_type, extract)?;
         let mut hex_edit = HexEdit::new(fm, self.x, self.y, self.width, self.height,
-            16, self.show_filename, self.show_hex, self.show_ascii, // Line Length, Show filename, Show Hex, Show ASCII
+            16, self.show_filename, self.show_hex, self.show_ascii, self.show_byte, // Line Length, Show filename, Show Hex, Show ASCII, Show Byte
             '.', "  ".to_string(), self.caps);
         if let Some(s) = file_spec {
             hex_edit.set_file_spec(s);
@@ -237,7 +240,7 @@ impl EditorStack {
     fn push_no_file(&mut self, fm: FileManager, file_map: Option<FileMap>) -> usize {
         // let fm = FileManager::from_buffer(buffer);
         let mut hex_edit = HexEdit::new(fm, self.x, self.y, self.width, self.height,
-            16, self.show_filename, self.show_hex, self.show_ascii, // Line Length, Show filename, Show Hex, Show ASCII
+            16, self.show_filename, self.show_hex, self.show_ascii, self.show_byte, // Line Length, Show filename, Show Hex, Show ASCII, Show Byte
             '.', "  ".to_string(), self.caps);
         if let Some(f) = file_map {
             hex_edit.set_file_map(f);
@@ -593,7 +596,9 @@ impl App {
                                 Ok(w) => {
                                     self.editors.clipboard_registers[reg_id] = BitField::from_vec(w);
                                 },
-                                Err(msg) => res = ActionResult::error(msg.to_string())
+                                Err(msg) => {
+                                    res = ActionResult::error(msg.to_string())
+                                }
                             }
                         }
                     },
@@ -712,6 +717,10 @@ impl App {
                     OnOffSetting::Ascii => {
                         self.editors.show_ascii = value;
                         self.editors.apply(|h| h.set_show_ascii(value))
+                    },
+                    OnOffSetting::Byte => {
+                        self.editors.show_byte = value;
+                        self.editors.apply(|h| h.set_show_byte(value))
                     },
                     OnOffSetting::Filename => {
                         self.editors.show_filename = value;
