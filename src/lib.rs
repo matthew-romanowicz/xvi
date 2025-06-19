@@ -686,7 +686,7 @@ impl App {
                         match from_bytes(&buffer, DataType {fmt, end: self.editors.endianness}) {
                             Ok(s) => {
                                 let mut res = if seek {
-                                    self.editors.current_mut().hex_edit.seek(Seek::FromCurrent(n_bytes as i64))
+                                    self.editors.current_mut().hex_edit.seek(Seek::FromCurrent(BitIndex::bytes(n_bytes)))
                                 } else {
                                     ActionResult::empty()
                                 };
@@ -3873,14 +3873,14 @@ mod app_string_tests {
         assert_eq!(app.current_cursor_pos(), 53);
         assert_eq!(app.line_entry.get_alert(), Some("Result 1 of 4".to_string()));
         assert_eq!(app.current_editor().highlights.len(), 4);
-        assert_eq!(app.current_editor().highlights[0].start, 53);
-        assert_eq!(app.current_editor().highlights[0].span, 4);
-        assert_eq!(app.current_editor().highlights[1].start, 164);
-        assert_eq!(app.current_editor().highlights[1].span, 4);
-        assert_eq!(app.current_editor().highlights[2].start, 205);
-        assert_eq!(app.current_editor().highlights[2].span, 4);
-        assert_eq!(app.current_editor().highlights[3].start, 316);
-        assert_eq!(app.current_editor().highlights[3].span, 4);
+        assert_eq!(app.current_editor().highlights[0].start, BitIndex::bytes(53));
+        assert_eq!(app.current_editor().highlights[0].span, BitIndex::bytes(4));
+        assert_eq!(app.current_editor().highlights[1].start, BitIndex::bytes(164));
+        assert_eq!(app.current_editor().highlights[1].span, BitIndex::bytes(4));
+        assert_eq!(app.current_editor().highlights[2].start, BitIndex::bytes(205));
+        assert_eq!(app.current_editor().highlights[2].span, BitIndex::bytes(4));
+        assert_eq!(app.current_editor().highlights[3].start, BitIndex::bytes(316));
+        assert_eq!(app.current_editor().highlights[3].span, BitIndex::bytes(4));
 
         // Go to second and third result without moving cursor
         test_driver(&mut app, "n"); 
@@ -4019,8 +4019,8 @@ mod app_string_tests {
         // Undo wrap around seeks and search with one result (IEND)
         for i in 0..3 {
             assert_eq!(app.current_editor().highlights.len(), 1);
-            assert_eq!(app.current_editor().highlights[0].start, 330);
-            assert_eq!(app.current_editor().highlights[0].span, 4);
+            assert_eq!(app.current_editor().highlights[0].start, BitIndex::bytes(330));
+            assert_eq!(app.current_editor().highlights[0].span, BitIndex::bytes(4));
             assert_eq!(app.current_cursor_pos(), 330);
             test_driver(&mut app, "u"); 
             assert_eq!(app.line_entry.get_alert(), None);
@@ -4037,14 +4037,14 @@ mod app_string_tests {
         for i in positions.iter().skip(1) {
 
             assert_eq!(app.current_editor().highlights.len(), 4);
-            assert_eq!(app.current_editor().highlights[0].start, 53);
-            assert_eq!(app.current_editor().highlights[0].span, 4);
-            assert_eq!(app.current_editor().highlights[1].start, 164);
-            assert_eq!(app.current_editor().highlights[1].span, 4);
-            assert_eq!(app.current_editor().highlights[2].start, 205);
-            assert_eq!(app.current_editor().highlights[2].span, 4);
-            assert_eq!(app.current_editor().highlights[3].start, 316);
-            assert_eq!(app.current_editor().highlights[3].span, 4);
+            assert_eq!(app.current_editor().highlights[0].start, BitIndex::bytes(53));
+            assert_eq!(app.current_editor().highlights[0].span, BitIndex::bytes(4));
+            assert_eq!(app.current_editor().highlights[1].start, BitIndex::bytes(164));
+            assert_eq!(app.current_editor().highlights[1].span, BitIndex::bytes(4));
+            assert_eq!(app.current_editor().highlights[2].start, BitIndex::bytes(205));
+            assert_eq!(app.current_editor().highlights[2].span, BitIndex::bytes(4));
+            assert_eq!(app.current_editor().highlights[3].start, BitIndex::bytes(316));
+            assert_eq!(app.current_editor().highlights[3].span, BitIndex::bytes(4));
 
             test_driver(&mut app, "u"); 
             assert_eq!(app.current_cursor_pos(), *i);
@@ -4107,21 +4107,21 @@ mod app_string_tests {
             // 
 
             assert_eq!(app.current_editor().highlights.len(), 4);
-            assert_eq!(app.current_editor().highlights[0].start, 53);
-            assert_eq!(app.current_editor().highlights[0].span, 4);
-            assert_eq!(app.current_editor().highlights[1].start, 164);
-            assert_eq!(app.current_editor().highlights[1].span, 4);
-            assert_eq!(app.current_editor().highlights[2].start, 205);
-            assert_eq!(app.current_editor().highlights[2].span, 4);
-            assert_eq!(app.current_editor().highlights[3].start, 316);
-            assert_eq!(app.current_editor().highlights[3].span, 4);
+            assert_eq!(app.current_editor().highlights[0].start, BitIndex::bytes(53));
+            assert_eq!(app.current_editor().highlights[0].span, BitIndex::bytes(4));
+            assert_eq!(app.current_editor().highlights[1].start, BitIndex::bytes(164));
+            assert_eq!(app.current_editor().highlights[1].span, BitIndex::bytes(4));
+            assert_eq!(app.current_editor().highlights[2].start, BitIndex::bytes(205));
+            assert_eq!(app.current_editor().highlights[2].span, BitIndex::bytes(4));
+            assert_eq!(app.current_editor().highlights[3].start, BitIndex::bytes(316));
+            assert_eq!(app.current_editor().highlights[3].span, BitIndex::bytes(4));
         }
 
         for i in 0..3 {
             test_driver(&mut app, "U"); 
             assert_eq!(app.current_editor().highlights.len(), 1);
-            assert_eq!(app.current_editor().highlights[0].start, 330);
-            assert_eq!(app.current_editor().highlights[0].span, 4);
+            assert_eq!(app.current_editor().highlights[0].start, BitIndex::bytes(330));
+            assert_eq!(app.current_editor().highlights[0].span, BitIndex::bytes(4));
             assert_eq!(app.current_cursor_pos(), 330);
             if i == 0 {
                 assert_eq!(app.line_entry.get_alert(), Some("Result 1 of 1".to_string()));
@@ -4144,14 +4144,14 @@ mod app_string_tests {
         assert_eq!(app.current_cursor_pos(), 316);
         assert_eq!(app.line_entry.get_alert(), Some("Wrapped to result 4 of 4".to_string()));
         assert_eq!(app.current_editor().highlights.len(), 4);
-        assert_eq!(app.current_editor().highlights[0].start, 53);
-        assert_eq!(app.current_editor().highlights[0].span, 4);
-        assert_eq!(app.current_editor().highlights[1].start, 164);
-        assert_eq!(app.current_editor().highlights[1].span, 4);
-        assert_eq!(app.current_editor().highlights[2].start, 205);
-        assert_eq!(app.current_editor().highlights[2].span, 4);
-        assert_eq!(app.current_editor().highlights[3].start, 316);
-        assert_eq!(app.current_editor().highlights[3].span, 4);
+        assert_eq!(app.current_editor().highlights[0].start, BitIndex::bytes(53));
+        assert_eq!(app.current_editor().highlights[0].span, BitIndex::bytes(4));
+        assert_eq!(app.current_editor().highlights[1].start, BitIndex::bytes(164));
+        assert_eq!(app.current_editor().highlights[1].span, BitIndex::bytes(4));
+        assert_eq!(app.current_editor().highlights[2].start, BitIndex::bytes(205));
+        assert_eq!(app.current_editor().highlights[2].span, BitIndex::bytes(4));
+        assert_eq!(app.current_editor().highlights[3].start, BitIndex::bytes(316));
+        assert_eq!(app.current_editor().highlights[3].span, BitIndex::bytes(4));
 
         // Go to 3rd and 2nd result without moving cursor
         test_driver(&mut app, "n"); 
@@ -4290,8 +4290,8 @@ mod app_string_tests {
         // Undo wrap around seeks and search with one result (IEND)
         for i in 0..3 {
             assert_eq!(app.current_editor().highlights.len(), 1);
-            assert_eq!(app.current_editor().highlights[0].start, 330);
-            assert_eq!(app.current_editor().highlights[0].span, 4);
+            assert_eq!(app.current_editor().highlights[0].start, BitIndex::bytes(330));
+            assert_eq!(app.current_editor().highlights[0].span, BitIndex::bytes(4));
             assert_eq!(app.current_cursor_pos(), 330);
             test_driver(&mut app, "u"); 
             assert_eq!(app.line_entry.get_alert(), None);
@@ -4308,14 +4308,14 @@ mod app_string_tests {
         for i in positions.iter().skip(1) {
 
             assert_eq!(app.current_editor().highlights.len(), 4);
-            assert_eq!(app.current_editor().highlights[0].start, 53);
-            assert_eq!(app.current_editor().highlights[0].span, 4);
-            assert_eq!(app.current_editor().highlights[1].start, 164);
-            assert_eq!(app.current_editor().highlights[1].span, 4);
-            assert_eq!(app.current_editor().highlights[2].start, 205);
-            assert_eq!(app.current_editor().highlights[2].span, 4);
-            assert_eq!(app.current_editor().highlights[3].start, 316);
-            assert_eq!(app.current_editor().highlights[3].span, 4);
+            assert_eq!(app.current_editor().highlights[0].start, BitIndex::bytes(53));
+            assert_eq!(app.current_editor().highlights[0].span, BitIndex::bytes(4));
+            assert_eq!(app.current_editor().highlights[1].start, BitIndex::bytes(164));
+            assert_eq!(app.current_editor().highlights[1].span, BitIndex::bytes(4));
+            assert_eq!(app.current_editor().highlights[2].start, BitIndex::bytes(205));
+            assert_eq!(app.current_editor().highlights[2].span, BitIndex::bytes(4));
+            assert_eq!(app.current_editor().highlights[3].start, BitIndex::bytes(316));
+            assert_eq!(app.current_editor().highlights[3].span, BitIndex::bytes(4));
 
             test_driver(&mut app, "u"); 
             assert_eq!(app.current_cursor_pos(), *i);
@@ -4378,21 +4378,21 @@ mod app_string_tests {
             // 
 
             assert_eq!(app.current_editor().highlights.len(), 4);
-            assert_eq!(app.current_editor().highlights[0].start, 53);
-            assert_eq!(app.current_editor().highlights[0].span, 4);
-            assert_eq!(app.current_editor().highlights[1].start, 164);
-            assert_eq!(app.current_editor().highlights[1].span, 4);
-            assert_eq!(app.current_editor().highlights[2].start, 205);
-            assert_eq!(app.current_editor().highlights[2].span, 4);
-            assert_eq!(app.current_editor().highlights[3].start, 316);
-            assert_eq!(app.current_editor().highlights[3].span, 4);
+            assert_eq!(app.current_editor().highlights[0].start, BitIndex::bytes(53));
+            assert_eq!(app.current_editor().highlights[0].span, BitIndex::bytes(4));
+            assert_eq!(app.current_editor().highlights[1].start, BitIndex::bytes(164));
+            assert_eq!(app.current_editor().highlights[1].span, BitIndex::bytes(4));
+            assert_eq!(app.current_editor().highlights[2].start, BitIndex::bytes(205));
+            assert_eq!(app.current_editor().highlights[2].span, BitIndex::bytes(4));
+            assert_eq!(app.current_editor().highlights[3].start, BitIndex::bytes(316));
+            assert_eq!(app.current_editor().highlights[3].span, BitIndex::bytes(4));
         }
 
         for i in 0..3 {
             test_driver(&mut app, "U"); 
             assert_eq!(app.current_editor().highlights.len(), 1);
-            assert_eq!(app.current_editor().highlights[0].start, 330);
-            assert_eq!(app.current_editor().highlights[0].span, 4);
+            assert_eq!(app.current_editor().highlights[0].start, BitIndex::bytes(330));
+            assert_eq!(app.current_editor().highlights[0].span, BitIndex::bytes(4));
             assert_eq!(app.current_cursor_pos(), 330);
             assert_eq!(app.line_entry.get_alert(), Some("Wrapped to result 1 of 1".to_string()));
             

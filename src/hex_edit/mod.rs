@@ -50,8 +50,8 @@ pub enum EditMode {
 }
 
 pub struct Highlight {
-    pub start: usize,
-    pub span: usize
+    pub start: BitIndex,
+    pub span: BitIndex
 }
 
 
@@ -82,7 +82,7 @@ impl Action for InsertAction {
             DataSource::Fill(n) => *n,
             DataSource::Register(n) => hex_edit.register_len(*n).byte() // TODO: Make this work for non byte-a;igned
         };
-        let seek_res = hex_edit.seek(Seek::FromCurrent(-(n_bytes as i64)));
+        let seek_res = hex_edit.seek(Seek::FromCurrent(-BitIndex::bytes(n_bytes)));
         let mut delete_res = hex_edit.delete_bytes(n_bytes); // TODO: Process error
         delete_res.update = combine_update(&seek_res.update, &delete_res.update);
         if self.file_end < hex_edit.len() {
@@ -128,9 +128,9 @@ impl Action for OverwriteAction {
             DataSource::Fill(n) => *n,
             DataSource::Register(n) => hex_edit.register_len(*n).byte() // TODO: Make this work for non byte-aligned
         };
-        let seek_res = hex_edit.seek(Seek::FromCurrent(-(n_bytes as i64)));
+        let seek_res = hex_edit.seek(Seek::FromCurrent(-BitIndex::bytes(n_bytes)));
         let mut overwrite_res = hex_edit.overwrite(DataSource::Bytes(self.original_bytes.to_vec())) ; // TODO: Process error
-        let seek_res_2 = hex_edit.seek(Seek::FromCurrent(-(n_bytes as i64)));
+        let seek_res_2 = hex_edit.seek(Seek::FromCurrent(-BitIndex::bytes(n_bytes)));
         overwrite_res.update = combine_update(&seek_res.update, &overwrite_res.update);
         overwrite_res.update = combine_update(&overwrite_res.update, &seek_res_2.update);
         if self.file_end < hex_edit.len() {
@@ -168,7 +168,7 @@ impl DeleteAction {
 impl Action for DeleteAction {
     fn undo(&self, hex_edit: &mut HexEdit) -> ActionResult {
         let mut insert_res = hex_edit.insert(DataSource::Bytes(self.bytes.to_vec()));
-        let seek_res = hex_edit.seek(Seek::FromCurrent(-(self.bytes.len() as i64)));
+        let seek_res = hex_edit.seek(Seek::FromCurrent(-BitIndex::bytes(self.bytes.len())));
         insert_res.update = combine_update(&seek_res.update, &insert_res.update);
         insert_res
     }
@@ -532,12 +532,12 @@ impl Action for SliceRegisterAction {
 
 
 pub struct SeekAction {
-    original_index: usize,
+    original_index: BitIndex,
     seek: Seek
 }
 
 impl SeekAction {
-    pub fn new(original_index: usize, seek: Seek) -> SeekAction {
+    pub fn new(original_index: BitIndex, seek: Seek) -> SeekAction {
         SeekAction {
             original_index,
             seek
@@ -640,12 +640,12 @@ impl Action for InitiateFindAction {
 }
 
 pub struct SeekFindResultAction {
-    original_index: usize,
+    original_index: BitIndex,
     reversed: bool
 }
 
 impl SeekFindResultAction {
-    pub fn new(original_index: usize, reversed: bool) -> SeekFindResultAction {
+    pub fn new(original_index: BitIndex, reversed: bool) -> SeekFindResultAction {
         SeekFindResultAction {
             original_index,
             reversed
@@ -1254,12 +1254,16 @@ impl HexEdit {
         match info.find_type {
             FindType::Ascii => {
                 for res in self.file_manager.find(&info.expr, info.ignore_case, info.use_regex) {
-                    self.highlights.push(Highlight {start: res.start, span: res.span})
+                    self.highlights.push(Highlight {
+                        start: BitIndex::bytes(res.start), 
+                        span: BitIndex::bytes(res.span)})
                 }
             },
             FindType::Binary => {
                 for res in self.file_manager.find_bytes(&info.expr) {
-                    self.highlights.push(Highlight {start: res.start, span: res.span})
+                    self.highlights.push(Highlight {
+                        start: BitIndex::bytes(res.start), 
+                        span: BitIndex::bytes(res.span)})
                 }
             }
         }
@@ -1309,7 +1313,7 @@ impl HexEdit {
     pub fn seek_find_result(&mut self, reverse: bool) -> ActionResult {
         if let Some(find_info) = &self.current_find {
 
-            let action = SeekFindResultAction::new(self.cursor_pos, reverse);
+            let action = SeekFindResultAction::new(BitIndex::bytes(self.cursor_pos), reverse);
 
             let direction = if reverse {
                 match find_info.direction {
@@ -1325,7 +1329,7 @@ impl HexEdit {
             match direction {
                 FindDirection::Forward => {
                     for (i, h) in self.highlights.iter().enumerate() {
-                        if h.start > self.cursor_pos {
+                        if h.start > BitIndex::bytes(self.cursor_pos) {
                             let info_result = ActionResult::info(format!("Result {} of {}", i + 1, num_highlights));
                             let mut res = self.set_cursor_pos(h.start);
                             res.set_action(Some(Rc::new(action)));
@@ -1347,7 +1351,7 @@ impl HexEdit {
                 },
                 FindDirection::Backward => {
                     for (i, h) in self.highlights.iter().enumerate().rev() {
-                        if h.start < self.cursor_pos {
+                        if h.start < BitIndex::bytes(self.cursor_pos) {
                             let info_result = ActionResult::info(format!("Result {} of {}", i + 1, num_highlights));
                             let mut res = self.set_cursor_pos(h.start);
                             res.set_action(Some(Rc::new(action)));
@@ -1376,7 +1380,7 @@ impl HexEdit {
         let num_highlights = self.highlights.len();
 
         for (i, h) in self.highlights.iter().enumerate() {
-            if h.start > self.cursor_pos {
+            if h.start > BitIndex::bytes(self.cursor_pos) {
                 let info_result = ActionResult::info(format!("Result {} of {}", i + 1, num_highlights));
                 let res = self.set_cursor_pos(h.start); // TODO make this action actually perform a find when redone
                 return info_result.combine(res)
@@ -1396,7 +1400,7 @@ impl HexEdit {
         let num_highlights = self.highlights.len();
 
         for (i, h) in self.highlights.iter().enumerate().rev() {
-            if h.start < self.cursor_pos {
+            if h.start < BitIndex::bytes(self.cursor_pos) {
                 let info_result = ActionResult::info(format!("Result {} of {}", i + 1, num_highlights));
                 let res = self.set_cursor_pos(h.start); // TODO make this action actually perform a find when redone
                 return info_result.combine(res)
@@ -1629,7 +1633,7 @@ impl HexEdit {
         match self.file_manager.insert_bytes(self.cursor_pos, &bytes) {
             Ok(_) => {
                 // println!("Bytes: {}", bytes.len());
-                let seek_res = self.seek(Seek::FromCurrent(bytes.len() as i64));
+                let seek_res = self.seek(Seek::FromCurrent(BitIndex::bytes(bytes.len())));
                 ActionResult {
                     alert: None,
                     alert_type: AlertType::None,
@@ -1662,7 +1666,7 @@ impl HexEdit {
         }
         match self.file_manager.overwrite_bytes(self.cursor_pos, &bytes) {
             Ok(_) => {
-                let seek_res = self.seek(Seek::FromCurrent(bytes.len() as i64));
+                let seek_res = self.seek(Seek::FromCurrent(BitIndex::bytes(bytes.len())));
                 ActionResult {
                     alert: None,
                     alert_type: AlertType::None,
@@ -2023,28 +2027,28 @@ impl HexEdit {
         let current_pos = self.cursor_pos;
         let mut res = match seek {
             Seek::FromStart(index) => {
-                self.set_cursor_pos(index as usize)
+                self.set_cursor_pos(index)
             },
             Seek::FromEnd(index) => {
-                if index as usize > self.len() {
+                if index > BitIndex::bytes(self.len()) {
                     return ActionResult::error("Cannot seek to negative index".to_string());
                 }
-                self.set_cursor_pos(self.len() - (index as usize))
+                self.set_cursor_pos(BitIndex::bytes(self.len()) - index)
             },
             Seek::FromCurrent(index) => {
-                let new_pos = current_pos as isize + (index as isize);
-                if new_pos < 0 {
+                let new_pos = BitIndex::bytes(current_pos) + index;
+                if new_pos < BitIndex::zero() {
                     return ActionResult::error("Cannot seek to negative index".to_string());
                 }
-                self.set_cursor_pos(new_pos as usize)
+                self.set_cursor_pos(new_pos)
             },
             Seek::Mark(mark_id) => {
-                let new_pos = self.marks[mark_id].byte();
+                let new_pos = self.marks[mark_id];
                 self.set_cursor_pos(new_pos)
             }
         };
         
-        res.set_action(Some(Rc::new(SeekAction::new(current_pos, seek))));
+        res.set_action(Some(Rc::new(SeekAction::new(BitIndex::bytes(current_pos), seek))));
         res
     }
 
@@ -2212,9 +2216,13 @@ impl HexEdit {
         // }
     }
 
-    pub fn set_cursor_pos(&mut self, index: usize) -> ActionResult {
+    pub fn set_cursor_pos(&mut self, index: BitIndex) -> ActionResult {
+
+        //TODO
+        let index = index.byte();
+
         let line = index / (self.line_length as usize);
-        let action = SeekAction::new(self.cursor_pos, Seek::FromStart(index as u64));
+        let action = SeekAction::new(BitIndex::bytes(self.cursor_pos), Seek::FromStart(BitIndex::bytes(index)));
         self.cursor_pos = index;
 
         //println!("line={} start_line={} content_height={} height={}", line, self.start_line, self.content_height(), self.height);
@@ -2252,12 +2260,12 @@ impl HexEdit {
                     },
                     Nibble::Right => {
                         self.nibble = Nibble::Left;
-                        self.set_cursor_pos(self.cursor_pos + 1)
+                        self.set_cursor_pos(BitIndex::bytes(self.cursor_pos + 1))
                     }
                 }
             },
             EditMode::AsciiOverwrite | EditMode::AsciiInsert => {
-                self.set_cursor_pos(self.cursor_pos + 1)
+                self.set_cursor_pos(BitIndex::bytes(self.cursor_pos + 1))
             }
         }
     }
@@ -2269,7 +2277,7 @@ impl HexEdit {
                     Nibble::Left => {
                         if self.cursor_pos > 0 {
                             self.nibble = Nibble::Right;
-                            self.set_cursor_pos(self.cursor_pos - 1)
+                            self.set_cursor_pos(BitIndex::bytes(self.cursor_pos - 1))
                         } else {
                             ActionResult::empty()
                         }
@@ -2282,7 +2290,7 @@ impl HexEdit {
             },
             EditMode::AsciiOverwrite | EditMode::AsciiInsert => {
                 if self.cursor_pos > 0 {
-                    self.set_cursor_pos(self.cursor_pos - 1)
+                    self.set_cursor_pos(BitIndex::bytes(self.cursor_pos - 1))
                 } else {
                     ActionResult::empty()
                 }
@@ -2439,89 +2447,6 @@ impl HexEdit {
         }
     }
 
-    fn refresh_byte_display2(&mut self, window: &mut Window) {
-        if !self.show_byte {
-            return;
-        }
-        let left = self.x as i32;
-        let top = self.top_margin() + self.content_height();
-        let b = self.get_byte(self.cursor_pos).unwrap();
-        window.mv(top as i32, left);
-        window.clrtoeol();
-        window.addstr(format!("{:08b}", b));
-
-        let mut labels: Vec<(usize, String)> = vec![];
-        let mut end = BitIndex::bytes(0);
-        for i in 0..8 {
-            let bx = BitIndex::new(self.cursor_pos, i);
-            if bx >= end {
-                if let (Some((rng, valid)), text, _) = self.get_field_data(bx) {
-                    end = rng.end;
-                    let text = text.unwrap_or_else(|| "ERROR".to_string());
-                    if rng.start.byte() == self.cursor_pos {
-                        labels.push((rng.start.bit()as usize, text));
-                    } else {
-                        labels.push((0, text));
-                    }
-                }
-                
-            }
-            
-
-        }
-        // (self.current_field, text, self.related_fields) = self.get_field_data(BitIndex::bytes(self.cursor_pos));
-
-        // let labels = vec![(0, "Hello world!"), (3, "Spam and Eggs"), (4, "What?"), (6, "Last Label!")];
-        let num_labels = labels.len();
-        for i in 0..num_labels {
-            let mut last_j = 0;
-            let mut line: String = "".to_string();
-            for (j, text) in labels.iter().take(num_labels - i - 1) {
-                line.push_str(" ".repeat(*j - last_j).as_str());
-                line.push_str("│");
-                last_j = *j + 1;
-                
-            }
-
-            let (j, text) = &labels[num_labels - i - 1];
-            line.push_str(" ".repeat(j - last_j).as_str());
-            line.push_str("└");
-            line.push_str("─".repeat(8 - j - 1).as_str());
-            line.push_str(" ");
-            line.push_str(text);
-            let line_len = line.len();
-            if line_len < self.width {
-                line.push_str(" ".repeat(self.width - line_len).as_str());
-            }
-            
-            // window.mvaddstr((top + i + 1) as i32, left, line);
-            window.mv((top + i + 1) as i32, left);
-            window.clrtoeol();
-            window.addstr(line);
-        }
-
-        let attrs = self.get_all_attrs();
-        let highlights = self.get_all_highlights();
-
-        for (start, end, a) in highlights {
-            if start.byte() <= self.cursor_pos && end.byte() >= self.cursor_pos {
-                let new_start = if start.byte() < self.cursor_pos {
-                    0
-                } else {
-                    start.bit() as i32
-                };
-                let new_end = if end.byte() > self.cursor_pos {
-                    8
-                } else {
-                    end.bit() as i32
-                };
-
-                window.mvchgat(top as i32, left + new_start, new_end - new_start, attrs[a], 0);
-            }
-        }
-        
-    }
-
     pub fn refresh_cursor(&self, window: &Window) {
         //println!("Refreshing Cursor!");
 
@@ -2558,17 +2483,17 @@ impl HexEdit {
             },
             Input::KeyUp => {
                 if self.cursor_pos >= self.line_length as usize {
-                    self.seek(Seek::FromCurrent(-(self.line_length as i64)))
+                    self.seek(Seek::FromCurrent(-BitIndex::bytes(self.line_length as usize)))
                 } else {
                     ActionResult::empty()
                 }
             },
             Input::KeyDown => {
-                self.seek(Seek::FromCurrent(self.line_length as i64))
+                self.seek(Seek::FromCurrent(BitIndex::bytes(self.line_length as usize)))
             },
             Input::KeyNPage => { // TODO: Return action for this
                 let row = self.start_line;
-                self.set_cursor_pos(self.cursor_pos + self.content_height()*(self.line_length as usize));
+                self.set_cursor_pos(BitIndex::bytes(self.cursor_pos + self.content_height()*(self.line_length as usize)));
                 match self.set_viewport_row(row + self.content_height()) {
                     Ok(_) => ActionResult::no_error(UpdateDescription::All),
                     Err(msg) => ActionResult::error(msg.to_string())
@@ -2578,12 +2503,12 @@ impl HexEdit {
             Input::KeyPPage => { // TODO: Return action for this
                 let row = self.start_line;
                 if self.cursor_pos >= self.content_height()*(self.line_length as usize) && self.start_line >= self.content_height() {
-                    self.set_cursor_pos(self.cursor_pos - self.content_height()*(self.line_length as usize));
+                    self.set_cursor_pos(BitIndex::bytes(self.cursor_pos - self.content_height()*(self.line_length as usize)));
                     if let Err(msg) = self.set_viewport_row(row - self.content_height()) {
                         return ActionResult::error(msg.to_string());
                     }
                 } else {
-                    self.set_cursor_pos(0);
+                    self.set_cursor_pos(BitIndex::zero());
                     if let Err(msg) = self.set_viewport_row(0) {
                         return ActionResult::error(msg.to_string());
                     }
@@ -2591,10 +2516,10 @@ impl HexEdit {
                 ActionResult::no_error(UpdateDescription::All)
             },
             Input::KeyHome => { 
-                self.seek(Seek::FromStart(0))
+                self.seek(Seek::FromStart(BitIndex::bytes(0)))
             },
             Input::KeyEnd => {
-                self.seek(Seek::FromEnd(0))
+                self.seek(Seek::FromEnd(BitIndex::bytes(0)))
             },
             Input::Character(ch) => { // TODO: Return action for this
                 match self.edit_mode {
@@ -2763,7 +2688,7 @@ impl HexEdit {
         }
 
         for h in &self.highlights {
-            highlights.push((BitIndex::bytes(h.start), BitIndex::bytes(h.start + h.span), 0));
+            highlights.push((h.start, h.start + h.span, 0));
         }
         highlights
     }
@@ -2816,7 +2741,7 @@ impl HexEdit {
         let mut bit_offset_indicators = HashMap::new();
 
         for (h_start, h_end, attr_index) in highlights {
-            if h_end.byte() >= start && h_start.byte() < end { // If the highlight is in the viewport
+            if h_end >= BitIndex::bytes(start) && h_start < BitIndex::bytes(end) { // If the highlight is in the viewport
                 let first_line = (h_start.byte() / (self.line_length as usize)) as isize - (self.start_line as isize);
                 let last_line = ((h_end.byte()) / (self.line_length as usize)) as isize - (self.start_line as isize);
                 // if (h_start + h.span) % (self.line_length as usize) == 0 {

@@ -189,17 +189,17 @@ impl FullRangeSize {
 
 #[derive(Clone, Copy)]
 pub enum Seek {
-    FromStart(u64),
-    FromCurrent(i64),
-    FromEnd(i64),
+    FromStart(BitIndex),
+    FromCurrent(BitIndex),
+    FromEnd(BitIndex),
     Mark(MarkId)
 }
 
 #[derive(Clone, Copy)]
 pub enum FullSeek {
-    FromStart(u64),
-    FromCurrent(i64),
-    FromEnd(i64),
+    FromStart(BitIndex),
+    FromCurrent(BitIndex),
+    FromEnd(BitIndex),
     Mark(FullMarkId)
 }
 
@@ -212,7 +212,7 @@ impl FullSeek {
             FullSeek::Mark(FullMarkId::Lower(mark_id)) => Seek::Mark(mark_id),
             FullSeek::Mark(FullMarkId::Upper(mark_id)) => {
                 // TODO: Make this work with BitIndex
-                Seek::FromStart(marks[mark_id].byte() as u64)
+                Seek::FromStart(marks[mark_id])
             }
         }
     }

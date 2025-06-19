@@ -650,10 +650,10 @@ pub fn parse_keystroke(keystroke: &Vec<char>) -> Result<Option<KeystrokeCommand>
             // let hm = &mut self.editors.editors[self.editors.current];
             match tokens[0] {
                 KeystrokeToken::Character('g') => {
-                    Ok(Some(KeystrokeCommand::Seek{from: FullSeek::FromStart(0)}))
+                    Ok(Some(KeystrokeCommand::Seek{from: FullSeek::FromStart(BitIndex::zero())}))
                 },
                 KeystrokeToken::Character('G') => {
-                    Ok(Some(KeystrokeCommand::Seek{from: FullSeek::FromEnd(0)}))
+                    Ok(Some(KeystrokeCommand::Seek{from: FullSeek::FromEnd(BitIndex::zero())}))
                 },
                 KeystrokeToken::Character('n') => {
                     Ok(Some(KeystrokeCommand::SeekFindResult{reversed: false}))
@@ -689,10 +689,10 @@ pub fn parse_keystroke(keystroke: &Vec<char>) -> Result<Option<KeystrokeCommand>
         2 => {
             match (tokens[0], tokens[1]) {
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('g')) => {
-                    Ok(Some(KeystrokeCommand::Seek{from: FullSeek::FromStart(n as u64)}))
+                    Ok(Some(KeystrokeCommand::Seek{from: FullSeek::FromStart(BitIndex::bytes(n))}))
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('G')) => {
-                    Ok(Some(KeystrokeCommand::Seek{from: FullSeek::FromEnd(n as i64)}))
+                    Ok(Some(KeystrokeCommand::Seek{from: FullSeek::FromEnd(BitIndex::bytes(n))}))
                 },
                 (KeystrokeToken::Integer(n), KeystrokeToken::Character('m')) => {
                     match FullMarkId::new(n) {
@@ -753,10 +753,10 @@ pub fn parse_keystroke(keystroke: &Vec<char>) -> Result<Option<KeystrokeCommand>
         3 => {
             match (tokens[0], tokens[1], tokens[2]) {
                 (KeystrokeToken::Character('+'), KeystrokeToken::Integer(n), KeystrokeToken::Character('g')) => {
-                    Ok(Some(KeystrokeCommand::Seek{from: FullSeek::FromCurrent(n as i64)}))
+                    Ok(Some(KeystrokeCommand::Seek{from: FullSeek::FromCurrent(BitIndex::bytes(n))}))
                 },
                 (KeystrokeToken::Character('-'), KeystrokeToken::Integer(n), KeystrokeToken::Character('g')) => {
-                    Ok(Some(KeystrokeCommand::Seek{from: FullSeek::FromCurrent(-(n as i64))}))
+                    Ok(Some(KeystrokeCommand::Seek{from: FullSeek::FromCurrent(-BitIndex::bytes(n))}))
                 },
                 (KeystrokeToken::Character('`'), KeystrokeToken::Integer(n), KeystrokeToken::Character('g')) => {
                     match FullMarkId::new(n) {
