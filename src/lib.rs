@@ -488,7 +488,7 @@ impl App {
         &mut self.editors.editors[self.editors.current].hex_edit
     }
 
-    fn current_cursor_pos(&self) -> usize {
+    fn current_cursor_pos(&self) -> BitIndex {
         self.editors.current().hex_edit.get_cursor_pos()
     }
 
@@ -679,7 +679,7 @@ impl App {
     
                 let mut buffer = vec![0; n_bytes];
 
-                let cursor_pos = self.editors.current().hex_edit.get_cursor_pos();
+                let cursor_pos = self.editors.current().hex_edit.get_cursor_pos().byte(); // TODO: Make this work with bits
 
                 res = match self.editors.current_mut().hex_edit.get_bytes(cursor_pos, &mut buffer) {
                     Ok(n) if n == n_bytes => {
@@ -810,7 +810,7 @@ impl App {
             },
             KeystrokeCommand::Mark{mark_id: FullMarkId::Upper(mark_id)} => {
                 let pos = self.editors.current().hex_edit.get_cursor_pos();
-                self.editors.marks[mark_id] = BitIndex::bytes(pos);
+                self.editors.marks[mark_id] = pos;
                 ActionResult::empty()
             },
             KeystrokeCommand::Yank{register: FullRegisterId::Lower(reg_id), size} => {
@@ -1109,10 +1109,10 @@ impl App {
             };
             let cursor_index_string = match self.editors.cnum {
                 DecHexOff::Off => "".to_string(),
-                DecHexOff::Dec => format!("{:0width$}", pos, width=cursor_label_len),
+                DecHexOff::Dec => format!("{:0width$}", pos.byte(), width=cursor_label_len),
                 DecHexOff::Hex => match caps_hex {
-                    true => format!("{:0width$x}", pos, width=cursor_label_len).to_ascii_uppercase(),
-                    false => format!("{:0width$x}", pos, width=cursor_label_len)
+                    true => format!("{:0width$x}", pos.byte(), width=cursor_label_len).to_ascii_uppercase(),
+                    false => format!("{:0width$x}", pos.byte(), width=cursor_label_len)
                 }
             };
             window.mvaddstr((window.get_max_y() as usize - 1) as i32,
@@ -1266,7 +1266,7 @@ mod app_string_tests {
         assert_eq!(bytes_1680_1696, buff);
 
         test_driver(&mut app, "1552go");
-        assert_eq!(app.current_cursor_pos(), 1552);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1552));
         assert_eq!(app.line_entry.get_alert(), None);
 
         let hex_chars_lcase = "0123456789abcdef";
@@ -1286,7 +1286,7 @@ mod app_string_tests {
 
             test_driver(&mut app, &hex_chars_lcase[i..i+1]);
 
-            assert_eq!(app.current_cursor_pos(), 1552 + cursor_offset);
+            assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1552 + cursor_offset));
             assert_eq!(app.line_entry.get_alert(), None);
 
             assert_eq!(app.editors.current_mut().hex_edit.get_bytes(1552, &mut buff).unwrap(), 16);
@@ -1294,7 +1294,7 @@ mod app_string_tests {
         }
 
         test_driver(&mut app, "\u{1b}1680go");
-        assert_eq!(app.current_cursor_pos(), 1680);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1680));
         assert_eq!(app.line_entry.get_alert(), None);
 
         cursor_offset = 0;
@@ -1318,9 +1318,9 @@ mod app_string_tests {
             assert_eq!(app.line_entry.get_alert(), None);
             
             if i % 2 == 1 {
-                assert_eq!(app.current_cursor_pos(), 1680 + cursor_offset + 1);
+                assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1680 + cursor_offset + 1));
             } else {
-                assert_eq!(app.current_cursor_pos(), 1680 + cursor_offset);
+                assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1680 + cursor_offset));
             }
 
             assert_eq!(app.editors.current_mut().hex_edit.get_bytes(1680, &mut buff).unwrap(), 16);
@@ -1337,61 +1337,61 @@ mod app_string_tests {
 
         // Index from start
         test_driver(&mut app, "150g");
-        assert_eq!(app.current_cursor_pos(), 150);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(150));
         assert_eq!(app.line_entry.get_alert(), None);
         test_driver(&mut app, "1500g");
-        assert_eq!(app.current_cursor_pos(), 1500);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1500));
         assert_eq!(app.line_entry.get_alert(), None);
 
         // Negative index from current
         test_driver(&mut app, "-100g");
-        assert_eq!(app.current_cursor_pos(), 1400);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1400));
         assert_eq!(app.line_entry.get_alert(), None);
         test_driver(&mut app, "-150g");
-        assert_eq!(app.current_cursor_pos(), 1250);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1250));
         assert_eq!(app.line_entry.get_alert(), None);
 
         // Try to seek to nevative index
         test_driver(&mut app, "-1251g");
-        assert_eq!(app.current_cursor_pos(), 1250);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1250));
         assert_eq!(app.line_entry.get_alert(), Some("Cannot seek to negative index".to_string()));
 
         // Positive index from current
         test_driver(&mut app, "+150g");
-        assert_eq!(app.current_cursor_pos(), 1400);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1400));
         assert_eq!(app.line_entry.get_alert(), None);
         test_driver(&mut app, "+100g");
-        assert_eq!(app.current_cursor_pos(), 1500);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1500));
         assert_eq!(app.line_entry.get_alert(), None);
 
         // Go to start
         test_driver(&mut app, "g");
-        assert_eq!(app.current_cursor_pos(), 0);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(0));
         assert_eq!(app.line_entry.get_alert(), None);
 
         // Index from end
         test_driver(&mut app, "G");
-        assert_eq!(app.current_cursor_pos(), file_length);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(file_length));
         assert_eq!(app.line_entry.get_alert(), None);
         test_driver(&mut app, "100G");
-        assert_eq!(app.current_cursor_pos(), file_length - 100);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(file_length - 100));
         assert_eq!(app.line_entry.get_alert(), None);
         test_driver(&mut app, "1000G");
-        assert_eq!(app.current_cursor_pos(), file_length - 1000);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(file_length - 1000));
         assert_eq!(app.line_entry.get_alert(), None);
 
         // Try to seek to nevative index from end
         test_driver(&mut app, "10000G");
-        assert_eq!(app.current_cursor_pos(), file_length - 1000);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(file_length - 1000));
         assert_eq!(app.line_entry.get_alert(), Some("Cannot seek to negative index".to_string()));
 
         // Exceed file length
         test_driver(&mut app, "+6000g");
-        assert_eq!(app.current_cursor_pos(), file_length + 5000);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(file_length + 5000));
         assert_eq!(app.line_entry.get_alert(), None);
         // Using isize::MAX instead of usize::MAX since rust vectors can't actually get up to usize
         test_driver(&mut app, format!("{}g", std::isize::MAX as usize).as_str());
-        assert_eq!(app.current_cursor_pos(), std::isize::MAX as usize);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(std::isize::MAX as usize));
         assert_eq!(app.line_entry.get_alert(), None);
     }
 
@@ -1399,14 +1399,14 @@ mod app_string_tests {
         for p in history.iter().rev().skip(1) {
             test_driver(app, "u");
             println!("{}", p);
-            assert_eq!(app.current_cursor_pos(), *p);
+            assert_eq!(app.current_cursor_pos(), BitIndex::bytes(*p));
             assert_eq!(app.line_entry.get_alert(), None);
         }
         test_driver(app, "u");
         assert_eq!(app.line_entry.get_alert(), Some("No actions in stack".to_string()));
         for p in history.iter().skip(1) {
             test_driver(app, "U");
-            assert_eq!(app.current_cursor_pos(), *p);
+            assert_eq!(app.current_cursor_pos(), BitIndex::bytes(*p));
             assert_eq!(app.line_entry.get_alert(), None);
         }
         test_driver(app, "U");
@@ -1424,76 +1424,76 @@ mod app_string_tests {
 
         // Index from start
         test_driver(&mut app, "150g");
-        assert_eq!(app.current_cursor_pos(), 150);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(150));
         pos_history.push(150);
         verify_cursor_history(&mut app, &pos_history);
         test_driver(&mut app, "1500g");
-        assert_eq!(app.current_cursor_pos(), 1500);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1500));
         pos_history.push(1500);
         verify_cursor_history(&mut app, &pos_history);
 
         // Negative index from current
         test_driver(&mut app, "-100g");
-        assert_eq!(app.current_cursor_pos(), 1400);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1400));
         pos_history.push(1400);
         verify_cursor_history(&mut app, &pos_history);
         test_driver(&mut app, "-150g");
-        assert_eq!(app.current_cursor_pos(), 1250);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1250));
         pos_history.push(1250);
         verify_cursor_history(&mut app, &pos_history);
 
         // Try to seek to nevative index
         test_driver(&mut app, "-1251g");
-        assert_eq!(app.current_cursor_pos(), 1250);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1250));
         assert_eq!(app.line_entry.get_alert(), Some("Cannot seek to negative index".to_string()));
         // Does not influence undo/redo stack
         verify_cursor_history(&mut app, &pos_history);
 
         // Positive index from current
         test_driver(&mut app, "+150g");
-        assert_eq!(app.current_cursor_pos(), 1400);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1400));
         pos_history.push(1400);
         verify_cursor_history(&mut app, &pos_history);
         test_driver(&mut app, "+100g");
-        assert_eq!(app.current_cursor_pos(), 1500);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1500));
         pos_history.push(1500);
         verify_cursor_history(&mut app, &pos_history);
 
         // Go to start
         test_driver(&mut app, "g");
-        assert_eq!(app.current_cursor_pos(), 0);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(0));
         pos_history.push(0);
         verify_cursor_history(&mut app, &pos_history);
 
         // Index from end
         test_driver(&mut app, "G");
-        assert_eq!(app.current_cursor_pos(), file_length);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(file_length));
         pos_history.push(file_length);
         verify_cursor_history(&mut app, &pos_history);
         test_driver(&mut app, "100G");
-        assert_eq!(app.current_cursor_pos(), file_length - 100);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(file_length - 100));
         pos_history.push(file_length - 100);
         verify_cursor_history(&mut app, &pos_history);
         test_driver(&mut app, "1000G");
-        assert_eq!(app.current_cursor_pos(), file_length - 1000);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(file_length - 1000));
         pos_history.push(file_length - 1000);
         verify_cursor_history(&mut app, &pos_history);
 
         // Try to seek to nevative index from end
         test_driver(&mut app, "10000G");
-        assert_eq!(app.current_cursor_pos(), file_length - 1000);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(file_length - 1000));
         assert_eq!(app.line_entry.get_alert(), Some("Cannot seek to negative index".to_string()));
         // Does not influence the undo/redo stack
         verify_cursor_history(&mut app, &pos_history);
 
         // Exceed file length
         test_driver(&mut app, "+6000g");
-        assert_eq!(app.current_cursor_pos(), file_length + 5000);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(file_length + 5000));
         pos_history.push(file_length + 5000);
         verify_cursor_history(&mut app, &pos_history);
         // Using isize::MAX instead of usize::MAX since rust vectors can't actually get up to usize
         test_driver(&mut app, format!("{}g", std::isize::MAX as usize).as_str());
-        assert_eq!(app.current_cursor_pos(), std::isize::MAX as usize);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(std::isize::MAX as usize));
         pos_history.push(std::isize::MAX as usize);
         verify_cursor_history(&mut app, &pos_history);
     }
@@ -1510,25 +1510,25 @@ mod app_string_tests {
 
         for i in 0..64 {
             test_driver(&mut app, &format!("{}g{}m", i * 4, i));
-            assert_eq!(app.current_cursor_pos(), i * 4);
+            assert_eq!(app.current_cursor_pos(), BitIndex::bytes(i * 4));
             assert_eq!(app.line_entry.get_alert(), None);
         }
 
         for i in 0..64 {
             test_driver(&mut app, &format!("`{}g", i));
-            assert_eq!(app.current_cursor_pos(), i * 4);
+            assert_eq!(app.current_cursor_pos(), BitIndex::bytes(i * 4));
             assert_eq!(app.line_entry.get_alert(), None);
         }
 
         for i in (0..64).rev() {
             test_driver(&mut app, &format!("{}g{}m", (64 - i) * 100, i));
-            assert_eq!(app.current_cursor_pos(), (64 - i) * 100);
+            assert_eq!(app.current_cursor_pos(), BitIndex::bytes((64 - i) * 100));
             assert_eq!(app.line_entry.get_alert(), None);
         }
 
         for i in (0..64).rev() {
             test_driver(&mut app, &format!("`{}g", i));
-            assert_eq!(app.current_cursor_pos(), (64 - i) * 100);
+            assert_eq!(app.current_cursor_pos(), BitIndex::bytes((64 - i) * 100));
             assert_eq!(app.line_entry.get_alert(), None);
         }
         
@@ -1541,20 +1541,20 @@ mod app_string_tests {
 
         // Undo gotos
         for i in 0..64 {
-            assert_eq!(app.current_cursor_pos(), (64 - i) * 100);
+            assert_eq!(app.current_cursor_pos(), BitIndex::bytes((64 - i) * 100));
             assert_eq!(app.line_entry.get_alert(), None);
             test_driver(&mut app, "u");
         }
 
         for i in 0..64 {
             
-            assert_eq!(app.current_cursor_pos(), (64 - i) * 100);
+            assert_eq!(app.current_cursor_pos(), BitIndex::bytes((64 - i) * 100));
             assert_eq!(app.line_entry.get_alert(), None);
 
             // Undo mark (only marks 0-31 count as actions)
             if i < 32 {
                 test_driver(&mut app, "u");
-                assert_eq!(app.current_cursor_pos(), (64 - i) * 100);
+                assert_eq!(app.current_cursor_pos(), BitIndex::bytes((64 - i) * 100));
                 assert_eq!(app.line_entry.get_alert(), None);
             }
             
@@ -1564,16 +1564,16 @@ mod app_string_tests {
                 test_driver(&mut app, &format!("`{}g", j));
                 if j <= i && j < 32 {
                     // Mark has already been undone
-                    assert_eq!(app.current_cursor_pos(), j * 4);
+                    assert_eq!(app.current_cursor_pos(), BitIndex::bytes(j * 4));
                 } else {
                     // Mark has not yet been undone or cannot be undone
-                    assert_eq!(app.current_cursor_pos(), (64 - j) * 100);
+                    assert_eq!(app.current_cursor_pos(), BitIndex::bytes((64 - j) * 100));
                 }
                 assert_eq!(app.line_entry.get_alert(), None);
 
                 // Undo goto used for test
                 test_driver(&mut app, "u");
-                assert_eq!(app.current_cursor_pos(), (64 - i) * 100);
+                assert_eq!(app.current_cursor_pos(), BitIndex::bytes((64 - i) * 100));
                 assert_eq!(app.line_entry.get_alert(), None);
             }
 
@@ -1583,20 +1583,20 @@ mod app_string_tests {
 
         // Undo gotos
         for i in (0..64).rev() {
-            assert_eq!(app.current_cursor_pos(), i * 4);
+            assert_eq!(app.current_cursor_pos(), BitIndex::bytes(i * 4));
             assert_eq!(app.line_entry.get_alert(), None);
             test_driver(&mut app, "u");
         }
 
         for i in (0..64).rev() {
             
-            assert_eq!(app.current_cursor_pos(), i * 4);
+            assert_eq!(app.current_cursor_pos(), BitIndex::bytes(i * 4));
             assert_eq!(app.line_entry.get_alert(), None);
 
             // Undo mark (only marks 0-31 count as actions)
             if i < 32 {
                 test_driver(&mut app, "u");
-                assert_eq!(app.current_cursor_pos(), i * 4);
+                assert_eq!(app.current_cursor_pos(), BitIndex::bytes(i * 4));
                 assert_eq!(app.line_entry.get_alert(), None);
             }
             
@@ -1606,19 +1606,19 @@ mod app_string_tests {
                 test_driver(&mut app, &format!("`{}g", j));
                 if j >= i && j < 32 {
                     // Mark has already been undone
-                    assert_eq!(app.current_cursor_pos(), 0);
+                    assert_eq!(app.current_cursor_pos(), BitIndex::bytes(0));
                 } else if j < 32 {
                     // Mark has not yet been undone
-                    assert_eq!(app.current_cursor_pos(), j * 4);
+                    assert_eq!(app.current_cursor_pos(), BitIndex::bytes(j * 4));
                 } else {
                     // Mark has not yet been undone or cannot be undone
-                    assert_eq!(app.current_cursor_pos(), (64 - j) * 100);
+                    assert_eq!(app.current_cursor_pos(), BitIndex::bytes((64 - j) * 100));
                 }
                 assert_eq!(app.line_entry.get_alert(), None);
 
                 // Undo goto used for test
                 test_driver(&mut app, "u");
-                assert_eq!(app.current_cursor_pos(), i * 4);
+                assert_eq!(app.current_cursor_pos(), BitIndex::bytes(i * 4));
                 assert_eq!(app.line_entry.get_alert(), None);
             }
 
@@ -1641,13 +1641,13 @@ mod app_string_tests {
             // Redo goto
             test_driver(&mut app, "U");
 
-            assert_eq!(app.current_cursor_pos(), i * 4);
+            assert_eq!(app.current_cursor_pos(), BitIndex::bytes(i * 4));
             assert_eq!(app.line_entry.get_alert(), None);
 
             if i < 32 {
                 // Redo mark
                 test_driver(&mut app, "U");
-                assert_eq!(app.current_cursor_pos(), i * 4);
+                assert_eq!(app.current_cursor_pos(), BitIndex::bytes(i * 4));
                 assert_eq!(app.line_entry.get_alert(), None);
             }
         }
@@ -1655,20 +1655,20 @@ mod app_string_tests {
         for i in 0..64 {
             // Redo goto
             test_driver(&mut app, "U");
-            assert_eq!(app.current_cursor_pos(), i * 4);
+            assert_eq!(app.current_cursor_pos(), BitIndex::bytes(i * 4));
             assert_eq!(app.line_entry.get_alert(), None);
         }
 
         for i in (0..64).rev() {
             // Redo goto
             test_driver(&mut app, "U");
-            assert_eq!(app.current_cursor_pos(), (64 - i) * 100);
+            assert_eq!(app.current_cursor_pos(), BitIndex::bytes((64 - i) * 100));
             assert_eq!(app.line_entry.get_alert(), None);
 
             if i < 32 {
                 // Redo mark
                 test_driver(&mut app, "U");
-                assert_eq!(app.current_cursor_pos(), (64 - i) * 100);
+                assert_eq!(app.current_cursor_pos(), BitIndex::bytes((64 - i) * 100));
                 assert_eq!(app.line_entry.get_alert(), None);
             }
         }
@@ -1676,7 +1676,7 @@ mod app_string_tests {
         for i in (0..64).rev() {
             // Redo goto
             test_driver(&mut app, "U");
-            assert_eq!(app.current_cursor_pos(), (64 - i) * 100);
+            assert_eq!(app.current_cursor_pos(), BitIndex::bytes((64 - i) * 100));
             assert_eq!(app.line_entry.get_alert(), None);
         }
         
@@ -1694,7 +1694,7 @@ mod app_string_tests {
         test_driver(&mut app, "0Q");
         for i in 0..63 {
             test_driver(&mut app, &format!("{}m+1g", i));
-            assert_eq!(app.current_cursor_pos(), i + 1);
+            assert_eq!(app.current_cursor_pos(), BitIndex::bytes(i + 1));
             assert_eq!(app.line_entry.get_alert(), None);
         }
         test_driver(&mut app, "`0gQ");
@@ -1707,11 +1707,11 @@ mod app_string_tests {
                 test_driver(&mut app, &format!("`{}g", j));
                 if j < 32 {
                     // Marks 0-31 are overwritten by the macro each time it's run
-                    assert_eq!(app.current_cursor_pos(), macro_pos + j);
+                    assert_eq!(app.current_cursor_pos(), BitIndex::bytes(macro_pos + j));
                     assert_eq!(app.line_entry.get_alert(), None);
                 } else {
                     // Marks 32-63 are unaffected by macro
-                    assert_eq!(app.current_cursor_pos(), j);
+                    assert_eq!(app.current_cursor_pos(), BitIndex::bytes(j));
                     assert_eq!(app.line_entry.get_alert(), None);
                 }
             }
@@ -1734,7 +1734,7 @@ mod app_string_tests {
         // Delete 16 bytes at index 16
         test_driver(&mut app, "16g16d"); 
         assert_eq!(app.line_entry.get_alert(), None);
-        assert_eq!(app.current_cursor_pos(), 16);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(16));
 
         // Copy 8 bytes at byte 12 (first 4 bytes are left of deleted span, 
         // last 4 are right of deleted span) and confirm their contents
@@ -1745,12 +1745,12 @@ mod app_string_tests {
         ]);
         let r0 = app.editors.current().hex_edit.get_register(RegisterId::new(0).unwrap()).unwrap();
         assert_eq!(r0_expected, r0);
-        assert_eq!(app.current_cursor_pos(), file_length - 16);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(file_length - 16));
 
         // Delete 1200 bytes at index 0
         test_driver(&mut app, "g1200d"); 
         assert_eq!(app.line_entry.get_alert(), None);
-        assert_eq!(app.current_cursor_pos(), 0);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(0));
 
         // Grab the first 8 bytes (left of deleted span) and confirm their contents
         test_driver(&mut app, "8yG");
@@ -1759,7 +1759,7 @@ mod app_string_tests {
         ]);
         let r0 = app.editors.current().hex_edit.get_register(RegisterId::new(0).unwrap()).unwrap();
         assert_eq!(r0_expected, r0);
-        assert_eq!(app.current_cursor_pos(), file_length - 1216);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(file_length - 1216));
 
         // Attempt to delete past the end of the file
         test_driver(&mut app, "1500d");
@@ -1775,7 +1775,7 @@ mod app_string_tests {
 
         // Confirm that the file is empty
         test_driver(&mut app, "G");
-        assert_eq!(app.current_cursor_pos(), 0);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(0));
     }
 
     #[test]
@@ -1788,7 +1788,7 @@ mod app_string_tests {
         // Delete 16 bytes at index 16 then undo
         test_driver(&mut app, "16g16du"); 
         assert_eq!(app.line_entry.get_alert(), None);
-        assert_eq!(app.current_cursor_pos(), 16);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(16));
 
         let buff_expected = vec![
             0x49, 0x48, 0x44, 0x52,
@@ -1806,12 +1806,12 @@ mod app_string_tests {
         ];
         assert_eq!(app.editors.current_mut().hex_edit.get_bytes(12, &mut buff).unwrap(), 8);
         assert_eq!(buff_expected, buff);
-        assert_eq!(app.current_cursor_pos(), 16);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(16));
 
         // Delete every other pair of bytes from byte 16 to 32
         test_driver(&mut app, "16g2d+2g2d+2g2d+2g2d+2g"); 
         assert_eq!(app.line_entry.get_alert(), None);
-        assert_eq!(app.current_cursor_pos(), 24);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(24));
 
         let buff_expected = vec![
             0x00, 0x03, 0x58, 0x49,
@@ -1824,7 +1824,7 @@ mod app_string_tests {
         // Undo deleting pairs of bytes
         test_driver(&mut app, "uuuuuuuu"); 
         assert_eq!(app.line_entry.get_alert(), None);
-        assert_eq!(app.current_cursor_pos(), 16);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(16));
 
         let buff_expected = vec![
             0xa3, 0x00, 0x00, 0x03,
@@ -1839,7 +1839,7 @@ mod app_string_tests {
         // Redo deleting pairs of bytes
         test_driver(&mut app, "UUUUUUUU"); 
         assert_eq!(app.line_entry.get_alert(), None);
-        assert_eq!(app.current_cursor_pos(), 24);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(24));
 
         let buff_expected = vec![
             0x00, 0x03, 0x58, 0x49,
@@ -1852,7 +1852,7 @@ mod app_string_tests {
         // Delete 1200 bytes at index 0
         test_driver(&mut app, "g1200d"); 
         assert_eq!(app.line_entry.get_alert(), None);
-        assert_eq!(app.current_cursor_pos(), 0);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(0));
 
         // Grab the first 8 bytes (left of deleted span) and confirm their contents
         test_driver(&mut app, "8yG");
@@ -1861,7 +1861,7 @@ mod app_string_tests {
         ]);
         let r0 = app.editors.current().hex_edit.get_register(RegisterId::new(0).unwrap()).unwrap();
         assert_eq!(r0_expected, r0);
-        assert_eq!(app.current_cursor_pos(), file_length - 1216 - 8);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(file_length - 1216 - 8));
 
         // Attempt to delete past the end of the file
         test_driver(&mut app, "1500d");
@@ -1874,7 +1874,7 @@ mod app_string_tests {
         // Undo deleting 1200 bytes (including seeks done since then)
         test_driver(&mut app, "uuuu"); 
         assert_eq!(app.line_entry.get_alert(), None);
-        assert_eq!(app.current_cursor_pos(), 0);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(0));
 
         // Confirm some bytes in the previously deleted region
         let buff_expected = vec![
@@ -1892,7 +1892,7 @@ mod app_string_tests {
         ]);
         let r0 = app.editors.current().hex_edit.get_register(RegisterId::new(0).unwrap()).unwrap();
         assert_eq!(r0_expected, r0);
-        assert_eq!(app.current_cursor_pos(), file_length - 1216 - 8);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(file_length - 1216 - 8));
 
         // Delete the remainder of the file
         test_driver(&mut app, format!("g{}d", file_length - 1200 - 16 - 8).as_str());
@@ -1900,12 +1900,12 @@ mod app_string_tests {
 
         // Confirm that the file is empty
         test_driver(&mut app, "G");
-        assert_eq!(app.current_cursor_pos(), 0);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(0));
 
         // Undo deleting 1200 bytes and file (including seeks done since then)
         test_driver(&mut app, "uuuuuu"); 
         assert_eq!(app.line_entry.get_alert(), None);
-        assert_eq!(app.current_cursor_pos(), 0);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(0));
 
         // Confirm some bytes in the previously deleted region
         let buff_expected = vec![
@@ -1918,7 +1918,7 @@ mod app_string_tests {
 
         // Redo file deletion and confirm file is empty
         test_driver(&mut app, "UUUUUG"); 
-        assert_eq!(app.current_cursor_pos(), 0);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(0));
     }
 
     #[test]
@@ -1931,12 +1931,12 @@ mod app_string_tests {
         // Yank 16 bytes starting at 1712
         test_driver(&mut app, "1712g16y"); 
         assert_eq!(app.line_entry.get_alert(), None);
-        assert_eq!(app.current_cursor_pos(), 1712);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1712));
 
         // Paste them at byte 1728 and confirm their contents
         test_driver(&mut app, "1728gp"); 
         assert_eq!(app.line_entry.get_alert(), None);
-        assert_eq!(app.current_cursor_pos(), 1728 + 16);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1728 + 16));
 
         let buff_expected = vec![
             0x74, 0x98, 0xb2, 0x8e, 
@@ -1951,12 +1951,12 @@ mod app_string_tests {
         // Confirm file length increased by 16
         test_driver(&mut app, "G"); 
         assert_eq!(app.line_entry.get_alert(), None);
-        assert_eq!(app.current_cursor_pos(), file_length + 16);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(file_length + 16));
 
         // (overwrite) paste the copied 16 bytes at 1744 and confirm their values
         test_driver(&mut app, "1744gP"); 
         assert_eq!(app.line_entry.get_alert(), None);
-        assert_eq!(app.current_cursor_pos(), 1744 + 16);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1744 + 16));
 
         let buff_expected = vec![
             0x74, 0x98, 0xb2, 0x8e, 
@@ -1971,23 +1971,23 @@ mod app_string_tests {
         // Confirm file length did not change
         test_driver(&mut app, "G"); 
         assert_eq!(app.line_entry.get_alert(), None);
-        assert_eq!(app.current_cursor_pos(), file_length + 16);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(file_length + 16));
 
         // Yank sequential pairs of values into each register 0-31
         for i in 0..32 {
             test_driver(&mut app, format!("{}g{}r2y", 1040 + i*2, i).as_str()); 
             assert_eq!(app.line_entry.get_alert(), None);
-            assert_eq!(app.current_cursor_pos(), 1040 + i*2);
+            assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1040 + i*2));
         }
 
         // Paste (overwrite) each pair in reverse order. Confirm file length is unchanged
         for i in 0..32 {
             test_driver(&mut app, format!("{}g{}P", 1040 + i*2, 31 - i).as_str()); 
             assert_eq!(app.line_entry.get_alert(), None);
-            assert_eq!(app.current_cursor_pos(), 1040 + i*2 + 2);
+            assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1040 + i*2 + 2));
 
             test_driver(&mut app, "G"); 
-            assert_eq!(app.current_cursor_pos(), file_length + 16);
+            assert_eq!(app.current_cursor_pos(), BitIndex::bytes(file_length + 16));
         }
 
         // Paste (insert) each pair at the same location, so they end up in reverse order.
@@ -1995,10 +1995,10 @@ mod app_string_tests {
         for i in 0..32 {
             test_driver(&mut app, format!("{}g{}p", 1104, i).as_str()); 
             assert_eq!(app.line_entry.get_alert(), None);
-            assert_eq!(app.current_cursor_pos(), 1104 + 2);
+            assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1104 + 2));
 
             test_driver(&mut app, "G"); 
-            assert_eq!(app.current_cursor_pos(), file_length + 16 + (i + 1) * 2);
+            assert_eq!(app.current_cursor_pos(), BitIndex::bytes(file_length + 16 + (i + 1) * 2));
         }
 
         // Verify data pasted by above two loops
@@ -2030,12 +2030,12 @@ mod app_string_tests {
         // Yank 16 bytes starting at 1712 and undo
         test_driver(&mut app, "1712g16yu"); 
         assert_eq!(app.line_entry.get_alert(), None);
-        assert_eq!(app.current_cursor_pos(), 1712);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1712));
 
         // Try to paste them at byte 1728 and confirm nothing is pasted
         test_driver(&mut app, "1728gp"); 
         assert_eq!(app.line_entry.get_alert(), None);
-        assert_eq!(app.current_cursor_pos(), 1728);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1728));
 
         let buff_expected = vec![
             0x25, 0xe8, 0x2a, 0x96, 
@@ -2050,7 +2050,7 @@ mod app_string_tests {
         // Try to paste (overwrite) them at byte 1728 and confirm nothing is pasted
         test_driver(&mut app, "1728gP"); 
         assert_eq!(app.line_entry.get_alert(), None);
-        assert_eq!(app.current_cursor_pos(), 1728);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1728));
 
         let buff_expected = vec![
             0x25, 0xe8, 0x2a, 0x96, 
@@ -2065,12 +2065,12 @@ mod app_string_tests {
         // Yank 16 bytes starting at 1712 and undo then redo
         test_driver(&mut app, "1712g16yuU"); 
         assert_eq!(app.line_entry.get_alert(), None);
-        assert_eq!(app.current_cursor_pos(), 1712);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1712));
 
         // Paste them at byte 1728 and confirm their contents
         test_driver(&mut app, "1728gp"); 
         assert_eq!(app.line_entry.get_alert(), None);
-        assert_eq!(app.current_cursor_pos(), 1728 + 16);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1728 + 16));
 
         let buff_expected = vec![
             0x74, 0x98, 0xb2, 0x8e, 
@@ -2085,12 +2085,12 @@ mod app_string_tests {
         // Confirm file length increased by 16
         test_driver(&mut app, "G"); 
         assert_eq!(app.line_entry.get_alert(), None);
-        assert_eq!(app.current_cursor_pos(), file_length + 16);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(file_length + 16));
 
         // Undo and confirm previous state is restored
         test_driver(&mut app, "uu"); 
         assert_eq!(app.line_entry.get_alert(), None);
-        assert_eq!(app.current_cursor_pos(), 1728);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1728));
 
         let buff_expected = vec![
             0x25, 0xe8, 0x2a, 0x96, 
@@ -2105,7 +2105,7 @@ mod app_string_tests {
         // Redo and confirm
         test_driver(&mut app, "U"); 
         assert_eq!(app.line_entry.get_alert(), None);
-        assert_eq!(app.current_cursor_pos(), 1728 + 16);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1728 + 16));
 
         let buff_expected = vec![
             0x74, 0x98, 0xb2, 0x8e, 
@@ -2120,12 +2120,12 @@ mod app_string_tests {
         // Confirm file length increased by 16
         test_driver(&mut app, "G"); 
         assert_eq!(app.line_entry.get_alert(), None);
-        assert_eq!(app.current_cursor_pos(), file_length + 16);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(file_length + 16));
 
         // (overwrite) paste the copied 16 bytes at 1744 and undo. Confirm previous state is restored
         test_driver(&mut app, "1744gPu"); 
         assert_eq!(app.line_entry.get_alert(), None);
-        assert_eq!(app.current_cursor_pos(), 1728 + 16);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1728 + 16));
 
         let buff_expected = vec![
             0x74, 0x98, 0xb2, 0x8e, 
@@ -2140,7 +2140,7 @@ mod app_string_tests {
         // Redo and confirm pasted values
         test_driver(&mut app, "U"); 
         assert_eq!(app.line_entry.get_alert(), None);
-        assert_eq!(app.current_cursor_pos(), 1744 + 16);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1744 + 16));
 
         let buff_expected = vec![
             0x74, 0x98, 0xb2, 0x8e, 
@@ -2155,20 +2155,20 @@ mod app_string_tests {
         // Confirm file length did not change
         test_driver(&mut app, "G"); 
         assert_eq!(app.line_entry.get_alert(), None);
-        assert_eq!(app.current_cursor_pos(), file_length + 16);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(file_length + 16));
 
         // Yank sequential pairs of values into each register 0-31
         for i in 0..32 {
             test_driver(&mut app, format!("{}g{}r2y", 1040 + i*2, i).as_str()); 
             assert_eq!(app.line_entry.get_alert(), None);
-            assert_eq!(app.current_cursor_pos(), 1040 + i*2);
+            assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1040 + i*2));
         }
 
         // Yank sequential pairs of values into each register 0-31 starting from 0
         for i in 0..32 {
             test_driver(&mut app, format!("{}g{}r2y", i*2, i).as_str()); 
             assert_eq!(app.line_entry.get_alert(), None);
-            assert_eq!(app.current_cursor_pos(), i*2);
+            assert_eq!(app.current_cursor_pos(), BitIndex::bytes(i*2));
         }
 
         // Undo previous set of yanks
@@ -2178,10 +2178,10 @@ mod app_string_tests {
         for i in 0..32 {
             test_driver(&mut app, format!("{}g{}P", 1040 + i*2, 31 - i).as_str()); 
             assert_eq!(app.line_entry.get_alert(), None);
-            assert_eq!(app.current_cursor_pos(), 1040 + i*2 + 2);
+            assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1040 + i*2 + 2));
 
             test_driver(&mut app, "G"); 
-            assert_eq!(app.current_cursor_pos(), file_length + 16);
+            assert_eq!(app.current_cursor_pos(), BitIndex::bytes(file_length + 16));
         }
 
         // Paste (insert) each pair at the same location, so they end up in reverse order.
@@ -2189,10 +2189,10 @@ mod app_string_tests {
         for i in 0..32 {
             test_driver(&mut app, format!("{}g{}p", 1104, i).as_str()); 
             assert_eq!(app.line_entry.get_alert(), None);
-            assert_eq!(app.current_cursor_pos(), 1104 + 2);
+            assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1104 + 2));
 
             test_driver(&mut app, "G"); 
-            assert_eq!(app.current_cursor_pos(), file_length + 16 + (i + 1) * 2);
+            assert_eq!(app.current_cursor_pos(), BitIndex::bytes(file_length + 16 + (i + 1) * 2));
         }
 
         // Undo previous pastes
@@ -2265,12 +2265,12 @@ mod app_string_tests {
             // Yank 16 bytes starting at 1712
             test_driver(&mut app, &format!("1712g+16g{}m-16g{}r`{}y", i, i, i)); 
             assert_eq!(app.line_entry.get_alert(), None);
-            assert_eq!(app.current_cursor_pos(), 1712);
+            assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1712));
 
             // Paste them at byte 1728 and confirm their contents
             test_driver(&mut app, &format!("1728g{}p", i)); 
             assert_eq!(app.line_entry.get_alert(), None);
-            assert_eq!(app.current_cursor_pos(), 1728 + 16);
+            assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1728 + 16));
 
             let buff_expected = vec![
                 0x74, 0x98, 0xb2, 0x8e, 
@@ -2284,16 +2284,16 @@ mod app_string_tests {
 
             // Undo paste and seek
             test_driver(&mut app, "uu"); 
-            assert_eq!(app.current_cursor_pos(), 1712);
+            assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1712));
             assert_eq!(app.line_entry.get_alert(), None);
 
             // Undo yank or seek, depending on whether the yank counted as an action
             test_driver(&mut app, "u");
             assert_eq!(app.line_entry.get_alert(), None);
             if i < 32 {
-                assert_eq!(app.current_cursor_pos(), 1712);
+                assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1712));
             } else {
-                assert_eq!(app.current_cursor_pos(), 1728);
+                assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1728));
             }
         }
 
@@ -2301,12 +2301,12 @@ mod app_string_tests {
             // Yank 16 bytes starting at 1712
             test_driver(&mut app, &format!("1712g{}m+16g`{}y", i, i)); 
             assert_eq!(app.line_entry.get_alert(), None);
-            assert_eq!(app.current_cursor_pos(), 1728);
+            assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1728));
 
             // Paste them at byte 1728 and confirm their contents
             test_driver(&mut app, "1728gp"); 
             assert_eq!(app.line_entry.get_alert(), None);
-            assert_eq!(app.current_cursor_pos(), 1728 + 16);
+            assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1728 + 16));
 
             let buff_expected = vec![
                 0x74, 0x98, 0xb2, 0x8e, 
@@ -2327,22 +2327,22 @@ mod app_string_tests {
         for i in 0..32 {
             test_driver(&mut app, &format!("g{}Q+16g{}m-16g{}r`{}yQ", i, i, i, i)); 
             assert_eq!(app.line_entry.get_alert(), None);
-            assert_eq!(app.current_cursor_pos(), 0);
+            assert_eq!(app.current_cursor_pos(), BitIndex::bytes(0));
         }
 
         for i in 0..32 {
             // Yank 16 bytes starting at 1712
             test_driver(&mut app, &format!("1712g{}q", i)); 
             assert_eq!(app.line_entry.get_alert(), None);
-            assert_eq!(app.current_cursor_pos(), 1712);
+            assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1712));
 
             // Paste them at byte 1728 and confirm their contents
             test_driver(&mut app, "1728g"); 
             assert_eq!(app.line_entry.get_alert(), None);
-            assert_eq!(app.current_cursor_pos(), 1728);
+            assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1728));
             test_driver(&mut app, &format!("{}p", i)); 
             assert_eq!(app.line_entry.get_alert(), None);
-            assert_eq!(app.current_cursor_pos(), 1728 + 16);
+            assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1728 + 16));
 
             let buff_expected = vec![
                 0x74, 0x98, 0xb2, 0x8e, 
@@ -2356,7 +2356,7 @@ mod app_string_tests {
 
             // Undo paste and seek
             test_driver(&mut app, "uu"); 
-            assert_eq!(app.current_cursor_pos(), 1712);
+            assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1712));
             assert_eq!(app.line_entry.get_alert(), None);
         }
 
@@ -2382,7 +2382,7 @@ mod app_string_tests {
 
         test_driver(&mut app, "1616g0q");
 
-        assert_eq!(app.current_cursor_pos(), 1616);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1616));
         assert_eq!(app.line_entry.get_alert(), None);
 
         test_driver(&mut app, "1q");
@@ -2394,7 +2394,7 @@ mod app_string_tests {
             0x14, 0xE4, 0x85, 0x27, 0xE8, 0xF3, 0x00, 0x23
         ];
 
-        assert_eq!(app.current_cursor_pos(), 1616);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1616));
         assert_eq!(app.line_entry.get_alert(), None);
 
         let mut buff = vec![0; 32];
@@ -2405,7 +2405,7 @@ mod app_string_tests {
 
         test_driver(&mut app, "0q");
 
-        assert_eq!(app.current_cursor_pos(), 1616);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1616));
         assert_eq!(app.line_entry.get_alert(), None);
 
         test_driver(&mut app, "1q");
@@ -2417,7 +2417,7 @@ mod app_string_tests {
             0x86, 0x85, 0xF4, 0x57, 0x67, 0x9E, 0x00, 0x74
         ];
 
-        assert_eq!(app.current_cursor_pos(), 1616);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1616));
         assert_eq!(app.line_entry.get_alert(), None);
 
         let mut buff = vec![0; 32];
@@ -2448,7 +2448,7 @@ mod app_string_tests {
 
         test_driver(&mut app, "1616g0q");
 
-        assert_eq!(app.current_cursor_pos(), 0);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(0));
         assert_eq!(app.line_entry.get_alert(), None);
 
         test_driver(&mut app, "1616g1q");
@@ -2460,7 +2460,7 @@ mod app_string_tests {
             0x0A, 0x1A, 0x0A, 0x0D, 0x47, 0x4E, 0x50, 0x89
         ];
 
-        assert_eq!(app.current_cursor_pos(), 1616);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1616));
         assert_eq!(app.line_entry.get_alert(), None);
 
         let mut buff = vec![0; 32];
@@ -2478,38 +2478,38 @@ mod app_string_tests {
 
         // Insert 8 default fill bytes at 0
         test_driver(&mut app, "8f");
-        assert_eq!(app.current_cursor_pos(), 8);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(8));
         assert_eq!(app.line_entry.get_alert(), None);
 
         // Confirm file length is impacted
         test_driver(&mut app, "G");
-        assert_eq!(app.current_cursor_pos(), file_length + 8);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(file_length + 8));
 
         test_driver(&mut app, ":set fill xabcdef\n");
         assert_eq!(app.line_entry.get_alert(), None);
 
         // Insert 8 default fill bytes at 8
         test_driver(&mut app, "8g8f");
-        assert_eq!(app.current_cursor_pos(), 16);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(16));
         assert_eq!(app.line_entry.get_alert(), None);
 
         // Confirm file length is impacted
         test_driver(&mut app, "G");
-        assert_eq!(app.current_cursor_pos(), file_length + 16);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(file_length + 16));
 
         // Overwrite 8 fill bytes at 24
         test_driver(&mut app, "24g8F");
-        assert_eq!(app.current_cursor_pos(), 32);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(32));
         assert_eq!(app.line_entry.get_alert(), None);
 
         // Overwrite 2 fill bytes at 19
         test_driver(&mut app, "19g2F");
-        assert_eq!(app.current_cursor_pos(), 21);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(21));
         assert_eq!(app.line_entry.get_alert(), None);
 
         // Confirm file length is not impacted
         test_driver(&mut app, "G");
-        assert_eq!(app.current_cursor_pos(), file_length + 16);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(file_length + 16));
 
         let buff_expected = vec![
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
@@ -2525,12 +2525,12 @@ mod app_string_tests {
 
         // Overwrite 8 bytes, 4 of which will be written past EOF
         test_driver(&mut app, format!("{}g8F", file_length + 12).as_str());
-        assert_eq!(app.current_cursor_pos(), file_length + 20);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(file_length + 20));
         assert_eq!(app.line_entry.get_alert(), None);
 
         // Confirm file length is impacted
         test_driver(&mut app, "G");
-        assert_eq!(app.current_cursor_pos(), file_length + 20);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(file_length + 20));
 
         let buff_expected = vec![
             0x49, 0x45, 0x4e, 0x44, 
@@ -2544,12 +2544,12 @@ mod app_string_tests {
 
         // Insert ascii character 8 bytes past EOF
         test_driver(&mut app, format!("{}gI?", file_length + 27).as_str());
-        assert_eq!(app.current_cursor_pos(), file_length + 28);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(file_length + 28));
         assert_eq!(app.line_entry.get_alert(), None);
 
         // Confirm file length is impacted
         test_driver(&mut app, "\u{1b}G");
-        assert_eq!(app.current_cursor_pos(), file_length + 28);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(file_length + 28));
 
         let buff_expected = vec![
             0x49, 0x45, 0x4e, 0x44, 
@@ -2577,28 +2577,28 @@ mod app_string_tests {
 
         // Insert 8 fill bytes at 0
         test_driver(&mut app, "8f");
-        assert_eq!(app.current_cursor_pos(), 8);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(8));
         assert_eq!(app.line_entry.get_alert(), None);
 
         // Confirm file length is impacted
         test_driver(&mut app, "G");
-        assert_eq!(app.current_cursor_pos(), file_length + 8);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(file_length + 8));
 
         // Yank 3 bytes after the original yank (0x47, 0x0d, 0x0a)
         test_driver(&mut app, "11g3y");
 
         // Insert 8 fill bytes at 8
         test_driver(&mut app, "8g8f");
-        assert_eq!(app.current_cursor_pos(), 16);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(16));
         assert_eq!(app.line_entry.get_alert(), None);
 
         // Confirm file length is impacted
         test_driver(&mut app, "G");
-        assert_eq!(app.current_cursor_pos(), file_length + 16);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(file_length + 16));
 
         // Overwrite 8 fill bytes at 24
         test_driver(&mut app, "24g8F");
-        assert_eq!(app.current_cursor_pos(), 32);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(32));
         assert_eq!(app.line_entry.get_alert(), None);
 
         // Set fill to use register 31 and yank bytes 16-19 (0x89, 0x50) into register 31
@@ -2607,12 +2607,12 @@ mod app_string_tests {
 
         // Overwrite 2 fill bytes at 19
         test_driver(&mut app, "19g2F");
-        assert_eq!(app.current_cursor_pos(), 21);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(21));
         assert_eq!(app.line_entry.get_alert(), None);
 
         // Confirm file length is not impacted
         test_driver(&mut app, "G");
-        assert_eq!(app.current_cursor_pos(), file_length + 16);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(file_length + 16));
 
         let buff_expected = vec![
             0x89, 0x50, 0x4e, 0x89, 0x50, 0x4e, 0x89, 0x50, 
@@ -2631,12 +2631,12 @@ mod app_string_tests {
 
         // Overwrite 8 bytes, 4 of which will be written past EOF
         test_driver(&mut app, format!("{}g8F", file_length + 12).as_str());
-        assert_eq!(app.current_cursor_pos(), file_length + 20);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(file_length + 20));
         assert_eq!(app.line_entry.get_alert(), None);
 
         // Confirm file length is impacted
         test_driver(&mut app, "G");
-        assert_eq!(app.current_cursor_pos(), file_length + 20);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(file_length + 20));
 
         let buff_expected = vec![
             0x49, 0x45, 0x4e, 0x44, 
@@ -2650,12 +2650,12 @@ mod app_string_tests {
 
         // Insert ascii character 8 bytes past EOF
         test_driver(&mut app, format!("{}gI?", file_length + 27).as_str());
-        assert_eq!(app.current_cursor_pos(), file_length + 28);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(file_length + 28));
         assert_eq!(app.line_entry.get_alert(), None);
 
         // Confirm file length is impacted
         test_driver(&mut app, "\u{1b}G");
-        assert_eq!(app.current_cursor_pos(), file_length + 28);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(file_length + 28));
 
         let buff_expected = vec![
             0x49, 0x45, 0x4e, 0x44, 
@@ -3768,14 +3768,14 @@ mod app_string_tests {
         assert_eq!(app.line_entry.get_alert(), None);
         test_driver(&mut app, "Q");
         assert_eq!(app.line_entry.get_alert(), None);
-        assert_eq!(app.current_cursor_pos(), 8);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(8));
         assert_eq!(app.editors.current_mut().hex_edit.get_bytes(8, &mut buff).unwrap(), 8);
         assert_eq!(bytes_8_16_3m, buff);
         // Undo everything that was done while recording the macro
         test_driver(&mut app, "uuuuu");
         assert_eq!(app.line_entry.get_alert(), None);
         assert_eq!(app.editors.current_mut().hex_edit.get_bytes(8, &mut buff).unwrap(), 8);
-        assert_eq!(app.current_cursor_pos(), 8);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(8));
         assert_eq!(bytes_8_16, buff);
         // Create a new macro that swaps each pair of pairs of bytes in an 8-byte word
         test_driver(&mut app, "4Q");
@@ -3788,7 +3788,7 @@ mod app_string_tests {
         assert_eq!(app.line_entry.get_alert(), None);
         test_driver(&mut app, "Q");
         assert_eq!(app.line_entry.get_alert(), None);
-        assert_eq!(app.current_cursor_pos(), 12);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(12));
         assert_eq!(app.editors.current_mut().hex_edit.get_bytes(8, &mut buff).unwrap(), 8);
         assert_eq!(bytes_8_16_4m, buff);
 
@@ -3799,25 +3799,25 @@ mod app_string_tests {
 
         test_driver(&mut app, "1712g4q");
         assert_eq!(app.line_entry.get_alert(), None);
-        assert_eq!(app.current_cursor_pos(), 1716);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1716));
         assert_eq!(app.editors.current_mut().hex_edit.get_bytes(1712, &mut buff).unwrap(), 16);
         assert_eq!(bytes_1712_1728_4m, buff);
 
         test_driver(&mut app, "+4g4q");
         assert_eq!(app.line_entry.get_alert(), None);
-        assert_eq!(app.current_cursor_pos(), 1724);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1724));
         assert_eq!(app.editors.current_mut().hex_edit.get_bytes(1712, &mut buff).unwrap(), 16);
         assert_eq!(bytes_1712_1728_4m_4m, buff);
 
         test_driver(&mut app, "-4g4q");
         assert_eq!(app.line_entry.get_alert(), None);
-        assert_eq!(app.current_cursor_pos(), 1724);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1724));
         assert_eq!(app.editors.current_mut().hex_edit.get_bytes(1712, &mut buff).unwrap(), 16);
         assert_eq!(bytes_1712_1728_4m, buff);
 
         test_driver(&mut app, "-12g4q");
         assert_eq!(app.line_entry.get_alert(), None);
-        assert_eq!(app.current_cursor_pos(), 1716);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(1716));
         assert_eq!(app.editors.current_mut().hex_edit.get_bytes(1712, &mut buff).unwrap(), 16);
         assert_eq!(bytes_1712_1728, buff);
     }
@@ -3870,7 +3870,7 @@ mod app_string_tests {
 
         // Search for IDAT
         test_driver(&mut app, "/IDAT\n"); 
-        assert_eq!(app.current_cursor_pos(), 53);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(53));
         assert_eq!(app.line_entry.get_alert(), Some("Result 1 of 4".to_string()));
         assert_eq!(app.current_editor().highlights.len(), 4);
         assert_eq!(app.current_editor().highlights[0].start, BitIndex::bytes(53));
@@ -3884,124 +3884,124 @@ mod app_string_tests {
 
         // Go to second and third result without moving cursor
         test_driver(&mut app, "n"); 
-        assert_eq!(app.current_cursor_pos(), 164);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(164));
         assert_eq!(app.line_entry.get_alert(), Some("Result 2 of 4".to_string()));
 
         test_driver(&mut app, "n"); 
-        assert_eq!(app.current_cursor_pos(), 205);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(205));
         assert_eq!(app.line_entry.get_alert(), Some("Result 3 of 4".to_string()));
 
         // Move cursor to between 2nd and 3rd result then seek to 3rd result (2 trials)
         test_driver(&mut app, "164g"); 
-        assert_eq!(app.current_cursor_pos(), 164);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(164));
         assert_eq!(app.line_entry.get_alert(), None);
 
         test_driver(&mut app, "n"); 
-        assert_eq!(app.current_cursor_pos(), 205);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(205));
         assert_eq!(app.line_entry.get_alert(), Some("Result 3 of 4".to_string()));
 
         test_driver(&mut app, "204g"); 
-        assert_eq!(app.current_cursor_pos(), 204);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(204));
         assert_eq!(app.line_entry.get_alert(), None);
 
         test_driver(&mut app, "n"); 
-        assert_eq!(app.current_cursor_pos(), 205);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(205));
         assert_eq!(app.line_entry.get_alert(), Some("Result 3 of 4".to_string()));
 
         // Seek to previous result
         test_driver(&mut app, "N"); 
-        assert_eq!(app.current_cursor_pos(), 164);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(164));
         assert_eq!(app.line_entry.get_alert(), Some("Result 2 of 4".to_string()));
 
         // Move cursor between 2nd and 3rd result then seek back to 2nd result (2 trials)
         test_driver(&mut app, "205g"); 
-        assert_eq!(app.current_cursor_pos(), 205);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(205));
         assert_eq!(app.line_entry.get_alert(), None);
 
         test_driver(&mut app, "N"); 
-        assert_eq!(app.current_cursor_pos(), 164);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(164));
         assert_eq!(app.line_entry.get_alert(), Some("Result 2 of 4".to_string()));
 
         test_driver(&mut app, "165g"); 
-        assert_eq!(app.current_cursor_pos(), 165);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(165));
         assert_eq!(app.line_entry.get_alert(), None);
 
         test_driver(&mut app, "N"); 
-        assert_eq!(app.current_cursor_pos(), 164);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(164));
         assert_eq!(app.line_entry.get_alert(), Some("Result 2 of 4".to_string()));
 
         // Seek to 3rd and 4th result
         test_driver(&mut app, "n"); 
-        assert_eq!(app.current_cursor_pos(), 205);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(205));
         assert_eq!(app.line_entry.get_alert(), Some("Result 3 of 4".to_string()));
 
         test_driver(&mut app, "n"); 
-        assert_eq!(app.current_cursor_pos(), 316);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(316));
         assert_eq!(app.line_entry.get_alert(), Some("Result 4 of 4".to_string()));
 
         // Wrap to first result
         test_driver(&mut app, "n"); 
-        assert_eq!(app.current_cursor_pos(), 53);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(53));
         assert_eq!(app.line_entry.get_alert(), Some("Wrapped to result 1 of 4".to_string()));
 
         // Wrap to last result
         test_driver(&mut app, "N"); 
-        assert_eq!(app.current_cursor_pos(), 316);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(316));
         assert_eq!(app.line_entry.get_alert(), Some("Wrapped to result 4 of 4".to_string()));
 
         // Move cursor to after last result and wrap to first result
         test_driver(&mut app, "320g"); 
-        assert_eq!(app.current_cursor_pos(), 320);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(320));
         assert_eq!(app.line_entry.get_alert(), None);
 
         test_driver(&mut app, "n"); 
-        assert_eq!(app.current_cursor_pos(), 53);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(53));
         assert_eq!(app.line_entry.get_alert(), Some("Wrapped to result 1 of 4".to_string()));
 
         // Move cursor to after last result and seek to last result
         test_driver(&mut app, "320g"); 
-        assert_eq!(app.current_cursor_pos(), 320);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(320));
         assert_eq!(app.line_entry.get_alert(), None);
 
         test_driver(&mut app, "N"); 
-        assert_eq!(app.current_cursor_pos(), 316);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(316));
         assert_eq!(app.line_entry.get_alert(), Some("Result 4 of 4".to_string()));
 
         // Move cursor to before first result and seek to first result
         test_driver(&mut app, "50g"); 
-        assert_eq!(app.current_cursor_pos(), 50);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(50));
         assert_eq!(app.line_entry.get_alert(), None);
 
         test_driver(&mut app, "n"); 
-        assert_eq!(app.current_cursor_pos(), 53);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(53));
         assert_eq!(app.line_entry.get_alert(), Some("Result 1 of 4".to_string()));
 
         // Move cursor to before first result result and wrap to last result
         test_driver(&mut app, "50g"); 
-        assert_eq!(app.current_cursor_pos(), 50);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(50));
         assert_eq!(app.line_entry.get_alert(), None);
 
         test_driver(&mut app, "N"); 
-        assert_eq!(app.current_cursor_pos(), 316);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(316));
         assert_eq!(app.line_entry.get_alert(), Some("Wrapped to result 4 of 4".to_string()));
 
         // Search for IEND
         test_driver(&mut app, "/IEND\n");
-        assert_eq!(app.current_cursor_pos(), 330);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(330));
         assert_eq!(app.line_entry.get_alert(), Some("Result 1 of 1".to_string()));
 
         // Try forward and reverse search with the single result
         test_driver(&mut app, "n"); 
-        assert_eq!(app.current_cursor_pos(), 330);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(330));
         assert_eq!(app.line_entry.get_alert(), Some("Wrapped to result 1 of 1".to_string()));
 
         test_driver(&mut app, "N"); 
-        assert_eq!(app.current_cursor_pos(), 330);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(330));
         assert_eq!(app.line_entry.get_alert(), Some("Wrapped to result 1 of 1".to_string()));
 
         // Search for fizz (no results)
         test_driver(&mut app, "/fizz\n");
-        assert_eq!(app.current_cursor_pos(), 330);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(330));
         assert_eq!(app.line_entry.get_alert(), Some("No results".to_string()));
 
         app
@@ -4013,7 +4013,7 @@ mod app_string_tests {
 
         // Undo search that had no results
         assert_eq!(app.current_editor().highlights.len(), 0);
-        assert_eq!(app.current_cursor_pos(), 330);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(330));
         test_driver(&mut app, "u"); 
 
         // Undo wrap around seeks and search with one result (IEND)
@@ -4021,13 +4021,13 @@ mod app_string_tests {
             assert_eq!(app.current_editor().highlights.len(), 1);
             assert_eq!(app.current_editor().highlights[0].start, BitIndex::bytes(330));
             assert_eq!(app.current_editor().highlights[0].span, BitIndex::bytes(4));
-            assert_eq!(app.current_cursor_pos(), 330);
+            assert_eq!(app.current_cursor_pos(), BitIndex::bytes(330));
             test_driver(&mut app, "u"); 
             assert_eq!(app.line_entry.get_alert(), None);
             
         }
 
-        assert_eq!(app.current_cursor_pos(), 316);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(316));
 
         let positions = [
             316, 50, 53, 50, 316, 320, 53, 320, 316, 53, 316, 205, 164, 165, 164, 205, 164, 205, 204, 205, 164, 205, 164, 53, 0
@@ -4047,7 +4047,7 @@ mod app_string_tests {
             assert_eq!(app.current_editor().highlights[3].span, BitIndex::bytes(4));
 
             test_driver(&mut app, "u"); 
-            assert_eq!(app.current_cursor_pos(), *i);
+            assert_eq!(app.current_cursor_pos(), BitIndex::bytes(*i));
             assert_eq!(app.line_entry.get_alert(), None);
         }
 
@@ -4093,7 +4093,7 @@ mod app_string_tests {
 
         for (i, pos) in positions.iter().enumerate().rev().skip(1) {
             test_driver(&mut app, "U"); 
-            assert_eq!(app.current_cursor_pos(), *pos);
+            assert_eq!(app.current_cursor_pos(), BitIndex::bytes(*pos));
             if result_indices[i] == 0 {
                 assert_eq!(app.line_entry.get_alert(), None);
             } else {
@@ -4122,7 +4122,7 @@ mod app_string_tests {
             assert_eq!(app.current_editor().highlights.len(), 1);
             assert_eq!(app.current_editor().highlights[0].start, BitIndex::bytes(330));
             assert_eq!(app.current_editor().highlights[0].span, BitIndex::bytes(4));
-            assert_eq!(app.current_cursor_pos(), 330);
+            assert_eq!(app.current_cursor_pos(), BitIndex::bytes(330));
             if i == 0 {
                 assert_eq!(app.line_entry.get_alert(), Some("Result 1 of 1".to_string()));
             } else {
@@ -4141,7 +4141,7 @@ mod app_string_tests {
 
         // Search for IDAT
         test_driver(&mut app, "?IDAT\n"); 
-        assert_eq!(app.current_cursor_pos(), 316);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(316));
         assert_eq!(app.line_entry.get_alert(), Some("Wrapped to result 4 of 4".to_string()));
         assert_eq!(app.current_editor().highlights.len(), 4);
         assert_eq!(app.current_editor().highlights[0].start, BitIndex::bytes(53));
@@ -4155,124 +4155,124 @@ mod app_string_tests {
 
         // Go to 3rd and 2nd result without moving cursor
         test_driver(&mut app, "n"); 
-        assert_eq!(app.current_cursor_pos(), 205);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(205));
         assert_eq!(app.line_entry.get_alert(), Some("Result 3 of 4".to_string()));
 
         test_driver(&mut app, "n"); 
-        assert_eq!(app.current_cursor_pos(), 164);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(164));
         assert_eq!(app.line_entry.get_alert(), Some("Result 2 of 4".to_string()));
 
         // Move cursor to between 2nd and 3rd result then seek to 2nd result (2 trials)
         test_driver(&mut app, "205g"); 
-        assert_eq!(app.current_cursor_pos(), 205);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(205));
         assert_eq!(app.line_entry.get_alert(), None);
 
         test_driver(&mut app, "n"); 
-        assert_eq!(app.current_cursor_pos(), 164);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(164));
         assert_eq!(app.line_entry.get_alert(), Some("Result 2 of 4".to_string()));
 
         test_driver(&mut app, "165g"); 
-        assert_eq!(app.current_cursor_pos(), 165);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(165));
         assert_eq!(app.line_entry.get_alert(), None);
 
         test_driver(&mut app, "n"); 
-        assert_eq!(app.current_cursor_pos(), 164);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(164));
         assert_eq!(app.line_entry.get_alert(), Some("Result 2 of 4".to_string()));
 
         // Seek to previous result
         test_driver(&mut app, "N"); 
-        assert_eq!(app.current_cursor_pos(), 205);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(205));
         assert_eq!(app.line_entry.get_alert(), Some("Result 3 of 4".to_string()));
 
         // Move cursor between 2nd and 3rd result then seek back to 3rd result (2 trials)
         test_driver(&mut app, "204g"); 
-        assert_eq!(app.current_cursor_pos(), 204);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(204));
         assert_eq!(app.line_entry.get_alert(), None);
 
         test_driver(&mut app, "N"); 
-        assert_eq!(app.current_cursor_pos(), 205);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(205));
         assert_eq!(app.line_entry.get_alert(), Some("Result 3 of 4".to_string()));
 
         test_driver(&mut app, "164g"); 
-        assert_eq!(app.current_cursor_pos(), 164);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(164));
         assert_eq!(app.line_entry.get_alert(), None);
 
         test_driver(&mut app, "N"); 
-        assert_eq!(app.current_cursor_pos(), 205);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(205));
         assert_eq!(app.line_entry.get_alert(), Some("Result 3 of 4".to_string()));
 
         // Seek to 2nd and 1st result
         test_driver(&mut app, "n"); 
-        assert_eq!(app.current_cursor_pos(), 164);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(164));
         assert_eq!(app.line_entry.get_alert(), Some("Result 2 of 4".to_string()));
 
         test_driver(&mut app, "n"); 
-        assert_eq!(app.current_cursor_pos(), 53);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(53));
         assert_eq!(app.line_entry.get_alert(), Some("Result 1 of 4".to_string()));
 
         // Wrap to last result
         test_driver(&mut app, "n"); 
-        assert_eq!(app.current_cursor_pos(), 316);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(316));
         assert_eq!(app.line_entry.get_alert(), Some("Wrapped to result 4 of 4".to_string()));
 
         // Wrap to first result
         test_driver(&mut app, "N"); 
-        assert_eq!(app.current_cursor_pos(), 53);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(53));
         assert_eq!(app.line_entry.get_alert(), Some("Wrapped to result 1 of 4".to_string()));
 
         // Move cursor to after last result and wrap to first result
         test_driver(&mut app, "320g"); 
-        assert_eq!(app.current_cursor_pos(), 320);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(320));
         assert_eq!(app.line_entry.get_alert(), None);
 
         test_driver(&mut app, "N"); 
-        assert_eq!(app.current_cursor_pos(), 53);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(53));
         assert_eq!(app.line_entry.get_alert(), Some("Wrapped to result 1 of 4".to_string()));
 
         // Move cursor to after last result and seek to last result
         test_driver(&mut app, "320g"); 
-        assert_eq!(app.current_cursor_pos(), 320);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(320));
         assert_eq!(app.line_entry.get_alert(), None);
 
         test_driver(&mut app, "n"); 
-        assert_eq!(app.current_cursor_pos(), 316);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(316));
         assert_eq!(app.line_entry.get_alert(), Some("Result 4 of 4".to_string()));
 
         // Move cursor to before first result and seek to first result
         test_driver(&mut app, "50g"); 
-        assert_eq!(app.current_cursor_pos(), 50);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(50));
         assert_eq!(app.line_entry.get_alert(), None);
 
         test_driver(&mut app, "N"); 
-        assert_eq!(app.current_cursor_pos(), 53);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(53));
         assert_eq!(app.line_entry.get_alert(), Some("Result 1 of 4".to_string()));
 
         // Move cursor to before first result result and wrap to last result
         test_driver(&mut app, "50g"); 
-        assert_eq!(app.current_cursor_pos(), 50);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(50));
         assert_eq!(app.line_entry.get_alert(), None);
 
         test_driver(&mut app, "n"); 
-        assert_eq!(app.current_cursor_pos(), 316);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(316));
         assert_eq!(app.line_entry.get_alert(), Some("Wrapped to result 4 of 4".to_string()));
 
         // Search for IEND
         test_driver(&mut app, "?IEND\n");
-        assert_eq!(app.current_cursor_pos(), 330);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(330));
         assert_eq!(app.line_entry.get_alert(), Some("Wrapped to result 1 of 1".to_string()));
 
         // Try forward and reverse search with the single result
         test_driver(&mut app, "n"); 
-        assert_eq!(app.current_cursor_pos(), 330);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(330));
         assert_eq!(app.line_entry.get_alert(), Some("Wrapped to result 1 of 1".to_string()));
 
         test_driver(&mut app, "N"); 
-        assert_eq!(app.current_cursor_pos(), 330);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(330));
         assert_eq!(app.line_entry.get_alert(), Some("Wrapped to result 1 of 1".to_string()));
 
         // Search for fizz (no results)
         test_driver(&mut app, "?fizz\n");
-        assert_eq!(app.current_cursor_pos(), 330);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(330));
         assert_eq!(app.line_entry.get_alert(), Some("No results".to_string()));
 
         app
@@ -4284,7 +4284,7 @@ mod app_string_tests {
 
         // Undo search that had no results
         assert_eq!(app.current_editor().highlights.len(), 0);
-        assert_eq!(app.current_cursor_pos(), 330);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(330));
         test_driver(&mut app, "u"); 
 
         // Undo wrap around seeks and search with one result (IEND)
@@ -4292,13 +4292,13 @@ mod app_string_tests {
             assert_eq!(app.current_editor().highlights.len(), 1);
             assert_eq!(app.current_editor().highlights[0].start, BitIndex::bytes(330));
             assert_eq!(app.current_editor().highlights[0].span, BitIndex::bytes(4));
-            assert_eq!(app.current_cursor_pos(), 330);
+            assert_eq!(app.current_cursor_pos(), BitIndex::bytes(330));
             test_driver(&mut app, "u"); 
             assert_eq!(app.line_entry.get_alert(), None);
             
         }
 
-        assert_eq!(app.current_cursor_pos(), 316);
+        assert_eq!(app.current_cursor_pos(), BitIndex::bytes(316));
 
         let positions = [
             316, 50, 53, 50, 316, 320, 53, 320, 53, 316, 53, 164, 205, 164, 205, 204, 205, 164, 165, 164, 205, 164, 205, 316, 0
@@ -4318,7 +4318,7 @@ mod app_string_tests {
             assert_eq!(app.current_editor().highlights[3].span, BitIndex::bytes(4));
 
             test_driver(&mut app, "u"); 
-            assert_eq!(app.current_cursor_pos(), *i);
+            assert_eq!(app.current_cursor_pos(), BitIndex::bytes(*i));
             assert_eq!(app.line_entry.get_alert(), None);
         }
 
@@ -4364,7 +4364,7 @@ mod app_string_tests {
 
         for (i, pos) in positions.iter().enumerate().rev().skip(1) {
             test_driver(&mut app, "U"); 
-            assert_eq!(app.current_cursor_pos(), *pos);
+            assert_eq!(app.current_cursor_pos(), BitIndex::bytes(*pos));
             if result_indices[i] == 0 {
                 assert_eq!(app.line_entry.get_alert(), None);
             } else {
@@ -4393,7 +4393,7 @@ mod app_string_tests {
             assert_eq!(app.current_editor().highlights.len(), 1);
             assert_eq!(app.current_editor().highlights[0].start, BitIndex::bytes(330));
             assert_eq!(app.current_editor().highlights[0].span, BitIndex::bytes(4));
-            assert_eq!(app.current_cursor_pos(), 330);
+            assert_eq!(app.current_cursor_pos(), BitIndex::bytes(330));
             assert_eq!(app.line_entry.get_alert(), Some("Wrapped to result 1 of 1".to_string()));
             
         }

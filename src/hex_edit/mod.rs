@@ -1235,8 +1235,8 @@ impl HexEdit {
         }
     }
 
-    pub fn get_cursor_pos(&self) -> usize {
-        self.cursor_pos
+    pub fn get_cursor_pos(&self) -> BitIndex {
+        BitIndex::bytes(self.cursor_pos)
     }
 
     pub fn clear_find(&mut self) -> ActionResult {
