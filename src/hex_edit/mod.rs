@@ -13,7 +13,7 @@ use crate::globals;
 
 use crate::AlertType;
 use crate::expr::ExprValue;
-use crate::common::{BinaryLogicOp, DecHexOff, MarkId, FullMarkId, MarkArray, RegisterId, FullRegisterId, RegisterArray,
+use crate::common::{BinaryLogicOp, BitByteMode, DecHexOff, MarkId, FullMarkId, MarkArray, RegisterId, FullRegisterId, RegisterArray,
     FillType, FullFillType, DataSource, FullDataSource, RangeSize, FullRangeSize, Seek, FullSeek};
 
 mod file_manager;
@@ -511,8 +511,9 @@ impl Action for SliceRegisterAction {
         let mut new = self.left.clone();
         match hex_edit.get_register(self.register) {
             Ok(mid) => {
-                new.extend(&mid);
-                new.extend(&self.right);
+                // TODO: Make these work for little-endian as well
+                new.extend_be(&mid);
+                new.extend_be(&self.right);
                 hex_edit.set_register(self.register, &new)
             },
             Err(msg) => ActionResult::error(msg)
@@ -980,6 +981,7 @@ pub struct HexEdit {
     nibble: Nibble,
     start_line: usize,
     edit_mode: EditMode,
+    bit_byte_mode: BitByteMode,
     pub highlights: Vec::<Highlight>, // Needed for tests
     current_find: Option<FindInfo>,
     display_data: Vec::<u8>,
@@ -1060,13 +1062,13 @@ impl HexEdit {
             nibble: Nibble::Left,
             start_line: 0,
             edit_mode: EditMode::AsciiOverwrite,
+            bit_byte_mode: BitByteMode::Byte,
             highlights: vec![],
             current_find: None,
             display_data: Vec::<u8>::new(),
             valid_bytes: 0,
             clipboard_registers: Default::default(),
-            // TODO: clean this up once BitIndex gets Default implemented
-            marks: MarkArray::new(BitIndex::zero),
+            marks: Default::default(),
             file_spec: None,
             current_field: None,
             related_fields: Vec::new()
@@ -1457,11 +1459,8 @@ impl HexEdit {
             }
         };
 
-        // TODO: Use a bitfield method here and account for non-byte aligned
-        let len = fill.len();
-        let repetitions = ((n_bytes * 8) as i128 / len.total_bits()) as usize;
-        fill.repeat(repetitions + 1);
-        fill.truncate(&BitIndex::bytes(n_bytes));
+        // TODO: Account for non-byte aligned and make this work for little-endian
+        fill.repeat_until_be(BitIndex::bytes(n_bytes));
         fill.into_boxed_slice().unwrap().to_vec()
         
 
@@ -1470,11 +1469,13 @@ impl HexEdit {
     pub fn concatenate_register(&mut self, register: RegisterId, fill: FillType) -> ActionResult {
         match &fill {
             FillType::Bytes(bytes) => {
-                self.clipboard_registers[register].extend(bytes); // TODO add action to this
+                // TODO: Make this work for little-endian
+                self.clipboard_registers[register].extend_be(bytes); // TODO add action to this
             },
             FillType::Register(reg_id) => {
                 let right = self.clipboard_registers[*reg_id].clone();
-                self.clipboard_registers[register].extend(&right); // TODO add action to this
+                // TODO: Make this work for little-endian
+                self.clipboard_registers[register].extend_be(&right); // TODO add action to this
             }
         }
         ActionResult {

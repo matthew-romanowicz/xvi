@@ -207,8 +207,7 @@ impl EditorStack {
             width,
             height,
             clipboard_registers: Default::default(),
-            // TODO: clean this up once BitIndex gets Default implemented
-            marks: MarkArray::new(BitIndex::zero),
+            marks: Default::default(),
             endianness: Endianness::Network,
             cnum: DecHexOff::Hex,
             show_hex: true,
@@ -640,11 +639,13 @@ impl App {
                     BinaryRegisterOp::Cat => {
                         match &other {
                             FullFillType::Bytes(bf) => {
-                                self.editors.clipboard_registers[reg].extend(bf);
+                                // TODO: Make this work for little-endian
+                                self.editors.clipboard_registers[reg].extend_be(bf);
                             },
                             FullFillType::Register(reg2) => {
                                 let bf = self.editors.borrow_register(*reg2).clone();
-                                self.editors.clipboard_registers[reg].extend(&bf);
+                                // TODO: MAke this work for little-endian
+                                self.editors.clipboard_registers[reg].extend_be(&bf);
                             }
                         }
                     },

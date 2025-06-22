@@ -554,7 +554,9 @@ impl UnparsedBinaryField {
         //         bf = (bf << self.start.bit() as usize).truncate(&self.span);
         //     }
         // }
-        bf.truncate(&self.span);
+
+        // TODO: Make this work for little-endian
+        bf.truncate_be(self.span.clone());
 
         match self.dtype.as_str() {
            "S" | "s" => {
@@ -568,11 +570,11 @@ impl UnparsedBinaryField {
                 let uint = match self.endian {
                     Endianness::Little => {
                         bf.pad_unsigned_le(BitIndex::bytes(8));
-                        u64::from_le_bytes(bf.into_slice().unwrap())
+                        u64::from_le_bytes(bf.into_array().unwrap())
                     },
                     Endianness::Big | Endianness::Network => {
                         bf.pad_unsigned_be(BitIndex::bytes(8));
-                        u64::from_be_bytes(bf.into_slice().unwrap())
+                        u64::from_be_bytes(bf.into_array().unwrap())
                     }
                 };
                 return Ok(ExprValue::Integer(uint as i64))
@@ -4131,9 +4133,11 @@ impl PartiallyResolvedStructure {
                     let mut buffer = vec![0; end.ceil().byte() - start.byte()];
                     fm.get_bytes(start.byte(), &mut buffer)?;
                     let mut bf = BitField::from_vec(buffer) << start.bit() as usize;
-                    bf.truncate(&span);
 
-                    data.extend(&bf);
+                    // TODO: Make hese work for litte-endian
+                    bf.truncate_be(span);
+
+                    data.extend_be(&bf);
                 }
 
                 let dr = DependencyReport::success(data);
@@ -5653,7 +5657,8 @@ impl FileMap {
                                         let mut buffer = vec![0; end.ceil().byte() - start.byte()];
                                         fm.get_bytes(start.byte(), &mut buffer)?;
                                         let mut bf = BitField::from_vec(buffer) << start.bit() as usize;
-                                        bf.truncate(&span);
+                                        // TODO: Make this work for little-endian
+                                        bf.truncate_be(span);
                                         if let Some(bm) = bre.find_iter(&bf).nth(n) {
 
                                             let v = bm.start() + start;

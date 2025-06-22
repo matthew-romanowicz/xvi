@@ -15,6 +15,12 @@ pub enum DecHexOff {
 }
 
 #[derive(Clone, Copy)]
+pub enum BitByteMode {
+    Bit,
+    Byte
+}
+
+#[derive(Clone, Copy)]
 pub enum BinaryLogicOp {
     And,
     Or,
@@ -30,8 +36,10 @@ impl BinaryLogicOp {
         // let len = fill.len();
         let repetitions = (lhs.len().total_bits() / rhs.len().total_bits()) as usize;
         let mut rhs = rhs.clone();
-        rhs.repeat(repetitions + 1);
-        rhs.truncate(&lhs.len());
+
+        // TODO: Make these work for big-endian
+        rhs.repeat_be(repetitions + 1);
+        rhs.truncate_be(lhs.len());
         match self {
             BinaryLogicOp::And => {
                 lhs & (&rhs)
