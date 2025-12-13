@@ -1,0 +1,680 @@
+<sequence id="ifd" name="eXIf IFD">
+    <export source="subifd_offset"/>
+    <!-- <export source="next_ifd"/> -->
+    <section-header id="ifd_header" name="eXIf IFD Header">
+        <export source="num_ifd_entries"/>
+        <field id="num_ifd_entries" name="Number of IFD Entries" length="2B" dtype="U"/>
+    </section-header>
+    <repeat id="ifd_entries" name="eXIf IFD Entries" n="num_ifd_entries">
+        <export source="subifd_offset"/>
+
+        <sequence id="ifd_entry" name="eXIf IFD Entry">
+
+            <export source="jpeg_offset"/>
+            <export source="jpeg_byte_count"/>
+            <export source="subifd_offset"/>
+
+            <section-header id="ifd_entry_header" name="eXIf IFD Entry Header" length-policy="fit">
+                <export source="ifd_tag"/>
+                <export source="ifd_format"/>
+                <export source="ifd_num"/>
+                <field id="ifd_tag" name="IFD Tag" length="2B" dtype="U">
+                    <enum>
+                        <!-- Tags used by IFD0 -->
+                        <enum-case index="0x8769" value="Exif SubIFD"/>
+                        <enum-case index="0x010e" value="ImageDescription"/>
+                        <enum-case index="0x010f" value="Make"/>
+                        <enum-case index="0x0110" value="Model"/>
+                        <enum-case index="0x0112" value="Orientation"/>
+                        <enum-case index="0x011a" value="XResolution"/>
+                        <enum-case index="0x011b" value="YResolution"/>
+                        <enum-case index="0x0128" value="ResolutionUnit"/>
+                        <enum-case index="0x0131" value="Software"/>
+                        <enum-case index="0x0132" value="DateTime"/>
+                        <enum-case index="0x013e" value="WhitePoint"/>
+                        <enum-case index="0x013f" value="PrimaryChromaticities"/>
+                        <enum-case index="0x0211" value="YCbCrCoefficients"/>
+                        <enum-case index="0x0213" value="YCbCrPositioning"/>
+                        <enum-case index="0x0214" value="ReferenceBlackWhite"/>
+                        <enum-case index="0x8298" value="Copyright"/>
+                        <enum-case index="0x8769" value="ExifOffset"/>
+                        <!-- Tags used by SubIFD -->
+                        <enum-case index="0x829a" value="ExposureTime"/>
+                        <enum-case index="0x829d" value="FNumber"/>
+                        <enum-case index="0x8822" value="ExposureProgram"/>
+                        <enum-case index="0x8827" value="ISOSpeedRatings"/>
+                        <enum-case index="0x9000" value="ExifVersion"/>
+                        <enum-case index="0x9003" value="DateTimeOriginal"/>
+                        <enum-case index="0x9004" value="DateTimeDigitized"/>
+                        <enum-case index="0x9101" value="ComponentConfiguration"/>
+                        <enum-case index="0x9102" value="CompressedBitsPerPixel"/>
+                        <enum-case index="0x9201" value="ShutterSpeedValue"/>
+                        <enum-case index="0x9202" value="ApertureValue"/>
+                        <enum-case index="0x9203" value="BrightnessValue"/>
+                        <enum-case index="0x9204" value="ExposureBiasValue"/>
+                        <enum-case index="0x9205" value="MaxApertureValue"/>
+                        <enum-case index="0x9206" value="SubjectDistance"/>
+                        <enum-case index="0x9207" value="MeteringMode"/>
+                        <enum-case index="0x9208" value="LightSource"/>
+                        <enum-case index="0x9209" value="Flash"/>
+                        <enum-case index="0x920a" value="FocalLength"/>
+                        <enum-case index="0x927c" value="MakerNote"/>
+                        <enum-case index="0x9286" value="UserComment"/>
+                        <enum-case index="0xa000" value="FlashPixVersion"/>
+                        <enum-case index="0xa001" value="ColorSpace"/>
+                        <enum-case index="0xa002" value="ExifImageWidth"/>
+                        <enum-case index="0xa003" value="ExifImageHeight"/>
+                        <enum-case index="0xa004" value="RelatedSoundFile"/>
+                        <enum-case index="0xa005" value="ExifInteroperabilityOffset"/>
+                        <enum-case index="0xa20e" value="FocalPlaneXResolution"/>
+                        <enum-case index="0xa20f" value="FocalPlaneYResolution"/>
+                        <enum-case index="0xa210" value="FocalPlaneResolutionUnit"/>
+                        <enum-case index="0xa217" value="SensingMethod"/>
+                        <enum-case index="0xa300" value="FileSource"/>
+                        <enum-case index="0xa301" value="SceneType"/>
+                        <!-- Tags used by IFD1 -->
+                        <enum-case index="0x0100" value="ImageWidth"/>
+                        <enum-case index="0x0101" value="ImageLength"/>
+                        <enum-case index="0x0102" value="BitsPerSample"/>
+                        <enum-case index="0x0103" value="Compression"/>
+                        <enum-case index="0x0106" value="PhotometricInterpretation"/>
+                        <enum-case index="0x0111" value="StripOffsets"/>
+                        <enum-case index="0x0115" value="SamplesPerPixel"/>
+                        <enum-case index="0x0116" value="RowsPerStrip"/>
+                        <enum-case index="0x0117" value="StripByteConunts"/>
+                        <enum-case index="0x011a" value="XResolution"/>
+                        <enum-case index="0x011b" value="YResolution"/>
+                        <enum-case index="0x011c" value="PlanarConfiguration"/>
+                        <enum-case index="0x0128" value="ResolutionUnit"/>
+                        <enum-case index="0x0201" value="JpegIFOffset"/>
+                        <enum-case index="0x0202" value="JpegIFByteCount"/>
+                        <enum-case index="0x0211" value="YCbCrCoefficients"/>
+                        <enum-case index="0x0212" value="YCbCrSubSampling"/>
+                        <enum-case index="0x0213" value="YCbCrPositioning"/>
+                        <enum-case index="0x0214" value="ReferenceBlackWhite"/>
+                        <!-- Misc Tags -->
+                        <enum-case index="0x00fe" value="NewSubfileType"/>
+                        <enum-case index="0x00ff" value="SubfileType"/>
+                        <enum-case index="0x012d" value="TransferFunction"/>
+                        <enum-case index="0x013b" value="Artist"/>
+                        <enum-case index="0x013d" value="Predictor"/>
+                        <enum-case index="0x0142" value="TileWidth"/>
+                        <enum-case index="0x0143" value="TileLength"/>
+                        <enum-case index="0x0144" value="TileOffsets"/>
+                        <enum-case index="0x0145" value="TileByteCounts"/>
+                        <enum-case index="0x014a" value="SubIFDs"/>
+                        <enum-case index="0x015b" value="JPEGTables"/>
+                        <enum-case index="0x828d" value="CFARepeatPatternDim"/>
+                        <enum-case index="0x828e" value="CFAPattern"/>
+                        <enum-case index="0x828f" value="BatteryLevel"/>
+                        <enum-case index="0x83bb" value="IPTC/NAA"/>
+                        <enum-case index="0x8773" value="InterColorProfile"/>
+                        <enum-case index="0x8824" value="SpectralSensitivity"/>
+                        <enum-case index="0x8825" value="GPSInfo"/>
+                        <enum-case index="0x8828" value="OECF"/>
+                        <enum-case index="0x8829" value="Interlace"/>
+                        <enum-case index="0x882a" value="TimeZoneOffset"/>
+                        <enum-case index="0x882b" value="SelfTimerMode"/>
+                        <enum-case index="0x920b" value="FlashEnergy"/>
+                        <enum-case index="0x920c" value="SpatialFrequencyResponse"/>
+                        <enum-case index="0x920d" value="Noise"/>
+                        <enum-case index="0x9211" value="ImageNumber"/>
+                        <enum-case index="0x9212" value="SecurityClassification"/>
+                        <enum-case index="0x9213" value="ImageHistory"/>
+                        <enum-case index="0x9214" value="SubjectLocation"/>
+                        <enum-case index="0x9215" value="ExposureIndex"/>
+                        <enum-case index="0x9216" value="TIFF/EPStandardID"/>
+                        <enum-case index="0x9290" value="SubSecTime"/>
+                        <enum-case index="0x9291" value="SubSecTimeOriginal"/>
+                        <enum-case index="0x9292" value="SubSecTimeDigitized"/>
+                        <enum-case index="0xa20b" value="FlashEnergy"/>
+                        <enum-case index="0xa20c" value="SpatialFrequencyResponse"/>
+                        <enum-case index="0xa214" value="SubjectLocation"/>
+                        <enum-case index="0xa215" value="ExposureIndex"/>
+                        <enum-case index="0xa302" value="CFAPattern"/>
+                        <!-- GeoTIFF Tags, https://docs.ogc.org/is/19-008r4/19-008r4.html -->
+                        <enum-case index="0x830e" value="ModelPixelScaleTag"/>
+                        <enum-case index="0x8482" value="ModelTiepointTag"/>
+                        <enum-case index="0x85d8" value="ModelTransformationTag"/>
+                        <enum-case index="0x87af" value="GeoKeyDirectoryTag"/>
+                        <enum-case index="0x87b0" value="GeoDoubleParamsTag"/>
+                        <enum-case index="0x87b1" value="GeoAsciiParamsTag"/>
+
+                        <enum-else value="Invalid"/>
+                    </enum>
+                </field>
+                <field id="ifd_format" name="IFD Format" length="2B" dtype="U">
+                    <enum>
+                        <enum-case index="1" value="Unsigned Byte"/>
+                        <enum-case index="2" value="ASCII Strings"/>
+                        <enum-case index="3" value="Unsigned Short"/>
+                        <enum-case index="4" value="Unsigned Long"/>
+                        <enum-case index="5" value="Unsigned Rational"/>
+                        <enum-case index="6" value="Signed Byte"/>
+                        <enum-case index="7" value="Undefined"/>
+                        <enum-case index="8" value="Signed Short"/>
+                        <enum-case index="9" value="Signed Long"/>
+                        <enum-case index="10" value="Signed Rational"/>
+                        <enum-case index="11" value="Single Float"/>
+                        <enum-case index="12" value="Double Float"/>
+                        <enum-else value="Invalid"/>
+                    </enum>
+                </field>
+                <field id="ifd_num" name="IFD Number of Components" length="4B" dtype="U"/>
+            </section-header>
+
+            <switch id="ifd_entry_body" name="IFD Entry Body" length="4B" value="ifd_format">
+
+                <export source="jpeg_offset"/>
+                <export source="jpeg_byte_count"/>
+                <export source="subifd_offset"/>
+                <export source="compression"/>
+
+                <!-- Unsigned Byte -->
+                <switch-case check="$0 == 1"> 
+                    <switch length="4B" value="ifd_num">
+
+                        <!-- Fits in 4-byte data field -->
+                        <switch-case check="$0 * 1 &lt;= 4">
+                            <repeat n="ifd_num">
+                                <section-body id="ifd_u8_body" name="eXIf U8">
+                                    <field id="ifd_u8" name="IFD Unsigned Byte" length="1B" dtype="U"/>
+                                </section-body>
+                            </repeat>
+                        </switch-case>
+
+                        <!-- Doesn't fit in 4-byte data field -->
+                        <switch-else>
+                            <sequence id="ifd_u8_address_sequence" name="IFD U8 Addressed Sequence">
+                                <section-body id="ifd_address_u8_section" name="eXIf Address">
+                                    <export source="ifd_address_u8"/>
+                                    <field id="ifd_address_u8" name="IFD Address" length="4B" dtype="U"/>
+                                </section-body>
+                                <addressed pos="chunk_body_start + bytes(ifd_address_u8)">
+                                    <repeat n="ifd_num">
+                                        <section-body id="ifd_u8_body_addressed" name="eXIf Unsigned Byte">
+                                            <field id="ifd_u8" name="IFD Unsigned Byte" length="1B" dtype="U"/>
+                                        </section-body>
+                                    </repeat>
+                                </addressed>
+                            </sequence>
+                        </switch-else>
+
+                    </switch>
+                </switch-case>
+
+                <!-- ASCII String -->
+                <switch-case check="$0 == 2"> 
+                    <switch length="4B" value="ifd_num">
+
+                        <!-- Fits in 4-byte data field -->
+                        <switch-case check="$0 &lt;= 4">
+                            <section-body id="ifd_ascii_body" name="eXIf ASCII">
+                                <field id="ifd_ascii" name="IFD ASCII" length="bytes(ifd_num)" dtype="S"/>
+                            </section-body>
+                        </switch-case>
+
+                        <!-- Doesn't fit in 4-byte data field -->
+                        <switch-else>
+                            <sequence id="ifd_ascii_address_sequence" name="IFD ASCII Addressed Sequence">
+                                <section-body id="ifd_address_ascii_section" name="eXIf Address">
+                                    <export source="ifd_address_ascii"/>
+                                    <field id="ifd_address_ascii" name="IFD Address" length="4B" dtype="U"/>
+                                </section-body>
+                                <addressed pos="chunk_body_start + bytes(ifd_address_ascii)">
+                                    <section-body id="ifd_ascii_body_addressed" name="eXIf ASCII">
+                                        <field id="ifd_ascii" name="IFD ASCII" length="bytes(ifd_num)" dtype="S"/>
+                                    </section-body>
+                                </addressed>
+                            </sequence>
+                        </switch-else>
+
+                    </switch>
+                </switch-case>
+
+                <!-- Unsigned Short -->
+                <switch-case check="$0 == 3"> 
+                    <switch length="4B" value="ifd_num">
+
+                        <export source="compression"/>
+
+                        <!-- Fits in 4-byte data field -->
+                        <switch-case check="$0 * 2 &lt;= 4">
+                            <switch value="ifd_tag">
+
+                                <export source="compression"/>
+
+                                <!-- Compression -->
+                                <switch-case check="$0 == 259">
+                                    <!-- TODO: Assert that ifd_num == 1 -->
+                                    <repeat n="ifd_num">
+                                        <export source="compression"/>
+                                        <!-- <sequence> -->
+                                        <section-body id="ifd_u16_body" name="eXIf U16">
+                                            <export source="compression"/>
+                                            <field id="compression" name="Compression" length="2B" dtype="U">
+                                                <enum>
+                                                    <enum-case index="1" value="No Compression"/>
+                                                    <enum-case index="6" value="JPEG"/>
+                                                    <enum-else value="Unknown"/>
+                                                </enum>
+                                            </field>
+                                        </section-body>
+                                            <!-- <addressed pos="chunk_body_start + bytes(jpeg_offset)">
+                                                <section id="jpeg" name="EXIF JPEG">
+                                                    <field id="jpeg_data" name="EXIF JPEG Data" length="bytes(jpeg_byte_count)" dtype="B"/>
+                                                </section>
+                                            </addressed>
+                                        </sequence> -->
+                                    </repeat>
+                                </switch-case>
+
+                                <!-- Unknown tag -->
+                                <switch-else>
+                                    <repeat n="ifd_num">
+                                        <section-body id="ifd_u16_body" name="eXIf U16">
+                                            <field id="ifd_u16" name="IFD Unsigned Short" length="2B" dtype="U"/>
+                                        </section-body>
+                                    </repeat>
+                                </switch-else>
+                            </switch>
+                            
+                        </switch-case>
+
+                        <!-- Doesn't fit in 4-byte data field -->
+                        <switch-else>
+                            <sequence id="ifd_u16_address_sequence" name="IFD U16 Addressed Sequence">
+                                <section-body id="ifd_address_u16_section" name="eXIf Address">
+                                    <export source="ifd_address_u16"/>
+                                    <field id="ifd_address_u16" name="IFD Address" length="4B" dtype="U"/>
+                                </section-body>
+                                <addressed pos="chunk_body_start + bytes(ifd_address_u16)">
+                                    <repeat n="ifd_num">
+                                        <section-body id="ifd_u16_body_addressed" name="eXIf Unsigned Short">
+                                            <field id="ifd_u16" name="IFD Unsigned Short" length="2B" dtype="U"/>
+                                        </section-body>
+                                    </repeat>
+                                </addressed>
+                            </sequence>
+                        </switch-else>
+                    </switch>
+                </switch-case>
+
+                <!-- Unsigned Long -->
+                <switch-case check="$0 == 4"> 
+                    <switch length="4B" value="ifd_num">
+
+                        <export source="jpeg_offset"/>
+                        <export source="jpeg_byte_count"/>
+                        <export source="subifd_offset"/>
+
+                        <!-- Fits in 4-byte data field -->
+                        <switch-case check="$0 * 4 &lt;= 4">
+                            <switch value="ifd_tag">
+
+                                <export source="jpeg_offset"/>
+                                <export source="jpeg_byte_count"/>
+                                <export source="subifd_offset"/>
+
+                                <!-- JPEG Offset -->
+                                <switch-case check="$0 == 513">
+                                    <!-- TODO: Assert that ifd_num == 1 -->
+                                    <repeat n="ifd_num">
+                                        <export source="jpeg_offset"/>
+                                        <section-body id="ifd_u32_body" name="eXIf U32">
+                                            <export source="jpeg_offset"/>
+                                            <field id="jpeg_offset" name="JPEG Offset" length="4B" dtype="U"/>
+                                        </section-body>
+                                    </repeat>
+                                </switch-case>
+
+                                <!-- JPEG Byte Count -->
+                                <switch-case check="$0 == 514">
+                                    <!-- TODO: Assert that ifd_num == 1 -->
+                                    <repeat n="ifd_num">
+                                        <export source="jpeg_byte_count"/>
+                                        <section-body id="ifd_u32_body" name="eXIf U32">
+                                            <export source="jpeg_byte_count"/>
+                                            <field id="jpeg_byte_count" name="JPEG Byte Count" length="4B" dtype="U"/>
+                                        </section-body>
+                                    </repeat>
+                                </switch-case>
+
+                                <!-- EXIF SubIFD Offset -->
+                                <switch-case check="$0 == 34665">
+                                    <!-- TODO: Assert that ifd_num == 1 -->
+                                    <repeat n="ifd_num">
+                                        <export source="subifd_offset"/>
+                                        <section-body id="ifd_u32_body" name="eXIf U32">
+                                            <export source="subifd_offset"/>
+                                            <field id="subifd_offset" name="EXIF SubIFD Offset" length="4B" dtype="U"/>
+                                        </section-body>
+                                    </repeat>
+                                </switch-case>
+
+                                <!-- Unknown tag -->
+                                <switch-else>
+                                    <repeat n="ifd_num">
+                                        <section-body id="ifd_u32_body" name="eXIf U32">
+                                            <field id="ifd_u32" name="IFD Unsigned Long" length="4B" dtype="U"/>
+                                        </section-body>
+                                    </repeat>
+                                </switch-else>
+                            </switch>
+                        </switch-case>
+
+                        <!-- Doesn't fit in 4-byte data field -->
+                        <switch-else>
+                            <sequence id="ifd_u32_address_sequence" name="IFD U16 Addressed Sequence">
+                                <section-body id="ifd_address_u32_section" name="eXIf Address">
+                                    <export source="ifd_address_u32"/>
+                                    <field id="ifd_address_u32" name="IFD Address" length="4B" dtype="U"/>
+                                </section-body>
+                                <addressed pos="chunk_body_start + bytes(ifd_address_u32)">
+                                    <repeat n="ifd_num">
+                                        <section-body id="ifd_u32_body_addressed" name="eXIf Unsigned Long">
+                                            <field id="ifd_u32" name="IFD Unsigned Long" length="4B" dtype="U"/>
+                                        </section-body>
+                                    </repeat>
+                                </addressed>
+                            </sequence>
+                        </switch-else>
+                    </switch>
+                </switch-case>
+
+                <!-- Unsigned Rational -->
+                <switch-case check="$0 == 5"> 
+                    <switch length="4B" value="ifd_num">
+
+                        <!-- Fits in 4-byte data field (only happens if IFD number is 0) -->
+                        <switch-case check="$0 * 8 &lt;= 4">
+                            <repeat n="ifd_num">
+                                <section-body id="ifd_urat_body" name="eXIf Unsigned Rational">
+                                <!-- Spare. This only happens if the number of IFD entries is 0 -->
+                                </section-body>
+                            </repeat>
+                        </switch-case>
+
+                        <!-- Doesn't fit in 4-byte data field -->
+                        <switch-else>
+                            <sequence id="ifd_urat_address_sequence" name="IFD U16 Addressed Sequence">
+                                <section-body id="ifd_address_urat_section" name="eXIf Address">
+                                    <export source="ifd_address_urat"/>
+                                    <field id="ifd_address_urat" name="IFD Address" length="4B" dtype="U"/>
+                                </section-body>
+                                <addressed pos="chunk_body_start + bytes(ifd_address_urat)">
+                                    <repeat n="ifd_num">
+                                        <section-body id="ifd_urat_body_addressed" name="eXIf Unsigned Rational">
+                                            <field id="ifd_urat_num" name="Numerator" length="4B" dtype="U"/>
+                                            <field id="ifd_urat_den" name="Denominator" length="4B" dtype="U"/>
+                                        </section-body>
+                                    </repeat>
+                                </addressed>
+                            </sequence>
+                        </switch-else>
+                    </switch>
+                </switch-case>
+
+                <!-- Signed Byte -->
+                <switch-case check="$0 == 6"> 
+                    <switch length="4B" value="ifd_num">
+
+                        <!-- Fits in 4-byte data field -->
+                        <switch-case check="$0 * 1 &lt;= 4">
+                            <repeat n="ifd_num">
+                                <section-body id="ifd_i8_body" name="eXIf I8">
+                                    <field id="ifd_i8" name="IFD Signed Byte" length="1B" dtype="I"/>
+                                </section-body>
+                            </repeat>
+                        </switch-case>
+
+                        <!-- Doesn't fit in 4-byte data field -->
+                        <switch-else>
+                            <sequence>
+                                <section-body id="ifd_address_i8_section" name="eXIf Address">
+                                    <export source="ifd_address_i8"/>
+                                    <field id="ifd_address_i8" name="IFD Address" length="4B" dtype="U"/>
+                                </section-body>
+                                <addressed pos="chunk_body_start + bytes(ifd_address_i8)">
+                                    <repeat n="ifd_num">
+                                        <section-body id="ifd_i8_body_addressed" name="eXIf Signed Byte">
+                                            <field id="ifd_i8" name="IFD Signed Byte" length="1B" dtype="I"/>
+                                        </section-body>
+                                    </repeat>
+                                </addressed>
+                            </sequence>
+                        </switch-else>
+
+                    </switch>
+                </switch-case>
+
+                <!-- Unknown -->
+                <switch-case check="$0 == 7"> 
+                    <switch length="4B" value="ifd_num">
+
+                        <!-- Fits in 4-byte data field -->
+                        <switch-case check="$0 &lt;= 4">
+                            <section-body id="ifd_unk_body" name="eXIf Unknown">
+                                <field id="ifd_unk" name="IFD Unknown" length="bytes(ifd_num)" dtype="B"/>
+                            </section-body>
+                        </switch-case>
+
+                        <!-- Doesn't fit in 4-byte data field -->
+                        <switch-else>
+                            <sequence>
+                                <section-body id="ifd_address_unk_section" name="eXIf Address">
+                                    <export source="ifd_address_unk"/>
+                                    <field id="ifd_address_unk" name="IFD Address" length="4B" dtype="U"/>
+                                </section-body>
+                                <addressed pos="chunk_body_start + bytes(ifd_address_unk)">
+                                    <section-body id="ifd_unk_body_addressed" name="eXIf Unknown">
+                                        <field id="ifd_unk" name="IFD Unknown" length="bytes(ifd_num)" dtype="B"/>
+                                    </section-body>
+                                </addressed>
+                            </sequence>
+                        </switch-else>
+
+                    </switch>
+                </switch-case>
+
+                <!-- Signed Short -->
+                <switch-case check="$0 == 8"> 
+                    <switch length="4B" value="ifd_num">
+
+                        <!-- Fits in 4-byte data field -->
+                        <switch-case check="$0 * 2 &lt;= 4">
+                            <repeat n="ifd_num">
+                                <section-body id="ifd_i16_body" name="eXIf I16">
+                                    <field id="ifd_i16" name="IFD Signed Short" length="2B" dtype="I"/>
+                                </section-body>
+                            </repeat>
+                        </switch-case>
+
+                        <!-- Doesn't fit in 4-byte data field -->
+                        <switch-else>
+                            <sequence>
+                                <section-body id="ifd_address_i16_section" name="eXIf Address">
+                                    <export source="ifd_address_i16"/>
+                                    <field id="ifd_address_i16" name="IFD Address" length="4B" dtype="U"/>
+                                </section-body>
+                                <addressed pos="chunk_body_start + bytes(ifd_address_i16)">
+                                    <repeat n="ifd_num">
+                                        <section-body id="ifd_i16_body_addressed" name="eXIf Signed Short">
+                                            <field id="ifd_i16" name="IFD Signed Short" length="2B" dtype="I"/>
+                                        </section-body>
+                                    </repeat>
+                                </addressed>
+                            </sequence>
+                        </switch-else>
+
+                    </switch>
+                </switch-case>
+
+                <!-- Signed Long -->
+                <switch-case check="$0 == 9"> 
+                    <switch length="4B" value="ifd_num">
+
+                        <!-- Fits in 4-byte data field -->
+                        <switch-case check="$0 * 4 &lt;= 4">
+                            <repeat n="ifd_num">
+                                <section-body id="ifd_i32_body" name="I32">
+                                    <field id="ifd_i32" name="IFD Signed Long" length="4B" dtype="I"/>
+                                </section-body>
+                            </repeat>
+                        </switch-case>
+
+                        <!-- Doesn't fit in 4-byte data field -->
+                        <switch-else>
+                            <sequence>
+                                <section-body id="ifd_address_i32_section" name="Address">
+                                    <export source="ifd_address_i32"/>
+                                    <field id="ifd_address_i32" name="IFD Address" length="4B" dtype="U"/>
+                                </section-body>
+                                <addressed pos="chunk_body_start + bytes(ifd_address_i32)">
+                                    <repeat n="ifd_num">
+                                        <section-body id="ifd_i32_body_addressed" name="Signed Long">
+                                            <field id="ifd_i32" name="IFD Signed Long" length="4B" dtype="I"/>
+                                        </section-body>
+                                    </repeat>
+                                </addressed>
+                            </sequence>
+                        </switch-else>
+
+                    </switch>
+                </switch-case>
+
+                <!-- Signed Rational -->
+                <switch-case check="$0 == 10"> 
+                    <switch length="4B" value="ifd_num">
+
+                        <!-- Fits in 4-byte data field (only happens if IFD number is 0) -->
+                        <switch-case check="$0 * 8 &lt;= 4">
+                            <repeat n="ifd_num">
+                                <section-body id="ifd_srat_body" name="Signed Rational">
+                                <!-- Spare. This only happens if the number of IFD entries is 0 -->
+                                </section-body>
+                            </repeat>
+                        </switch-case>
+
+                        <!-- Doesn't fit in 4-byte data field -->
+                        <switch-else>
+                            <sequence id="ifd_srat_address_sequence" name="IFD U16 Addressed Sequence">
+                                <section-body id="ifd_address_srat_section" name="Address">
+                                    <export source="ifd_address_srat"/>
+                                    <field id="ifd_address_srat" name="IFD Address" length="4B" dtype="U"/>
+                                </section-body>
+                                <addressed pos="chunk_body_start + bytes(ifd_address_srat)">
+                                    <repeat n="ifd_num">
+                                        <section-body id="ifd_srat_body_addressed" name="Signed Rational">
+                                            <field id="ifd_srat_num" name="Numerator" length="4B" dtype="S"/>
+                                            <field id="ifd_srat_den" name="Denominator" length="4B" dtype="S"/>
+                                        </section-body>
+                                    </repeat>
+                                </addressed>
+                            </sequence>
+                        </switch-else>
+                    </switch>
+                </switch-case>
+
+                <!-- Float -->
+                <switch-case check="$0 == 11"> 
+                    <switch length="4B" value="ifd_num">
+
+                        <!-- Fits in 4-byte data field -->
+                        <switch-case check="$0 * 1 &lt;= 4">
+                            <repeat n="ifd_num">
+                                <section-body id="ifd_float_body" name="Float">
+                                    <field id="ifd_float" name="IFD Float" length="4B" dtype="F"/>
+                                </section-body>
+                            </repeat>
+                        </switch-case>
+
+                        <!-- Doesn't fit in 4-byte data field -->
+                        <switch-else>
+                            <sequence>
+                                <section-body id="ifd_address_float_section" name="Address">
+                                    <export source="ifd_address_float"/>
+                                    <field id="ifd_address_float" name="IFD Address" length="4B" dtype="U"/>
+                                </section-body>
+                                <addressed pos="chunk_body_start + bytes(ifd_address_float)">
+                                    <repeat n="ifd_num">
+                                        <section-body id="ifd_float_body_addressed" name="Float">
+                                            <field id="ifd_float" name="IFD Float" length="4B" dtype="F"/>
+                                        </section-body>
+                                    </repeat>
+                                </addressed>
+                            </sequence>
+                        </switch-else>
+
+                    </switch>
+                </switch-case>
+
+                <!-- Double -->
+                <switch-case check="$0 == 12"> 
+                    <switch length="4B" value="ifd_num">
+
+                        <!-- Fits in 4-byte data field -->
+                        <switch-case check="$0 * 8 &lt;= 4">
+                            <repeat n="ifd_num">
+                                <section-body id="ifd_double_body" name="Double">
+                                <!-- Spare. This only happens if the number of IFD entries is 0 -->
+                                </section-body>
+                            </repeat>
+                        </switch-case>
+
+                        <!-- Doesn't fit in 4-byte data field -->
+                        <switch-else>
+                            <sequence>
+                                <section-body id="ifd_address_double_section" name="Address">
+                                    <export source="ifd_address_double"/>
+                                    <field id="ifd_address_double" name="IFD Address" length="4B" dtype="U"/>
+                                </section-body>
+                                <addressed pos="chunk_body_start + bytes(ifd_address_double)">
+                                    <repeat n="ifd_num">
+                                        <section-body id="ifd_double_body_addressed" name="Double">
+                                            <field id="ifd_double" name="IFD Double" length="8B" dtype="F"/>
+                                        </section-body>
+                                    </repeat>
+                                </addressed>
+                            </sequence>
+                        </switch-else>
+
+                    </switch>
+                </switch-case>
+
+                <switch-else>
+                    <section-body id="body_default" name="Payload">
+                        <field id="ifd_default" name="IFD Unknown" length="4B" dtype="B"/>
+                    </section-body>
+                </switch-else>
+            </switch>
+
+            <switch value="ifd_tag" length="0B">
+                <switch-case check="$0 == 259"> <!-- Compression -->
+                    <switch value="compression" length="0B">
+                        <switch-case check="$0 == 6"> <!-- JPEG -->
+                            <addressed pos="chunk_body_start + bytes(jpeg_offset)">
+                                <section id="jpeg" name="EXIF JPEG">
+                                    <field id="jpeg_data" name="EXIF JPEG Data" length="bytes(jpeg_byte_count)" dtype="B"/>
+                                </section>
+                            </addressed>
+                        </switch-case>
+                        <switch-else>
+                            <section>
+                            </section>
+                        </switch-else>
+                    </switch>
+                </switch-case>
+                <switch-else>
+                    <section length="0B">
+                    </section>
+                </switch-else>
+            </switch>
+        </sequence>
+    </repeat>
+
+    <section-footer id="ifd_footer" name="IFD Footer">
+        <export source="next_ifd"/>
+        <field id="next_ifd" name="Next IFD Offset" length="4B" dtype="U"/>
+    </section-footer>
+</sequence>

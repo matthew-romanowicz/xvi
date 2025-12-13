@@ -1165,7 +1165,7 @@ impl HexEdit {
                 Err(err) => return ActionResult::error(format!("Could not read file '{}'", fname).to_string())
             };
             println!("Reading syntax file");
-            let mut s = match Structure::from_xml(&xml, Some(Rc::new(fname.clone()))) {
+            let mut s = match Structure::from_xml(&xml, Some(Rc::new(fname.clone())), None) {
                 Ok(s) => s,
                 Err(mut err) => {
                     err.set_fname(fname.to_string());

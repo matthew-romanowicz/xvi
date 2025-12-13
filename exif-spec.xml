@@ -8,22 +8,22 @@
         <field id="exif_ifd_offset" name="Offset to IFD" length="4B" dtype="U" endian="big"/>
     </section-header>
 
-    <chain id="exif_ifd_chain" name="eXIf IFD CHain" next="chunk_body_start + bytes(exif_next_ifd)">
-        <break condition="exif_next_ifd == 0"/>
-        <export source="exif_subifd_offset" default="0"/>
-        <use url="exif-ifd-spec.xml#exif_ifd"/>
+    <chain id="exif_ifd_chain" name="eXIf IFD CHain" next="chunk_body_start + bytes(next_ifd)">
+        <break condition="next_ifd == 0"/>
+        <export source="subifd_offset" default="0"/>
+        <use url="ifd-spec.xml#ifd" endian="big"/>
     </chain>
 
-    <switch value="exif_subifd_offset">
+    <switch value="subifd_offset">
         <switch-case check="$0 == 0">
             <section length="0B">
             </section>
         </switch-case>
         <switch-else>
-            <addressed pos="chunk_body_start + bytes(exif_subifd_offset)">
-                <chain id="exif_ifd_chain" name="eXIf IFD Chain" next="chunk_body_start + bytes(exif_next_ifd)">
-                    <break condition="exif_next_ifd == 0"/>
-                    <use url="exif-ifd-spec.xml#exif_ifd"/>
+            <addressed pos="chunk_body_start + bytes(subifd_offset)">
+                <chain id="exif_ifd_chain" name="eXIf IFD Chain" next="chunk_body_start + bytes(next_ifd)">
+                    <break condition="next_ifd == 0"/>
+                    <use url="ifd-spec.xml#ifd" endian="big"/>
                 </chain>
             </addressed> 
         </switch-else>

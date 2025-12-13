@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<sequence id="TIFF" name="TIFF" length-policy="expand">
+    <anchor id="chunk_body_start"/>
+    <section id="tiff_byte_order" name="TIFF Byte Order">
+        <export source="byte_order"/>
+        <field id="byte_order" name="Byte Order" length="2B" dtype="S"/>
+    </section>
+    <switch id="tiff_header_body" name="TIFF Header Body" value="byte_order" length="6B">
+        <export source="ifd_offset"/>
+        <switch-case check="$0 == 'II'">
+            <section id="tiff_header_body_le" name="TIFF Header Body LE" endian="little">
+                <export source="ifd_offset"/>
+                <field id="tiff_signature" name="TIFF Signature" length="2B" dtype="U" endian="little"/>
+                <field id="ifd_offset" name="IFD Offset" length="4B" dtype="U" endian="little"/>
+            </section>
+        </switch-case>
+                <switch-case check="$0 == 'MM'">
+            <section id="tiff_header_body_be" name="TIFF Header Body BE" endian="big">
+                <export source="ifd_offset"/>
+                <field id="tiff_signature" name="TIFF Signature" length="2B" dtype="U"/>
+                <field id="ifd_offset" name="IFD Offset" length="4B" dtype="U"/>
+            </section>
+        </switch-case>
+        <switch-else>
+            <section length-policy="expand"></section>
+        </switch-else>
+    </switch>
+    <addressed pos="bytes(ifd_offset)">
+        <use url="ifd-spec.xml#ifd" endian="little"/>
+        <!-- <section id="ifd" name="IFD">
+            <field id="ifd_tag" name="IFD Tag" length="2B" dtype="U" endian="little"/>
+            <field id="exif_ifd_format" name="IFD Format" length="2B" dtype="U" endian="big">
+                <enum>
+                    <enum-case index="1" value="Unsigned Byte"/>
+                    <enum-case index="2" value="ASCII Strings"/>
+                    <enum-case index="3" value="Unsigned Short"/>
+                    <enum-case index="4" value="Unsigned Long"/>
+                    <enum-case index="5" value="Unsigned Rational"/>
+                    <enum-case index="6" value="Signed Byte"/>
+                    <enum-case index="7" value="Undefined"/>
+                    <enum-case index="8" value="Signed Short"/>
+                    <enum-case index="9" value="Signed Long"/>
+                    <enum-case index="10" value="Signed Rational"/>
+                    <enum-case index="11" value="Single Float"/>
+                    <enum-case index="12" value="Double Float"/>
+                    <enum-else value="Invalid"/>
+                </enum>
+            </field>
+            <field id="exif_ifd_num" name="IFD Number of Components" length="4B" dtype="U" endian="big"/>
+
+        </section> -->
+    </addressed>
+    <section length-policy="expand"></section>
+</sequence>
