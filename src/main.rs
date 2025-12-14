@@ -65,8 +65,9 @@ options:
     // let fname = r"C:\Users\Matthew\Documents\Rust\xvi\tests\ch1n3p04.png".to_string();
     // let fname = r"C:\Users\Matthew\Documents\Rust\xvi\tests\cm9n0g04.png".to_string();
     // let fname = r"C:\Users\Matthew\Documents\Rust\xvi\tests\ccwn3p08.png".to_string();
-    let fname = r"C:\Users\Matthew\Documents\Rust\xvi\tests\exif2c08.png".to_string();
-    
+    // let fname = r"C:\Users\Matthew\Documents\Rust\xvi\tests\exif2c08.png".to_string();
+    let fname = r"C:\Users\Matthew\Documents\MATLAB\DEM_test\nys\18TUM915590.tif".to_string();
+
     // let fname = r"C:\Users\Matthew\Documents\Rust\xvi\tests\oi4n2c16.png".to_string();
     
     // let fname = r"C:\Users\Matthew\Documents\Rust\xvi\tests\oi4n2c16.png".to_string();

@@ -643,9 +643,10 @@ impl std::fmt::Display for ExprOperationError {
     }    
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ExprValue {
     Integer(i64),
+    Float(f64),
     Position(BitIndex),
     Bool(bool),
     String(String),
@@ -656,6 +657,7 @@ impl ExprValue {
     pub fn datatype_as_string(&self) -> String {
         match self {
             ExprValue::Integer(_) => "Integer".to_string(),
+            ExprValue::Float(_) => "Float".to_string(),
             ExprValue::Position(_) => "Position".to_string(),
             ExprValue::Bool(_) => "Boolean".to_string(),
             ExprValue::String(_) => "String".to_string(),
@@ -667,6 +669,13 @@ impl ExprValue {
         match self {
             ExprValue::Integer(value) => Ok(value),
             other => Err(ExprEvalError::data_type_mismatch(other.datatype_as_string(), "Integer".to_string(), None))
+        }
+    }
+
+    pub fn expect_float(self) -> Result<f64, ExprEvalError> {
+        match self {
+            ExprValue::Float(value) => Ok(value),
+            other => Err(ExprEvalError::data_type_mismatch(other.datatype_as_string(), "Float".to_string(), None))
         }
     }
 
@@ -698,6 +707,9 @@ impl std::cmp::PartialEq<ExprValue> for &ExprValue {
             (ExprValue::Integer(left), ExprValue::Integer(right)) => {
                 *left == *right
             },
+            (ExprValue::Float(left), ExprValue::Float(right)) => {
+                *left == *right
+            },
             (ExprValue::Position(left), ExprValue::Position(right)) => {
                 *left == *right
             },
@@ -715,20 +727,24 @@ impl std::cmp::PartialEq<ExprValue> for &ExprValue {
     }
 }
 
+// impl std::cmp::PartialOrd for ExprValue {
+//     fn partial_cmp(&self, other: &ExprValue) -> Option<std::cmp::Ordering> {
+//         Some(self.cmp(other))
+//     }
+// }
+
+
 impl std::cmp::PartialOrd for ExprValue {
     fn partial_cmp(&self, other: &ExprValue) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl std::cmp::Ord for ExprValue {
-    fn cmp(&self, other: &ExprValue) -> std::cmp::Ordering {
         match (self, other) {
             (ExprValue::Integer(left), ExprValue::Integer(right)) => {
-                std::cmp::Ord::cmp(left, right)
+                left.partial_cmp(right)
+            },
+            (ExprValue::Float(left), ExprValue::Float(right)) => {
+                left.partial_cmp(right)
             },
             (ExprValue::Position(left), ExprValue::Position(right)) => {
-                std::cmp::Ord::cmp(left, right)
+                left.partial_cmp(right)
             },
             _ => todo!()
         }
@@ -741,6 +757,9 @@ impl std::ops::Neg for ExprValue {
         match self {
             ExprValue::Integer(v) => {
                 ExprValue::Integer(-v)
+            },
+            ExprValue::Float(v) => {
+                ExprValue::Float(-v)
             },
             ExprValue::Position(v) => {
                 ExprValue::Position(-v)
@@ -759,6 +778,9 @@ impl std::ops::Add<ExprValue> for ExprValue {
         match (self, rhs) {
             (ExprValue::Integer(left), ExprValue::Integer(right)) => {
                 Ok(ExprValue::Integer(left + right))
+            },
+            (ExprValue::Float(left), ExprValue::Float(right)) => {
+                Ok(ExprValue::Float(left + right))
             },
             (ExprValue::Position(left), ExprValue::Position(right)) => {
                 Ok(ExprValue::Position(left + right))
@@ -781,6 +803,9 @@ impl std::ops::Sub<ExprValue> for ExprValue {
             (ExprValue::Integer(left), ExprValue::Integer(right)) => {
                 ExprValue::Integer(left - right)
             },
+            (ExprValue::Float(left), ExprValue::Float(right)) => {
+                ExprValue::Float(left - right)
+            },
             (ExprValue::Position(left), ExprValue::Position(right)) => {
                 ExprValue::Position(left - right)
             },
@@ -795,6 +820,9 @@ impl std::ops::Mul<ExprValue> for ExprValue {
         match (self, rhs) {
             (ExprValue::Integer(left), ExprValue::Integer(right)) => {
                 ExprValue::Integer(left * right)
+            },
+            (ExprValue::Float(left), ExprValue::Float(right)) => {
+                ExprValue::Float(left * right)
             },
             (ExprValue::Position(left), ExprValue::Integer(right)) => {
                 ExprValue::Position(left * (right as i128))
@@ -992,8 +1020,9 @@ impl ExprToken {
                 info!("Float token: {}", m.as_str());
 
                 let token_sspan = sspan.slice(sspan.start() + m.start(), sspan.start() + m.end());
-                todo!();
-                //(ExprToken::Parsed(ExprNode::Value(ExprValue::Float(f64::from_str(m.as_str()))), token_sspan.range()), m.end());
+                let mut expr = Expr::value(ExprValue::Float(f64::from_str(m.as_str()).unwrap()));
+                expr.span = Some(token_sspan.range());
+                (ExprToken::Parsed(expr, token_sspan.range()), m.end())
 
             } else if let Some(m) = EXPR_INT_RE.find(sspan.as_str()) {
 
@@ -1044,7 +1073,7 @@ impl ExprToken {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ExprNode {
     Op{op: ExprOp, args: Vec<Expr>},
     Value(ExprValue),
@@ -1106,7 +1135,7 @@ impl ExprNode {
     // }
 }
 
-#[derive(Clone, Debug, Eq)]
+#[derive(Clone, Debug)]
 pub struct Expr {
     inner: ExprNode,
     pub span: Option<std::ops::Range<usize>>

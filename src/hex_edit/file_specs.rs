@@ -582,6 +582,39 @@ impl UnparsedBinaryField {
             "B" => {
                 Ok(ExprValue::Bytes(bf))
                 // Ok(ExprValue::Integer(0))
+            },
+            "F" => {
+
+                if bf.len() == BitIndex::bytes(4) {
+                    let f = match self.endian {
+                        Endianness::Little => {
+                            //bf.pad_unsigned_le(BitIndex::bytes(8));
+                            f32::from_le_bytes(bf.into_array().unwrap())
+                        },
+                        Endianness::Big | Endianness::Network => {
+                            //bf.pad_unsigned_be(BitIndex::bytes(8));
+                            f32::from_be_bytes(bf.into_array().unwrap())
+                        }
+                    };
+                    return Ok(ExprValue::Float(f as f64))
+                } else if bf.len() == BitIndex::bytes(8) {
+                    let f = match self.endian {
+                        Endianness::Little => {
+                            //bf.pad_unsigned_le(BitIndex::bytes(8));
+                            f64::from_le_bytes(bf.into_array().unwrap())
+                        },
+                        Endianness::Big | Endianness::Network => {
+                            //bf.pad_unsigned_be(BitIndex::bytes(8));
+                            f64::from_be_bytes(bf.into_array().unwrap())
+                        }
+                    };
+                    return Ok(ExprValue::Float(f))
+                } else {
+                    todo!("Length not supported for datatype float: {}", bf.len());
+                }
+
+                assert!(bf.len() < BitIndex::bytes(8)); // Integers larger than 64 bit not yet supported
+                
             }
             _ => todo!("Datatype not supported: {}", self.dtype)
         }
@@ -699,6 +732,7 @@ impl FieldSpec {
                     format!("{}", i).to_string()
                 }
             },
+            ExprValue::Float(f) => format!("{}", f).to_string(),
             ExprValue::Position(bi) => format!("{}B{}b", bi.byte(), bi.bit()).to_string(),
             ExprValue::Bool(b) => {
                 if b {
@@ -4516,8 +4550,10 @@ impl Structure {
                 let text = std::fs::read_to_string(&fname).unwrap();
 
                 let mut attrs = HashMap::<&str, MyStrSpan>::new();
-                if let Some(endian) = obj.attrs.get("endian") {
-                    attrs.insert("endian", endian.clone());
+                for key in INHERITED_ATTRS {
+                    if let Some(value) = obj.attrs.get(key) {
+                        attrs.insert(key, value.clone());
+                    }
                 }
                 let s = match Structure::from_xml(&text, Some(Rc::new(fname.to_string())), Some(attrs)) {
                     Ok(s) => Rc::new(s),
@@ -4873,8 +4909,10 @@ impl Structure {
     
                             let obj = XmlObject{element: current_elem.clone().unwrap(), attrs: attr_map, children: vec![]};
                             attr_map = HashMap::new();
-                            if let Some(endian) = obj.attrs.get("endian") {
-                                attr_map.insert("endian", endian.clone());
+                            for key in INHERITED_ATTRS {
+                                if let Some(value) = obj.attrs.get(key) {
+                                    attr_map.insert(key, value.clone());
+                                }
                             }
     
                             node_stack.push((obj, current_elem.unwrap()));
@@ -4923,8 +4961,10 @@ impl Structure {
                             // }
                             let obj = XmlObject{element: current_elem.unwrap(), attrs: attr_map, children: vec![]};
                             attr_map = HashMap::new();
-                            if let Some(endian) = obj.attrs.get("endian") {
-                                attr_map.insert("endian", endian.clone());
+                            for key in INHERITED_ATTRS {
+                                if let Some(value) = obj.attrs.get(key) {
+                                    attr_map.insert(key, value.clone());
+                                }
                             }
                             //println!("NEW ELEMENT: {:?}", elem);
                             let n = node_stack.len();

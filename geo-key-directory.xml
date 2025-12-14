@@ -1,0 +1,80 @@
+<sequence id="geo_key_directory" name="Geo Key Directory">
+    <section-header id="geo_key_directory_header" name="Geo Key Directory Header">
+        <export source="geo_num_keys"/>
+        <!-- http://www.opengis.net/spec/GeoTIFF/1.1/req/GeoKeyDirectoryTag.keyDirectoryVersion -->
+        <field id="geo_key_dir_version" name="Key Directory Version" length="2B" dtype="U"/>
+        <!-- http://www.opengis.net/spec/GeoTIFF/1.1/req/GeoKeyDirectoryTag.keyRevision -->
+        <field id="geo_key_revision" name="Key Revision" length="2B" dtype="U"/>
+        <!-- http://www.opengis.net/spec/GeoTIFF/1.1/req/GeoKeyDirectoryTag.minorRevision -->
+        <field id="geo_minor_revision" name="Minor Revision" length="2B" dtype="U"/>
+        <!-- http://www.opengis.net/spec/GeoTIFF/1.1/req/GeoKeyDirectoryTag.numberOfKeys -->
+        <field id="geo_num_keys" name="Number of Keys" length="2B" dtype="U"/>
+    </section-header>
+    <repeat n="geo_num_keys">
+        <section id="geo_key_entry_set" name="Geo Key Entry Set" length="8B">
+            <!-- http://www.opengis.net/spec/GeoTIFF/1.1/req/GeoKeyDirectoryTag.keyEntryKeyID -->
+            <field id="geo_key_id" name="Geo Key ID" length="2B" dtype="U">
+                <enum>
+                    <enum-case index="1024" value="GTModelTypeGeoKey"/>
+                    <enum-case index="1025" value="GTRasterTypeGeoKey"/>
+                    <enum-case index="1026" value="GTCitationGeoKey"/>
+                    <enum-case index="2048" value="GeodeticCRSGeoKey"/>
+                    <enum-case index="2049" value="GeodeticCitationGeoKey"/>
+                    <enum-case index="2050" value="GeodeticDatumGeoKey"/>
+                    <enum-case index="2051" value="PrimeMeridianGeoKey"/>
+                    <enum-case index="2052" value="GeogLinearUnitsGeoKey"/>
+                    <enum-case index="2053" value="GeogLinearUnitSizeGeoKey"/>
+                    <enum-case index="2054" value="GeogAngularUnitsGeoKey"/>
+                    <enum-case index="2055" value="GeogAngularUnitSizeGeoKey"/>
+                    <enum-case index="2056" value="EllipsoidGeoKey"/>
+                    <enum-case index="2057" value="EllipsoidSemiMajorAxisGeoKey"/>
+                    <enum-case index="2058" value="EllipsoidSemiMinorAxisGeoKey"/>
+                    <enum-case index="2059" value="EllipsoidInvFlatteningGeoKey"/>
+                    <enum-case index="2060" value="GeogAzimuthUnitsGeoKey"/>
+                    <enum-case index="2061" value="PrimeMeridianLongitudeGeoKey"/>
+                     
+                    <enum-case index="3072" value="ProjectedCRSGeoKey"/>
+                    <enum-case index="3073" value="ProjectedCitationGeoKey"/>
+                    <enum-case index="3074" value="ProjectionGeoKey"/>
+                    <enum-case index="3075" value="ProjMethodGeoKey"/>
+                    <enum-case index="3076" value="ProjLinearUnitsGeoKey"/>
+                    <enum-case index="3077" value="ProjLinearUnitSizeGeoKey"/>
+                    <enum-case index="3078" value="ProjStdParallel1GeoKey"/>
+                    <enum-case index="3079" value="ProjStdParallel2GeoKey"/>
+                    <enum-case index="3080" value="ProjNatOriginLongGeoKey"/>
+                    <enum-case index="3081" value="ProjNatOriginLatGeoKey"/>
+                    <enum-case index="3082" value="ProjFalseEastingGeoKey"/>
+                    <enum-case index="3083" value="ProjFalseNorthingGeoKey"/>
+                    <enum-case index="3084" value="ProjFalseOriginLongGeoKey"/>
+                    <enum-case index="3085" value="ProjFalseOriginLatGeoKey"/>
+                    <enum-case index="3086" value="ProjFalseOriginEastingGeoKey"/>
+                    <enum-case index="3087" value="ProjFalseOriginNorthingGeoKey"/>
+                    <enum-case index="3088" value="ProjCenterLongGeoKey"/>
+                    <enum-case index="3089" value="ProjCenterLatGeoKey"/>
+                    <enum-case index="3090" value="ProjCenterEastingGeoKey"/>
+                    <enum-case index="3091" value="ProjCenterNorthingGeoKey"/>
+                    <enum-case index="3092" value="ProjScaleAtNatOriginGeoKey"/>
+                    <enum-case index="3093" value="ProjScaleAtCenterGeoKey"/>
+                    <enum-case index="3094" value="ProjAzimuthAngleGeoKey"/>
+                    <enum-case index="3095" value="ProjStraightVertPoleLongGeoKey"/>
+
+                    <enum-case index="4096" value="VerticalGeoKey"/>
+                    <enum-case index="4097" value="VerticalCitationGeoKey"/>
+                    <enum-case index="4098" value="VerticalDatumGeoKey"/>
+                    <enum-case index="4099" value="VerticalUnitsGeoKey"/>
+
+                    
+                    <enum-case index="0x011b" value="YResolution"/>
+                    <enum-case index="0x0128" value="ResolutionUnit"/>
+                    <enum-else value="Unrecognized"/>
+                </enum>
+            </field>
+            <!-- http://www.opengis.net/spec/GeoTIFF/1.1/req/GeoKeyDirectoryTag.keyEntryTIFFTagLocation -->
+            <field id="geo_tiff_tag_loc" name="Geo TIFF Tag Location" length="2B" dtype="U"/>
+            <!-- http://www.opengis.net/spec/GeoTIFF/1.1/req/GeoKeyDirectoryTag.keyEntryKeyCount -->
+            <field id="geo_key_entry_num_values" name="Number of Values" length="2B" dtype="U"/>
+            <!-- http://www.opengis.net/spec/GeoTIFF/1.1/req/GeoKeyDirectoryTag.keyEntryValueOffset -->
+            <field id="geo_key_value" name="Geo Key Value" length="2B" dtype="U"/>
+        </section>
+    </repeat>
+</sequence>

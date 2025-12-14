@@ -234,70 +234,88 @@
 
                 <!-- Unsigned Short -->
                 <switch-case check="$0 == 3"> 
-                    <switch length="4B" value="ifd_num">
-
+                    <switch value="ifd_tag">
                         <export source="compression"/>
-
-                        <!-- Fits in 4-byte data field -->
-                        <switch-case check="$0 * 2 &lt;= 4">
-                            <switch value="ifd_tag">
+                        <switch-case check="$0 == 34735">
+                            <sequence id="ifd_geo_key_directory_address_sequence">
+                                <section-body id="ifd_geo_key_directory_section">
+                                    <export source="ifd_geo_key_directory_address"/>
+                                    <field id="ifd_geo_key_directory_address" name="IFD Geo Key Directory Address" length="4B" dtype="U"/>
+                                </section-body>
+                                <addressed pos="chunk_body_start + bytes(ifd_geo_key_directory_address)">
+                                    <use url="geo-key-directory.xml#geo_key_directory"/>
+                                </addressed>
+                            </sequence>
+                            
+                        </switch-case>
+                        <switch-else>
+                            <switch length="4B" value="ifd_num">
 
                                 <export source="compression"/>
 
-                                <!-- Compression -->
-                                <switch-case check="$0 == 259">
-                                    <!-- TODO: Assert that ifd_num == 1 -->
-                                    <repeat n="ifd_num">
+                                <!-- Fits in 4-byte data field -->
+                                <switch-case check="$0 * 2 &lt;= 4">
+                                    <switch value="ifd_tag">
+
                                         <export source="compression"/>
-                                        <!-- <sequence> -->
-                                        <section-body id="ifd_u16_body" name="eXIf U16">
-                                            <export source="compression"/>
-                                            <field id="compression" name="Compression" length="2B" dtype="U">
-                                                <enum>
-                                                    <enum-case index="1" value="No Compression"/>
-                                                    <enum-case index="6" value="JPEG"/>
-                                                    <enum-else value="Unknown"/>
-                                                </enum>
-                                            </field>
-                                        </section-body>
-                                            <!-- <addressed pos="chunk_body_start + bytes(jpeg_offset)">
-                                                <section id="jpeg" name="EXIF JPEG">
-                                                    <field id="jpeg_data" name="EXIF JPEG Data" length="bytes(jpeg_byte_count)" dtype="B"/>
-                                                </section>
-                                            </addressed>
-                                        </sequence> -->
-                                    </repeat>
+
+                                        <!-- Compression -->
+                                        <switch-case check="$0 == 259">
+                                            <!-- TODO: Assert that ifd_num == 1 -->
+                                            <repeat n="ifd_num">
+                                                <export source="compression"/>
+                                                <!-- <sequence> -->
+                                                <section-body id="ifd_u16_body" name="eXIf U16">
+                                                    <export source="compression"/>
+                                                    <field id="compression" name="Compression" length="2B" dtype="U">
+                                                        <enum>
+                                                            <enum-case index="1" value="No Compression"/>
+                                                            <enum-case index="6" value="JPEG"/>
+                                                            <enum-else value="Unknown"/>
+                                                        </enum>
+                                                    </field>
+                                                </section-body>
+                                                    <!-- <addressed pos="chunk_body_start + bytes(jpeg_offset)">
+                                                        <section id="jpeg" name="EXIF JPEG">
+                                                            <field id="jpeg_data" name="EXIF JPEG Data" length="bytes(jpeg_byte_count)" dtype="B"/>
+                                                        </section>
+                                                    </addressed>
+                                                </sequence> -->
+                                            </repeat>
+                                        </switch-case>
+
+                                        <!-- Unknown tag -->
+                                        <switch-else>
+                                            <repeat n="ifd_num">
+                                                <section-body id="ifd_u16_body" name="eXIf U16">
+                                                    <field id="ifd_u16" name="IFD Unsigned Short" length="2B" dtype="U"/>
+                                                </section-body>
+                                            </repeat>
+                                        </switch-else>
+                                    </switch>
+                                    
                                 </switch-case>
 
-                                <!-- Unknown tag -->
+                                <!-- Doesn't fit in 4-byte data field -->
                                 <switch-else>
-                                    <repeat n="ifd_num">
-                                        <section-body id="ifd_u16_body" name="eXIf U16">
-                                            <field id="ifd_u16" name="IFD Unsigned Short" length="2B" dtype="U"/>
+                                    <sequence id="ifd_u16_address_sequence" name="IFD U16 Addressed Sequence">
+                                        <section-body id="ifd_address_u16_section" name="eXIf Address">
+                                            <export source="ifd_address_u16"/>
+                                            <field id="ifd_address_u16" name="IFD Address" length="4B" dtype="U"/>
                                         </section-body>
-                                    </repeat>
+                                        <addressed pos="chunk_body_start + bytes(ifd_address_u16)">
+                                            <repeat n="ifd_num">
+                                                <section-body id="ifd_u16_body_addressed" name="eXIf Unsigned Short">
+                                                    <field id="ifd_u16" name="IFD Unsigned Short" length="2B" dtype="U"/>
+                                                </section-body>
+                                            </repeat>
+                                        </addressed>
+                                    </sequence>
                                 </switch-else>
                             </switch>
-                            
-                        </switch-case>
-
-                        <!-- Doesn't fit in 4-byte data field -->
-                        <switch-else>
-                            <sequence id="ifd_u16_address_sequence" name="IFD U16 Addressed Sequence">
-                                <section-body id="ifd_address_u16_section" name="eXIf Address">
-                                    <export source="ifd_address_u16"/>
-                                    <field id="ifd_address_u16" name="IFD Address" length="4B" dtype="U"/>
-                                </section-body>
-                                <addressed pos="chunk_body_start + bytes(ifd_address_u16)">
-                                    <repeat n="ifd_num">
-                                        <section-body id="ifd_u16_body_addressed" name="eXIf Unsigned Short">
-                                            <field id="ifd_u16" name="IFD Unsigned Short" length="2B" dtype="U"/>
-                                        </section-body>
-                                    </repeat>
-                                </addressed>
-                            </sequence>
                         </switch-else>
                     </switch>
+                    
                 </switch-case>
 
                 <!-- Unsigned Long -->
